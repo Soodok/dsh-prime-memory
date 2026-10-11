@@ -791,6 +791,11 @@ export interface UiRecord {
   retired?: boolean;
   /** 退场原因:`conflict`(裁决) / `superseded`(取代) / `manual`(人工) / `unknown`。未退场为 null。 */
   retiredReason?: string | null;
+  /**
+   * 成熟度(G3 读时派生):priority + 被用次数 + 老化权重合成。
+   * 可选字段——旧 client 忽略=向后兼容；不参与存储/快照（纯投影）。
+   */
+  maturity?: 'low' | 'mid' | 'high';
 }
 export interface ListRecordsResponse {
   items: UiRecord[];
