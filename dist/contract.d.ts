@@ -1371,6 +1371,33 @@ export interface MemportScanResponse {
     sources: MemportScanSourceResult[];
     notice?: string;
 }
+/** 技能摘要（轨2 SkillsTab；供人工审阅/晋升/pin/归档）。 */
+export interface SkillView {
+    id: string;
+    title: string;
+    status: 'candidate' | 'active' | 'archived';
+    tier: 'full' | 'excerpt' | 'hint';
+    pinned: boolean;
+    sessionCount: number;
+    updatedAt: string;
+}
+export interface SkillsListResponse {
+    enabled: boolean;
+    /** 自动晋升总闸（allowPromote）；关时 promote 动作会被拒。 */
+    allowPromote: boolean;
+    memoryMutate: boolean;
+    skills: SkillView[];
+}
+export interface SkillsActionRequest {
+    id: string;
+    action: 'promote' | 'archive' | 'pin' | 'unpin' | 'set-tier';
+    tier?: 'full' | 'excerpt' | 'hint';
+    reason?: string;
+}
+export interface SkillsActionResponse {
+    changed: boolean;
+    notice: string;
+}
 export interface DshMemoryRequestMap {
     'dsh-memory/stats': Record<string, never>;
     'dsh-memory/token-cost': TokenCostRequest;
@@ -1422,6 +1449,8 @@ export interface DshMemoryRequestMap {
     'dsh-memory/memory-sources-add': MemorySourcesAddRequest;
     'dsh-memory/memory-sources-retire': MemorySourcesRetireRequest;
     'dsh-memory/memport-scan': MemportScanRequest;
+    'dsh-memory/skills-list': Record<string, never>;
+    'dsh-memory/skills-action': SkillsActionRequest;
 }
 export interface DshMemoryResponseMap {
     'dsh-memory/stats': StatsResponse;
@@ -1474,6 +1503,8 @@ export interface DshMemoryResponseMap {
     'dsh-memory/memory-sources-add': MemorySourcesAddResponse;
     'dsh-memory/memory-sources-retire': MemorySourcesRetireResponse;
     'dsh-memory/memport-scan': MemportScanResponse;
+    'dsh-memory/skills-list': SkillsListResponse;
+    'dsh-memory/skills-action': SkillsActionResponse;
 }
 /** 全部端点名(client 调用与 host case 表的共用字面量来源)。 */
 export type DshMemoryEndpoint = keyof DshMemoryResponseMap;

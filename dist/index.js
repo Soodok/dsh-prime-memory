@@ -401,7 +401,7 @@ export async function apply(ctx, config) {
         runnerView: (sid, mode) => runner.sessionView(sid, mode),
         l0Count: (sid) => stores.l0.countBySession(sid),
         capabilities: () => db.getCapabilities(),
-    }, ruminate, storageOk ? roomRegistry : undefined, storageOk ? memorySources : undefined);
+    }, ruminate, storageOk ? roomRegistry : undefined, storageOk ? memorySources : undefined, skillStore);
     // bench 控制服务(config.benchControl 门控,默认关):仅基准/调试部署注册,
     // 供同进程的 bench-runner lifecycle 赛道触发 rebuild / 设置会话档位
     // (宿主侧 RPC 无 call(),见 bench-control.ts)

@@ -28,6 +28,7 @@ import type { RuminateController } from './pipeline/ruminate.js';
 import { mergeRoom, renameRoom } from './room-review.js';
 import type { RoomRegistryStore } from './store/rooms-registry.js';
 import type { MemorySourceStore, SourceKind } from './store/memory-sources.js';
+import type { SkillStore } from './store/skill-store.js';
 import { scanSources } from './memport/scan.js';
 import type { RecallUsageStore } from './store/recall-usage.js';
 import { projectDistillChain, validateDistillChain, type DistillChainEntry, type LiveSettingsHandle } from './settings.js';
@@ -127,6 +128,8 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/memory-sources-add',
   'dsh-memory/memory-sources-retire',
   'dsh-memory/memport-scan',
+  'dsh-memory/skills-list',
+  'dsh-memory/skills-action',
 ];
 
 /** HTTP 路由前缀(客户端 fetch `/dsh-memory/rpc/<短方法名>`)。 */
@@ -268,6 +271,8 @@ import type {
   MemorySourcesAddResponse,
   MemorySourcesRetireResponse,
   MemportScanResponse,
+  SkillsListResponse,
+  SkillsActionResponse,
 } from './contract.js';
 export type { MemoryStats } from './contract.js';
 
@@ -290,6 +295,8 @@ interface MemoryRpcSources {
   roomRegistry?: RoomRegistryStore;
   /** 外部来源注册表（轨3 Connect；未装配 = memory-sources-* / memport-scan 不可用）。 */
   memorySources?: MemorySourceStore;
+  /** 技能存储（轨2；未装配 = skills-* 不可用）。 */
+  skillStore?: SkillStore;
 }
 
 /** 端点 deps 的注入面(ctx/cfg/stores/logger 由调用方绑定,其余由此处决定)。 */
@@ -316,6 +323,7 @@ export function buildEndpointDeps(
     ruminate: controller,
     roomRegistry: sources.roomRegistry,
     memorySources: sources.memorySources,
+    skillStore: sources.skillStore,
   };
   return { ...base, ...injected };
 }
@@ -350,6 +358,8 @@ export function registerMemoryRpc(
   roomRegistry?: RoomRegistryStore,
   /** 外部来源注册表（轨3 Connect；经 buildEndpointDeps 落入 deps.memorySources）。 */
   memorySources?: MemorySourceStore,
+  /** 技能存储（轨2；经 buildEndpointDeps 落入 deps.skillStore）。 */
+  skillStore?: SkillStore,
 ): void {
   /** 当前是否持有一段有效注册(dispose 完成后清空,允许服务重上线时重注册)。 */
   let holding = false;
@@ -371,7 +381,7 @@ export function registerMemoryRpc(
             { ctx, cfg, stores, logger },
             // roomRegistry 必须随 sources 下发——漏带 = 面板侧 room-* 恒"未装配"
             // (工具面直传不受影响;2026-10-02 beta.9 实测回归)
-            { status, live, modes, dataDir, rebuild, embedManager, sessionInfo, roomRegistry, memorySources },
+            { status, live, modes, dataDir, rebuild, embedManager, sessionInfo, roomRegistry, memorySources, skillStore },
             ruminate,
           ));
           return { ok: true, value };
@@ -541,6 +551,8 @@ export interface EndpointDeps {
   roomRegistry?: RoomRegistryStore;
   /** 外部来源注册表（轨3 Connect；未装配 = memory-sources-* / memport-scan 不可用）。 */
   memorySources?: MemorySourceStore;
+  /** 技能存储（轨2；未装配 = skills-* 不可用）。 */
+  skillStore?: SkillStore;
 }
 
 /** RPC 字符串入参上限校验:防 loopback 面畸形超长载荷
@@ -559,7 +571,7 @@ function sanitizeSettings(s: MemoryLiveSettings): MemoryLiveSettings {
 
 /** 端点分发表(导出供测试直调:可精确注入 rebuild/ruminate 等可选控制器,验证 deps 接线)。 */
 export async function handleEndpoint(endpoint: string, payload: unknown, deps: EndpointDeps): Promise<unknown> {
-  const { cfg, stores, status, live, modes, dataDir, rebuild, ruminate, embedManager, sessionInfo, roomRegistry, memorySources } = deps;
+  const { cfg, stores, status, live, modes, dataDir, rebuild, ruminate, embedManager, sessionInfo, roomRegistry, memorySources, skillStore } = deps;
   switch (endpoint) {
     case 'dsh-memory/stats':
       return buildStats(cfg, stores, status);
@@ -801,6 +813,66 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       for (const s of targets) await memorySources.markScanned(s.id, nowIso);
       const v: MemportScanResponse = { enabled: true, sources };
       return v;
+    }
+
+    // ── 轨2 技能（SkillsTab）：列表 + 人工审阅动作（晋升/归档/pin/改档）。整面默认关（cfg.skills.enabled）。
+    case 'dsh-memory/skills-list': {
+      const enabled = cfg.skills?.enabled === true;
+      const v: SkillsListResponse = {
+        enabled,
+        allowPromote: cfg.skills?.allowPromote === true,
+        memoryMutate: live?.get().memoryMutate === true,
+        skills:
+          enabled && skillStore
+            ? skillStore.list().map((s) => ({
+                id: s.id,
+                title: s.title,
+                status: s.status,
+                tier: s.injectionTier,
+                pinned: s.pinned,
+                sessionCount: skillStore.sessionCount(s.id),
+                updatedAt: s.updatedAt,
+              }))
+            : [],
+      };
+      return v;
+    }
+
+    case 'dsh-memory/skills-action': {
+      if (cfg.skills?.enabled !== true) throw new Error('技能功能未启用（config skills.enabled）。');
+      if (!skillStore) throw new Error('技能存储未装配。');
+      if (!live?.get().memoryMutate) throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能管理技能。');
+      const p = (payload ?? {}) as { id?: string; action?: string; tier?: string; reason?: string };
+      const id = String(p.id ?? '').trim();
+      if (!id) throw new Error('id 不能为空');
+      const minSessions = cfg.skills.minSessions;
+      const v: SkillsActionResponse = { changed: false, notice: '' };
+      if (p.action === 'promote') {
+        // 人工审阅晋升：不受自动闸 allowPromote 约束，但仍需证据达阈（不凭空的晋升）。
+        if (skillStore.sessionCount(id) < minSessions) return { changed: false, notice: `证据会话数不足（<${minSessions}），暂不能晋升。` };
+        const ok = await skillStore.tryPromote(id, minSessions, { allowPromote: true });
+        return { changed: ok, notice: ok ? '已晋升为 active。' : '未找到候选或状态已变。' };
+      }
+      if (p.action === 'archive') {
+        const ok = await skillStore.archive(id, String(p.reason ?? 'manual').slice(0, 120) || 'manual');
+        return { changed: ok, notice: ok ? '已归档（不再注入，可恢复）。' : '未找到或已归档。' };
+      }
+      if (p.action === 'pin') {
+        const ok = await skillStore.update(id, { pinned: true });
+        return { changed: ok, notice: ok ? '已固定。' : '未找到技能。' };
+      }
+      if (p.action === 'unpin') {
+        const ok = await skillStore.update(id, { pinned: false });
+        return { changed: ok, notice: ok ? '已取消固定。' : '未找到技能。' };
+      }
+      if (p.action === 'set-tier') {
+        const tier = p.tier === 'full' || p.tier === 'excerpt' || p.tier === 'hint' ? p.tier : null;
+        if (!tier) throw new Error('tier 非法（仅 full/excerpt/hint）');
+        const ok = await skillStore.update(id, { injectionTier: tier });
+        return { changed: ok, notice: ok ? `已设为 ${tier} 档。` : '未找到技能。' };
+      }
+      void v;
+      throw new Error(`未知 action: ${String(p.action)}`);
     }
 
     case 'dsh-memory/room-register': {

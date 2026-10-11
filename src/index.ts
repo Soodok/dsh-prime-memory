@@ -468,6 +468,7 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
     ruminate,
     storageOk ? roomRegistry : undefined,
     storageOk ? memorySources : undefined,
+    skillStore,
   );
 
   // bench 控制服务(config.benchControl 门控,默认关):仅基准/调试部署注册,

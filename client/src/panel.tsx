@@ -7,6 +7,7 @@ import { S } from './styles.js';
 import { ensureThemeStyle } from './theme.js';
 import { ConflictsTab } from './tabs/ConflictsTab.js';
 import { ConnectTab } from './tabs/ConnectTab.js';
+import { SkillsTab } from './tabs/SkillsTab.js';
 import { CostTab } from './tabs/CostTab.js';
 import { LogTab } from './tabs/LogTab.js';
 import { OverviewTab } from './tabs/OverviewTab.js';
@@ -34,6 +35,7 @@ const TABS: Array<[string, string]> = [
   ['cost', '成本'],
   ['log', '日志'],
   ['connect', '来源'],
+  ['skills', '技能'],
 ];
 
 /** 皮肤三态（轨1-P0）：纯表现层，偏好存 localStorage，不进插件 config。 */
@@ -72,6 +74,7 @@ export function MemoryPanel(props: { rpc: RpcFn }) {
   else if (tab === 'persona') body = <PersonaTab rpc={rpc} />;
   else if (tab === 'cost') body = <CostTab rpc={rpc} />;
   else if (tab === 'connect') body = <ConnectTab rpc={rpc} />;
+  else if (tab === 'skills') body = <SkillsTab rpc={rpc} />;
   else body = <LogTab rpc={rpc} />;
 
   return (

@@ -107,6 +107,8 @@ const ENDPOINTS = [
   'dsh-memory/memory-sources-add',
   'dsh-memory/memory-sources-retire',
   'dsh-memory/memport-scan',
+  'dsh-memory/skills-list',
+  'dsh-memory/skills-action',
 ] as const;
 
 describe('effort vocabulary', () => {
@@ -148,9 +150,9 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 50 contracted endpoints, records-delete and graph included', () => {
-    expect(ENDPOINTS.length).toBe(50);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(50);
+  it('exposes exactly the 52 contracted endpoints, records-delete and graph included', () => {
+    expect(ENDPOINTS.length).toBe(52);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(52);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {
