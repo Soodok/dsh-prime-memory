@@ -24,6 +24,7 @@ import {
 } from '../store/conflicts.js';
 import type { ConflictPair, ConflictRejected } from '../store/conflicts.js';
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt } from '../prompts/l1-extraction.js';
+import { normUsageScenario } from '../metadata-validators.js';
 import { formatBatchConflictPrompt, getConflictDetectionSystemPrompt } from '../prompts/l1-dedup.js';
 import { resolveSourceAnchors, withSourceAnchors } from './anchors.js';
 import type { L1Store } from '../store/l1.js';
@@ -145,6 +146,19 @@ type PendingMemory = ExtractedMemory & {
  * 第 4 个参数是 R7 的锚点映射(`L0 消息 id → 会话坐标`)。**传 undefined 时
  * 行为与改动前逐字一致**——老调用方与没有锚点的会话走这条分支。
  */
+/**
+ * 把抽取侧的 `metadata.usageScenario` 归一到命名空间保留键 `dsh_usage_scenario`
+ *（与 dsh_source_anchors 同范式）。**无该键时原样返回**——功能关时 LLM 不产出该键，
+ * 记录 metadata 与改动前逐字一致（零漂移）。只随新蒸馏写，不回填存量。
+ */
+function withUsageScenario(meta: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!meta || !('usageScenario' in meta)) return meta;
+  const out = { ...meta };
+  out.dsh_usage_scenario = normUsageScenario(out.usageScenario);
+  delete out.usageScenario;
+  return out;
+}
+
 function toStoreRecord(
   m: PendingMemory,
   now: number,
@@ -164,7 +178,7 @@ function toStoreRecord(
     source_message_ids: m.source_message_ids ?? [],
     // R7:锚点与 source_message_ids 同源解析;解析不到就**不写键**(不是空数组),
     // 使无锚点记录与改动前的 metadata 逐字一致。
-    metadata: withSourceAnchors(m.metadata, anchorMap === undefined ? undefined : resolveSourceAnchors(m.source_message_ids, anchorMap)),
+    metadata: withSourceAnchors(withUsageScenario(m.metadata), anchorMap === undefined ? undefined : resolveSourceAnchors(m.source_message_ids, anchorMap)),
     family: m.family,
     scope: m.scope,
     workspaceId: m.workspaceId,
@@ -307,7 +321,7 @@ export async function runExtraction(
       halls,
     });
     const raw = await callLLM(ctx, cfg, {
-      system: getExtractMemoriesSystemPrompt(mode),
+      system: getExtractMemoriesSystemPrompt(mode, { usageScenario: cfg.usageScenario?.enabled === true }),
       user: userPrompt,
       maxTokens: resolveLayerTokens(cfg, 'extract'),
       layer: 'l1-extract',

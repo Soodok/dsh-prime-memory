@@ -129,6 +129,10 @@ export interface MemoryConfig {
     /** 单次回填墙钟预算(ms)，超时剩留待再次触发。 */
     timeBudgetMs: number;
   };
+  /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
+  usageScenario: {
+    enabled: boolean;
+  };
   recall: {
     enabled: boolean;
     /** 每步自动召回注入的 L1 条数。 */
@@ -390,6 +394,10 @@ export const memorySchema = Schema.object({
   backfill: Schema.object({
     maxRecords: Schema.number().min(1).max(10_000).default(300),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+  }),
+  // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。
+  usageScenario: Schema.object({
+    enabled: Schema.boolean().default(false),
   }),
   recall: Schema.object({
     enabled: Schema.boolean().default(true),

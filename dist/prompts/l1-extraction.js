@@ -446,11 +446,17 @@ metadata 字段说明：
 ]
 
 请严格按上述 JSON 数组格式输出，不要输出任何额外的 Markdown 代码块修饰符（如 \`\`\`json）或解释文本。`;
-export function getExtractMemoriesSystemPrompt(mode) {
-    if (mode === 'auto')
-        return EXTRACT_ALL_MEMORIES_SYSTEM_PROMPT;
-    return mode === 'work' ? EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT : EXTRACT_MEMORIES_SYSTEM_PROMPT;
+export function getExtractMemoriesSystemPrompt(mode, opts) {
+    const base = mode === 'auto' ? EXTRACT_ALL_MEMORIES_SYSTEM_PROMPT
+        : mode === 'work' ? EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT
+            : EXTRACT_MEMORIES_SYSTEM_PROMPT;
+    // off（默认）返回与今逐字一致的常量；on 才追加 usageScenario 指令（零漂移）。
+    return opts?.usageScenario ? base + USAGE_SCENARIO_CLAUSE : base;
 }
+/** 使用场景（G1）指令段：仅在 cfg.usageScenario.enabled 时拼到系统提示末尾。 */
+const USAGE_SCENARIO_CLAUSE = `
+
+【使用场景】在每条记忆的 metadata 里加一个 "usageScenario" 字段：1-3 项的字符串数组，每项是一句“什么样的后续对话/任务下该浮现这条记忆”（何时启用它）。用与 content 相同的语言；无法判断时给空数组 []。`;
 /**
  * 格式化 L1 抽取用户 prompt。
  */

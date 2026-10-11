@@ -804,6 +804,8 @@ export interface UiRecord {
      * 可选字段——旧 client 忽略=向后兼容；不参与存储/快照（纯投影）。
      */
     maturity?: 'low' | 'mid' | 'high';
+    /** 使用场景（G1）：从 metadata.dsh_usage_scenario 读出；功能关/无则 undefined。 */
+    usageScenario?: string[];
 }
 export interface ListRecordsResponse {
     items: UiRecord[];

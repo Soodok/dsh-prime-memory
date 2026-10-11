@@ -125,6 +125,10 @@ export interface MemoryConfig {
         /** 单次回填墙钟预算(ms)，超时剩留待再次触发。 */
         timeBudgetMs: number;
     };
+    /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
+    usageScenario: {
+        enabled: boolean;
+    };
     recall: {
         enabled: boolean;
         /** 每步自动召回注入的 L1 条数。 */
@@ -570,6 +574,11 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
     }>>, Schemastery.ObjectT<NoInfer<{
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    usageScenario: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
@@ -1121,6 +1130,11 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
     }>>, Schemastery.ObjectT<NoInfer<{
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    usageScenario: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;

@@ -1875,6 +1875,8 @@ export function hitToUiRecord(r, extra) {
         usage: extra?.usage ?? null,
         // G3 成熟度：读时派生（priority + used + 老化），无额外端点/存储。
         maturity: computeMaturity({ priority: r.priority ?? 60, usage: extra?.usage ?? null, agingWeight: extra?.agingWeight ?? null }),
+        // G1 使用场景：从命名空间保留键读出（功能关/无键 → undefined）。
+        usageScenario: Array.isArray(r.metadata?.dsh_usage_scenario) ? r.metadata?.dsh_usage_scenario : undefined,
     };
 }
 /**

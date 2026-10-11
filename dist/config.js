@@ -154,6 +154,10 @@ export const memorySchema = Schema.object({
         maxRecords: Schema.number().min(1).max(10_000).default(300),
         timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
     }),
+    // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。
+    usageScenario: Schema.object({
+        enabled: Schema.boolean().default(false),
+    }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),
         maxResults: Schema.number().min(1).max(20).default(5),
