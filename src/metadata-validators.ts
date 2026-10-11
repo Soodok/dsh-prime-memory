@@ -10,6 +10,7 @@
  * 历史上 Wing 侧零校验,非法值先入库、再由下游剥离,形成无谓的写入-剥离循环。
  */
 import { WING_CATALOG, WING_FALLBACK } from './types.js';
+import { isCognitiveHall, COG_HALL_METADATA_KEY, type CognitiveHall } from './cognitive-hall.js';
 
 /** Wing 词表(8 域 + general 兜底):与 relabel 机械校验、提示词候选集同源。 */
 const WING_ID_SET: ReadonlySet<string> = new Set<string>([
@@ -90,4 +91,25 @@ export function normUsageScenario(v: unknown, max = 3): string[] {
     if (out.length >= max) break;
   }
   return out;
+}
+
+/**
+ * 读 **Wing（生活域）**。⚠️ 磁盘键是 `metadata.hall`——历史别名，存的其实是 **wing 值**。
+ * 只认词表内的合法 wing（8 角 + general），否则 undefined。
+ *
+ * 用它取代裸读 `metadata.hall`：从入口上把“wing 轴”与“认知 hall 轴”分开，
+ * 防止把认知 hall 值（facts/events/…）误当 wing 读——两轴不串。
+ */
+export function readWing(metadata: Record<string, unknown> | undefined | null): string | undefined {
+  const v = metadata?.hall;
+  return typeof v === 'string' && isWingId(v) ? v : undefined;
+}
+
+/**
+ * 读 **认知 hall（大类）**。磁盘键 `metadata.cogHall`，与 wing 的磁盘键 `hall` 正交。
+ * 只认五个枚举值，否则 undefined（wing 值不当认知 hall 读）。
+ */
+export function readCognitiveHall(metadata: Record<string, unknown> | undefined | null): CognitiveHall | undefined {
+  const v = metadata?.[COG_HALL_METADATA_KEY];
+  return isCognitiveHall(v) ? v : undefined;
 }

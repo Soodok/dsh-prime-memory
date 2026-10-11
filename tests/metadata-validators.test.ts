@@ -6,7 +6,7 @@
  * `metadata.hall`,污染生活域轴。
  */
 import { describe, expect, it } from 'vitest';
-import { COGNITIVE_HALLS, isCognitiveHall, isRoomSlug, isTag, isWingId, normTags, normUsageScenario } from '../src/metadata-validators.js';
+import { COGNITIVE_HALLS, isCognitiveHall, isRoomSlug, isTag, isWingId, normTags, normUsageScenario, readCognitiveHall, readWing } from '../src/metadata-validators.js';
 import { WING_CATALOG, WING_FALLBACK } from '../src/types.js';
 
 describe('isWingId', () => {
@@ -115,5 +115,23 @@ describe('normUsageScenario (G1)', () => {
     expect(out[0]).toHaveLength(60);
     expect(out).toContain('ok');
     expect(out).not.toContain('');
+  });
+});
+
+describe('wing 与 认知 hall 两轴不串', () => {
+  it('wing 词表与认知 hall 值域不相交', () => {
+    for (const w of [...WING_CATALOG.map((x) => x.id), WING_FALLBACK]) expect(isCognitiveHall(w)).toBe(false);
+    for (const c of COGNITIVE_HALLS) expect(isWingId(c)).toBe(false);
+  });
+  it('readWing 只从 hall 键取合法 wing；认知 hall 值不当 wing 读出', () => {
+    expect(readWing({ hall: 'work' })).toBe('work');
+    expect(readWing({ hall: 'facts' })).toBeUndefined();
+    expect(readWing({ hall: 'bogus' })).toBeUndefined();
+    expect(readWing(undefined)).toBeUndefined();
+  });
+  it('readCognitiveHall 只从 cogHall 键取合法值；wing 值不当认知 hall 读出', () => {
+    expect(readCognitiveHall({ cogHall: 'facts' })).toBe('facts');
+    expect(readCognitiveHall({ hall: 'work' })).toBeUndefined();
+    expect(readCognitiveHall({ cogHall: 'work' })).toBeUndefined();
   });
 });
