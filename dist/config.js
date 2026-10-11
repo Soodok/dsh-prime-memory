@@ -135,6 +135,18 @@ export const memorySchema = Schema.object({
         // 单源扫描上限（防极端大包在事件循环里阻塞 RPC；scan 是手动触发，仍留护栏）。
         scanMaxRecords: Schema.number().min(0).max(20_000).default(5000),
     }),
+    // 轨2 技能结晶：默认关 + allowPromote 关（先只计数不晋升）。
+    skills: Schema.object({
+        enabled: Schema.boolean().default(false),
+        inject: Schema.boolean().default(true),
+        allowPromote: Schema.boolean().default(false),
+        minSessions: Schema.number().min(1).max(100).default(3),
+        minEvidence: Schema.number().min(1).max(1000).default(5),
+        maxPerTurnBytes: Schema.number().min(0).max(8192).default(600),
+        maxSkillCatalogBytes: Schema.number().min(0).max(8192).default(2048),
+        excerptChars: Schema.number().min(0).max(4000).default(240),
+        idleArchiveDays: Schema.number().min(0).max(3650).default(90),
+    }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),
         maxResults: Schema.number().min(1).max(20).default(5),

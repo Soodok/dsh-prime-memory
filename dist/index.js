@@ -38,6 +38,9 @@ import { registerSlotTools } from './tools/slots.js';
 import { registerSlotRecall } from './hooks/slot-recall.js';
 import { RoomRegistryStore } from './store/rooms-registry.js';
 import { MemorySourceStore } from './store/memory-sources.js';
+import { SkillStore } from './store/skill-store.js';
+import { registerSkillRecall } from './hooks/skill-recall.js';
+import { registerSkillTools } from './tools/skills.js';
 import { RecallUsageStore } from './store/recall-usage.js';
 import { registerSlotsProjection } from './projection/slots.js';
 import { errDetail, withFileLog } from './util/filelog.js';
@@ -360,6 +363,9 @@ export async function apply(ctx, config) {
     // 外部记忆来源注册表（轨3 Connect；默认由 cfg.memport.enabled 关门控，sidecar 本身无条件加载）
     const memorySources = new MemorySourceStore(dataDir, logger);
     await memorySources.init();
+    // 技能存储（轨2；sidecar 无条件加载，但工具/注入均由 cfg.skills.enabled 默认关自 no-op）
+    const skillStore = new SkillStore(dataDir, logger);
+    await skillStore.init();
     const ruminate = storageOk && !db.isDegraded() && ruminateFile
         ? new RuminateController(ctx, config, runner, stores, logger, live, ruminateFile, roomRegistry)
         : undefined;
@@ -377,6 +383,9 @@ export async function apply(ctx, config) {
     // 激活槽位(active slot):工具面 + 常驻注入 + 服务端投影(均走 ctx.effect,可撤销)
     registerSlotTools(ctx, config, stores.slots, logger, modes, live, stores.l1);
     const slotRecall = registerSlotRecall(ctx, config, stores.slots, logger, live);
+    // 轨2 技能：工具面与常驻注入（均 cfg.skills.enabled 默认关时自 no-op，零表面积）。
+    registerSkillTools(ctx, config, skillStore, logger, live);
+    registerSkillRecall(ctx, config, skillStore, logger);
     registerSlotsProjection(ctx, stores.slots, stores.l1);
     void slotRecall;
     registerMemoryRpc(ctx, config, stores, logger, {
