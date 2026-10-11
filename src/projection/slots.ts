@@ -1,10 +1,10 @@
 /**
  * 激活槽位服务端投影(memorySlots)。
  *
- * ⚠️ **必须保持注册，不可摘除**：`memorySlots` 这个 key 已写进会话历史帧，插件单方面
- * 停止注册 = 孤儿化 key，宿主按 key 冷加载会话历史会整段失败（实测：新对话全挂）。
- * “不想在概要侧栏看到常驻槽位”的正确做法是消费方（dsh-brief-sidebar）的分区开关，
- * 而不是动注册。会话召回的展示面另走 client 浮层（SessionRecalledArea），不得经本投影。
+ * 展示契约：本 key 由 **dsh-brief-sidebar** 消费（「记忆槽位分区」）。宿主契约说明
+ * 不注册时 key 会从快照消失、客户端读作 capability absence（降级优雅，不致加载失败），
+ * 所以摘注册不会弄坏会话，但会让旧版消费方默默丢分区——要隐藏那张卡请走它的开关。
+ * 另：会话召回的展示走 `memoryRecall` 投影与 client 浮层（SessionRecalledArea），不得灌进本投影。
  *
  * 只注册服务端单元,绝不做 client——前端展示由未来 brief-sidebar 消费(下一轮)。
  * 注册经 ctx.inject(['sessionProjections'], …):服务缺席时静默不注册、不抛错

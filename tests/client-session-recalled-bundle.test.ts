@@ -5,9 +5,9 @@
  *   1. 显示在 **client 浮层**（pill）里：端点字面量与区块标题必须进 `dist/client.js`；
  *   2. **形式不挂持久槽位**：`memorySlots` 投影（dist/projection/slots.js）不得出现任何
  *      recalled 痕迹——召回集一旦流经投影，就会被渲染成"槽位注册表"，而召回不是常驻约定；
- *   3. **投影 key 不可孤儿化**：服务端入口必须继续接线 slots 投影。曾经试过
- *      摘掉注册来"下线那张卡"，结果历史帧里的 memorySlots key 无人认领，
- *      宿主冷加载会话失败 → 新对话全挂（local.9 实测）。要隐藏只能走消费方开关。
+ *   3. **展示契约不抽掉**：服务端入口继续接线 slots 投影。宿主对缺席是优雅降级
+ *      （key 从快照消失、读作 capability absence），所以摘注册不致会话加载失败，
+ *      但会让旧版 dsh-brief-sidebar 默默丢分区——隐藏该走它的开关，不是抽契约。
  *
  * 不证明：真的按会话渲染出正确条目——那仍是真机 GUI 检查（与 client-entry.test.ts 同一边界）。
  */
@@ -32,9 +32,9 @@ describe('本会话召回显示层（构建产物）', () => {
     expect(slotsProjection).not.toContain('session-recalled');
   });
 
-  it('服务端入口必须继续接线 slots 投影（key 不可孤儿化，摘除会断会话加载）', () => {
-    // 回归护栏：local.9 曾为了“不显示常驻槽位卡”而去掉这一行接线，
-    // 实际造成历史帧里的 memorySlots key 无人认领 → 新对话全挂。
+  it('服务端入口继续接线 slots 投影（不抽掉跨插件展示契约）', () => {
+    // 抽注册本身不会弄坏会话（宿主读作 capability absence），但旧版 brief-sidebar
+    // 会默默丢分区；要隐藏请用它的「记忆槽位分区」开关。
     expect(serverEntry).toContain('projection/slots');
   });
 });

@@ -442,10 +442,11 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   // 轨2 技能：工具面与常驻注入（均 cfg.skills.enabled 默认关时自 no-op，零表面积）。
   registerSkillTools(ctx, config, skillStore, logger, live);
   registerSkillRecall(ctx, config, skillStore, logger, live);
-  // 必须保持注册：memorySlots 这个 key 已在会话历史帧里，单方面摘除注册 = 孤儿化 key，
-  // 宿主按 key 冷加载会话历史会整段失败（实测：新对话全挂）。
-  // 不想在概要侧栏看到常驻槽位：用 dsh-brief-sidebar 的「记忆槽位分区」开关（客户端隐藏，
-  // 不动注册）。本包只额外提供会话召回的另一个展示面，不拿摘注册当“下线卡片”的手段。
+  // memorySlots 投影：常驻槽位（手动 pin 的约定）的展示契约，消费方是 dsh-brief-sidebar。
+  // 宿主契约（dsh-session-projection/lib/index.js）：插件不注册时 key 从快照消失、
+  // 客户端读作 capability absence（不会毒化历史加载），所以“摘注册”技术上可行；
+  // 但那是把跨插件展示契约直接抽掉，旧版 brief-sidebar 会默默丢分区——隐藏请走它自己的
+  // 「记忆槽位分区」开关。本包另提供一个会话感知的 memoryRecall 投影。
   registerSlotsProjection(ctx, stores.slots, stores.l1);
   void slotRecall;
   registerMemoryRpc(
