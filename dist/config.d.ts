@@ -90,6 +90,13 @@ export interface MemoryConfig {
          *  **0 = 不做超时降级**(显式关闭,而非"立刻全部超时")。 */
         timeoutDays: number;
     };
+    /** 轨3 memport Connect:外部记忆来源登记与只读扫描。**默认关**——
+     *  scan 仅预览(不写库)，写库仍走 memory_import；enabled 关时 memory-sources 与 memport-scan 端点均不可用。 */
+    memport: {
+        enabled: boolean;
+        /** 单源扫描记录上限(0 = 不限;仍受总护栏)。 */
+        scanMaxRecords: number;
+    };
     recall: {
         enabled: boolean;
         /** 每步自动召回注入的 L1 条数。 */
@@ -498,6 +505,13 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         maxPending: Schema<number, number, "defined">;
         timeoutDays: Schema<number, number, "defined">;
+    }>>, "plain">;
+    memport: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        scanMaxRecords: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        scanMaxRecords: Schema<number, number, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
@@ -1012,6 +1026,13 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         maxPending: Schema<number, number, "defined">;
         timeoutDays: Schema<number, number, "defined">;
+    }>>, "plain">;
+    memport: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        scanMaxRecords: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        scanMaxRecords: Schema<number, number, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;

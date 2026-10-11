@@ -27,6 +27,8 @@ import type { RebuildController } from './pipeline/rebuild.js';
 import type { RuminateController } from './pipeline/ruminate.js';
 import { mergeRoom, renameRoom } from './room-review.js';
 import type { RoomRegistryStore } from './store/rooms-registry.js';
+import type { MemorySourceStore, SourceKind } from './store/memory-sources.js';
+import { scanSources } from './memport/scan.js';
 import type { RecallUsageStore } from './store/recall-usage.js';
 import { projectDistillChain, validateDistillChain, type DistillChainEntry, type LiveSettingsHandle } from './settings.js';
 import type { GraphStore } from './store/graph-store.js';
@@ -121,6 +123,10 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/cleanup-retired',
   'dsh-memory/snapshots-list',
   'dsh-memory/snapshot-restore',
+  'dsh-memory/memory-sources-list',
+  'dsh-memory/memory-sources-add',
+  'dsh-memory/memory-sources-retire',
+  'dsh-memory/memport-scan',
 ];
 
 /** HTTP 路由前缀(客户端 fetch `/dsh-memory/rpc/<短方法名>`)。 */
@@ -258,6 +264,10 @@ import type {
   RoomRegisterResponse,
   RoomAdminRequest,
   RoomAdminResponse,
+  MemorySourcesListResponse,
+  MemorySourcesAddResponse,
+  MemorySourcesRetireResponse,
+  MemportScanResponse,
 } from './contract.js';
 export type { MemoryStats } from './contract.js';
 
@@ -278,6 +288,8 @@ interface MemoryRpcSources {
   sessionInfo?: SessionInfoSource;
   /** Room 注册表(未装配 = rooms-get 不带 registry,rooms-export 不可用)。 */
   roomRegistry?: RoomRegistryStore;
+  /** 外部来源注册表（轨3 Connect；未装配 = memory-sources-* / memport-scan 不可用）。 */
+  memorySources?: MemorySourceStore;
 }
 
 /** 端点 deps 的注入面(ctx/cfg/stores/logger 由调用方绑定,其余由此处决定)。 */
@@ -303,6 +315,7 @@ export function buildEndpointDeps(
     sessionInfo: sources.sessionInfo,
     ruminate: controller,
     roomRegistry: sources.roomRegistry,
+    memorySources: sources.memorySources,
   };
   return { ...base, ...injected };
 }
@@ -335,6 +348,8 @@ export function registerMemoryRpc(
   ruminate?: RuminateController,
   /** Room 分类管理依赖(注册表;缺省 = rooms-get 不带 registry、rooms-export 恒 404 语义)。 */
   roomRegistry?: RoomRegistryStore,
+  /** 外部来源注册表（轨3 Connect；经 buildEndpointDeps 落入 deps.memorySources）。 */
+  memorySources?: MemorySourceStore,
 ): void {
   /** 当前是否持有一段有效注册(dispose 完成后清空,允许服务重上线时重注册)。 */
   let holding = false;
@@ -356,7 +371,7 @@ export function registerMemoryRpc(
             { ctx, cfg, stores, logger },
             // roomRegistry 必须随 sources 下发——漏带 = 面板侧 room-* 恒"未装配"
             // (工具面直传不受影响;2026-10-02 beta.9 实测回归)
-            { status, live, modes, dataDir, rebuild, embedManager, sessionInfo, roomRegistry },
+            { status, live, modes, dataDir, rebuild, embedManager, sessionInfo, roomRegistry, memorySources },
             ruminate,
           ));
           return { ok: true, value };
@@ -524,6 +539,8 @@ export interface EndpointDeps {
   sessionInfo?: SessionInfoSource;
   /** Room 注册表(未装配 = rooms-get 不带 registry,rooms-export 不可用)。 */
   roomRegistry?: RoomRegistryStore;
+  /** 外部来源注册表（轨3 Connect；未装配 = memory-sources-* / memport-scan 不可用）。 */
+  memorySources?: MemorySourceStore;
 }
 
 /** RPC 字符串入参上限校验:防 loopback 面畸形超长载荷
@@ -542,7 +559,7 @@ function sanitizeSettings(s: MemoryLiveSettings): MemoryLiveSettings {
 
 /** 端点分发表(导出供测试直调:可精确注入 rebuild/ruminate 等可选控制器,验证 deps 接线)。 */
 export async function handleEndpoint(endpoint: string, payload: unknown, deps: EndpointDeps): Promise<unknown> {
-  const { cfg, stores, status, live, modes, dataDir, rebuild, ruminate, embedManager, sessionInfo, roomRegistry } = deps;
+  const { cfg, stores, status, live, modes, dataDir, rebuild, ruminate, embedManager, sessionInfo, roomRegistry, memorySources } = deps;
   switch (endpoint) {
     case 'dsh-memory/stats':
       return buildStats(cfg, stores, status);
@@ -704,6 +721,85 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           status: e.status,
         })),
       };
+      return v;
+    }
+
+    // ── 轨3 外部记忆来源（Connect）：登记/列表/退役/只读扫描。整面默认关（cfg.memport.enabled）。
+    case 'dsh-memory/memory-sources-list': {
+      const enabled = cfg.memport?.enabled === true;
+      const v: MemorySourcesListResponse = {
+        sources:
+          enabled && memorySources
+            ? memorySources.list().map((e) => ({
+                id: e.id,
+                kind: e.kind,
+                path: e.path,
+                label: e.label,
+                lastScanAt: e.lastScanAt,
+                lastImportAt: e.lastImportAt,
+                disabled: e.disabled,
+                status: e.status,
+              }))
+            : [],
+        memoryMutate: live?.get().memoryMutate === true,
+      };
+      return v;
+    }
+
+    case 'dsh-memory/memory-sources-add': {
+      if (cfg.memport?.enabled !== true) throw new Error('外部记忆来源未启用（config memport.enabled）。');
+      if (!memorySources) throw new Error('外部来源注册表未装配（需要插件重载以初始化）。');
+      if (!live?.get().memoryMutate) throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能登记外部来源。');
+      const p = (payload ?? {}) as { id?: string; kind?: string; path?: string; label?: string };
+      const r = await memorySources.register({
+        id: String(p.id ?? '').trim(),
+        kind: (String(p.kind ?? 'file') as SourceKind) ?? 'file',
+        path: String(p.path ?? '').trim(),
+        label: typeof p.label === 'string' ? p.label : undefined,
+      });
+      const v: MemorySourcesAddResponse = {
+        id: r.entry.id,
+        created: r.created,
+        notice: r.created ? '已登记来源。' : '来源已存在（已按新 path/label 原地更新）。',
+      };
+      return v;
+    }
+
+    case 'dsh-memory/memory-sources-retire': {
+      if (cfg.memport?.enabled !== true) throw new Error('外部记忆来源未启用（config memport.enabled）。');
+      if (!memorySources) throw new Error('外部来源注册表未装配（需要插件重载以初始化）。');
+      if (!live?.get().memoryMutate) throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能管理外部来源。');
+      const p = (payload ?? {}) as { id?: string; active?: boolean };
+      const changed = await memorySources.setStatus(String(p.id ?? '').trim(), p.active === true ? 'active' : 'retired');
+      const v: MemorySourcesRetireResponse = {
+        changed,
+        notice: !changed
+          ? '未找到该来源。'
+          : p.active === true
+            ? '已恢复来源。'
+            : '已退役来源（不删已导入数据；来源路径与 ext_key 仍在，可重放）。',
+      };
+      return v;
+    }
+
+    case 'dsh-memory/memport-scan': {
+      if (cfg.memport?.enabled !== true) {
+        const v: MemportScanResponse = { enabled: false, sources: [], notice: '外部记忆扫描未启用（config memport.enabled）。' };
+        return v;
+      }
+      if (!memorySources) {
+        const v: MemportScanResponse = { enabled: true, sources: [], notice: '外部来源注册表未装配。' };
+        return v;
+      }
+      const p = (payload ?? {}) as { sourceId?: string };
+      const all = memorySources.listEnabled();
+      const targets = p.sourceId ? all.filter((e) => e.id === p.sourceId) : all;
+      const maxRecords = cfg.memport?.scanMaxRecords ?? 5000;
+      // 只读扫描：不写库（写走 memory_import）。逐个标扫描时间（失败不影响预览）。
+      const sources = await scanSources({ sources: targets, l1: stores.l1, maxRecords });
+      const nowIso = new Date().toISOString();
+      for (const s of targets) await memorySources.markScanned(s.id, nowIso);
+      const v: MemportScanResponse = { enabled: true, sources };
       return v;
     }
 

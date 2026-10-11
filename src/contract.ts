@@ -1331,6 +1331,72 @@ export interface ReceiptsResponse {
 
 // ── 端点 → 请求/响应映射(client rpc.ts 泛型 call 的查表依据) ──
 
+/** 外部来源视图（轨3 Connect；路径指针，不含正文）。 */
+export interface MemorySourceView {
+  id: string;
+  kind: string;
+  path: string;
+  label?: string;
+  lastScanAt: string;
+  lastImportAt: string;
+  disabled: boolean;
+  status: 'active' | 'retired';
+}
+export interface MemorySourcesListResponse {
+  sources: MemorySourceView[];
+  /** 写门/启用态提示（面板据它显示“导入需开高权限”）。 */
+  memoryMutate: boolean;
+}
+export interface MemorySourcesAddRequest {
+  id: string;
+  kind: string;
+  path: string;
+  label?: string;
+}
+export interface MemorySourcesAddResponse {
+  id: string;
+  created: boolean;
+  notice: string;
+}
+export interface MemorySourcesRetireRequest {
+  id: string;
+  /** true = 恢复为 active；缺省/ false = 退役（不删数据，来源仍可重放）。 */
+  active?: boolean;
+}
+export interface MemorySourcesRetireResponse {
+  changed: boolean;
+  notice: string;
+}
+export interface MemportScanRequest {
+  /** 省略 = 扫描全部启用来源；指定 = 只扫该 id。 */
+  sourceId?: string;
+}
+export interface MemportScanCounts {
+  dup: number;
+  'near-dup': number;
+  'conflict-candidate': number;
+  new: number;
+}
+export interface MemportScanSourceResult {
+  sourceId: string;
+  label?: string;
+  /** 命中的 .mem 包数（只读，未写库）。 */
+  files: number;
+  /** 解析出的总条数（受 scanMaxRecords 上限）。 */
+  total: number;
+  /** 每包校验失败原因（不阻断其余来源）。 */
+  errors: string[];
+  counts: MemportScanCounts;
+  /** 新记录样本预览（正文截断；实际写库走 memory_import，那里才做脱敏）。 */
+  sampleNew: Array<{ type: string; content: string }>;
+}
+export interface MemportScanResponse {
+  /** cfg.memport.enabled——关时 sources 为空并附 notice。 */
+  enabled: boolean;
+  sources: MemportScanSourceResult[];
+  notice?: string;
+}
+
 export interface DshMemoryRequestMap {
   'dsh-memory/stats': Record<string, never>;
   'dsh-memory/token-cost': TokenCostRequest;
@@ -1378,6 +1444,10 @@ export interface DshMemoryRequestMap {
   'dsh-memory/cleanup-retired': CleanupRetiredRequest;
   'dsh-memory/snapshots-list': SnapshotsListRequest;
   'dsh-memory/snapshot-restore': SnapshotRestoreRequest;
+  'dsh-memory/memory-sources-list': Record<string, never>;
+  'dsh-memory/memory-sources-add': MemorySourcesAddRequest;
+  'dsh-memory/memory-sources-retire': MemorySourcesRetireRequest;
+  'dsh-memory/memport-scan': MemportScanRequest;
 }
 
 export interface DshMemoryResponseMap {
@@ -1427,6 +1497,10 @@ export interface DshMemoryResponseMap {
   'dsh-memory/cleanup-retired': CleanupRetiredResponse;
   'dsh-memory/snapshots-list': SnapshotsListResponse;
   'dsh-memory/snapshot-restore': SnapshotRestoreResponse;
+  'dsh-memory/memory-sources-list': MemorySourcesListResponse;
+  'dsh-memory/memory-sources-add': MemorySourcesAddResponse;
+  'dsh-memory/memory-sources-retire': MemorySourcesRetireResponse;
+  'dsh-memory/memport-scan': MemportScanResponse;
 }
 
 /** 全部端点名(client 调用与 host case 表的共用字面量来源)。 */

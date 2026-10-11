@@ -4,6 +4,7 @@ import { type RecallSessionStats } from './hooks/recall.js';
 import type { RebuildController } from './pipeline/rebuild.js';
 import type { RuminateController } from './pipeline/ruminate.js';
 import type { RoomRegistryStore } from './store/rooms-registry.js';
+import type { MemorySourceStore } from './store/memory-sources.js';
 import type { RecallUsageStore } from './store/recall-usage.js';
 import { type LiveSettingsHandle } from './settings.js';
 import type { GraphStore } from './store/graph-store.js';
@@ -80,6 +81,8 @@ interface MemoryRpcSources {
     sessionInfo?: SessionInfoSource;
     /** Room 注册表(未装配 = rooms-get 不带 registry,rooms-export 不可用)。 */
     roomRegistry?: RoomRegistryStore;
+    /** 外部来源注册表（轨3 Connect；未装配 = memory-sources-* / memport-scan 不可用）。 */
+    memorySources?: MemorySourceStore;
 }
 /** 端点 deps 的注入面(ctx/cfg/stores/logger 由调用方绑定,其余由此处决定)。 */
 export type EndpointDepsInput = Omit<EndpointDeps, 'ctx' | 'cfg' | 'stores' | 'logger'>;
@@ -105,7 +108,9 @@ export declare function registerMemoryRpc(ctx: Context, cfg: MemoryConfig, store
 /** 反刍控制器(存储降级时为 undefined):经 buildEndpointDeps 落入 deps.ruminate。 */
 ruminate?: RuminateController, 
 /** Room 分类管理依赖(注册表;缺省 = rooms-get 不带 registry、rooms-export 恒 404 语义)。 */
-roomRegistry?: RoomRegistryStore): void;
+roomRegistry?: RoomRegistryStore, 
+/** 外部来源注册表（轨3 Connect；经 buildEndpointDeps 落入 deps.memorySources）。 */
+memorySources?: MemorySourceStore): void;
 export interface EndpointDeps {
     ctx: Context;
     cfg: MemoryConfig;
@@ -132,6 +137,8 @@ export interface EndpointDeps {
     sessionInfo?: SessionInfoSource;
     /** Room 注册表(未装配 = rooms-get 不带 registry,rooms-export 不可用)。 */
     roomRegistry?: RoomRegistryStore;
+    /** 外部来源注册表（轨3 Connect；未装配 = memory-sources-* / memport-scan 不可用）。 */
+    memorySources?: MemorySourceStore;
 }
 /** 端点分发表(导出供测试直调:可精确注入 rebuild/ruminate 等可选控制器,验证 deps 接线)。 */
 export declare function handleEndpoint(endpoint: string, payload: unknown, deps: EndpointDeps): Promise<unknown>;

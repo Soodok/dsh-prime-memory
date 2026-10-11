@@ -129,6 +129,12 @@ export const memorySchema = Schema.object({
         // 30 天:足够跨过假期与项目间歇,又不至于让互相矛盾的两条记忆长期并列召回。
         timeoutDays: Schema.number().min(0).max(3650).default(30),
     }),
+    // 轨3 memport Connect:默认关(新功能默认关)。scan 为**只读预览**，写库仍走 memory_import。
+    memport: Schema.object({
+        enabled: Schema.boolean().default(false),
+        // 单源扫描上限（防极端大包在事件循环里阻塞 RPC；scan 是手动触发，仍留护栏）。
+        scanMaxRecords: Schema.number().min(0).max(20_000).default(5000),
+    }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),
         maxResults: Schema.number().min(1).max(20).default(5),

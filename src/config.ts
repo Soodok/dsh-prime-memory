@@ -94,6 +94,13 @@ export interface MemoryConfig {
      *  **0 = 不做超时降级**(显式关闭,而非"立刻全部超时")。 */
     timeoutDays: number;
   };
+  /** 轨3 memport Connect:外部记忆来源登记与只读扫描。**默认关**——
+   *  scan 仅预览(不写库)，写库仍走 memory_import；enabled 关时 memory-sources 与 memport-scan 端点均不可用。 */
+  memport: {
+    enabled: boolean;
+    /** 单源扫描记录上限(0 = 不限;仍受总护栏)。 */
+    scanMaxRecords: number;
+  };
   recall: {
     enabled: boolean;
     /** 每步自动召回注入的 L1 条数。 */
@@ -330,6 +337,12 @@ export const memorySchema = Schema.object({
     maxPending: Schema.number().min(0).max(10_000).default(100),
     // 30 天:足够跨过假期与项目间歇,又不至于让互相矛盾的两条记忆长期并列召回。
     timeoutDays: Schema.number().min(0).max(3650).default(30),
+  }),
+  // 轨3 memport Connect:默认关(新功能默认关)。scan 为**只读预览**，写库仍走 memory_import。
+  memport: Schema.object({
+    enabled: Schema.boolean().default(false),
+    // 单源扫描上限（防极端大包在事件循环里阻塞 RPC；scan 是手动触发，仍留护栏）。
+    scanMaxRecords: Schema.number().min(0).max(20_000).default(5000),
   }),
   recall: Schema.object({
     enabled: Schema.boolean().default(true),

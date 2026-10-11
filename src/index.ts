@@ -44,6 +44,7 @@ import { registerMemoryTools } from './tools/index.js';
 import { registerSlotTools } from './tools/slots.js';
 import { registerSlotRecall } from './hooks/slot-recall.js';
 import { RoomRegistryStore } from './store/rooms-registry.js';
+import { MemorySourceStore } from './store/memory-sources.js';
 import { RecallUsageStore } from './store/recall-usage.js';
 import { registerSlotsProjection } from './projection/slots.js';
 import type { MemoryLogger } from './types.js';
@@ -407,6 +408,9 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   // Room 注册表(分类管理 beta.4;损坏降级为纯自生长目录)
   const roomRegistry = new RoomRegistryStore(dataDir, logger);
   await roomRegistry.init();
+  // 外部记忆来源注册表（轨3 Connect；默认由 cfg.memport.enabled 关门控，sidecar 本身无条件加载）
+  const memorySources = new MemorySourceStore(dataDir, logger);
+  await memorySources.init();
   const ruminate =
     storageOk && !db.isDegraded() && ruminateFile
       ? new RuminateController(ctx, config, runner, stores, logger, live, ruminateFile, roomRegistry)
@@ -454,6 +458,7 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
     },
     ruminate,
     storageOk ? roomRegistry : undefined,
+    storageOk ? memorySources : undefined,
   );
 
   // bench 控制服务(config.benchControl 门控,默认关):仅基准/调试部署注册,
