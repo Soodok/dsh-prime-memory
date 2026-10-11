@@ -244,6 +244,12 @@ export interface MemoryConfig {
     maxAlwaysOnBytes: number;
     /** 槽位正文最大字符数。 */
     maxBodyChars: number;
+    /**
+     * 旧语义迁移（默认关）：反刍收尾时，把“钉成常驻、但内容已由一条活 L1 记忆承载”的
+     * rule 槽位软退场（dropped），让那条记忆回到相关性召回而非每轮硬注入。
+     * 需用户显式授权：动的是手动建的约定，不自动生效。
+     */
+    migrateLegacy: boolean;
   };
   /** 是否注册模型可调用的记忆工具。 */
   tools: boolean;
@@ -499,6 +505,8 @@ export const memorySchema = Schema.object({
     maxSlots: Schema.number().min(1).max(32).default(8),
     maxAlwaysOnBytes: Schema.number().min(128).max(16_384).default(2048),
     maxBodyChars: Schema.number().min(32).max(2048).default(512),
+    // 旧 slot 语义迁移：默认关（不自动碰用户手动 pin 的常驻约定）。
+    migrateLegacy: Schema.boolean().default(false),
   }),
   tools: Schema.boolean().default(true),
   benchControl: Schema.boolean().default(false),

@@ -360,12 +360,14 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         maxSlots: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxAlwaysOnBytes: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxBodyChars: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        migrateLegacy: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         inject: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         maxSlots: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxAlwaysOnBytes: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxBodyChars: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        migrateLegacy: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, "plain">;
     tools: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     benchControl: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
@@ -921,12 +923,14 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         maxSlots: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxAlwaysOnBytes: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxBodyChars: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        migrateLegacy: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         inject: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         maxSlots: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxAlwaysOnBytes: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         maxBodyChars: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        migrateLegacy: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, "plain">;
     tools: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     benchControl: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;

@@ -1686,7 +1686,7 @@ var __defProp = Object.defineProperty;
 		  const showInput = scope === "all" || scope === "input";
 		  const effNote = layers.map((l) => eff[l[0]] || "?").join(" / ");
 		  const rowLabel = (key) => key === "extract" ? "抽取输出" : key === "dedup" ? "去重输出" : key === "l2" ? "L2 输出" : "L3 输出";
-		  const rowStyle = { display: "flex", alignItems: "center", gap: 8 };
+		  const rowStyle2 = { display: "flex", alignItems: "center", gap: 8 };
 		  return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { children: [
 		    showOutputs ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: { marginTop: 12 }, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
@@ -1697,7 +1697,7 @@ var __defProp = Object.defineProperty;
 		          children: "输出预算"
 		        }
 		      ),
-		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }, children: layers.map((l) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: rowStyle, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }, children: layers.map((l) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: rowStyle2, children: [
 		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { style: { width: 68, flexShrink: 0, fontSize: 12, color: "var(--dsh-mem-text-2)" }, children: rowLabel(l[0]) }),
 		        inputBox(
 		          l[0],
@@ -1719,7 +1719,7 @@ var __defProp = Object.defineProperty;
 		          children: "输入预算"
 		        }
 		      ),
-		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }, children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: rowStyle, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }, children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: rowStyle2, children: [
 		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { style: { width: 68, flexShrink: 0, fontSize: 12, color: "var(--dsh-mem-text-2)" }, children: "单次输入" }),
 		        inputBox(
 		          "input",
@@ -5425,7 +5425,7 @@ var __defProp = Object.defineProperty;
 		}
 		
 		// client/src/pill/MemoryModePill.tsx
-		var import_react24 = require("react");
+		var import_react25 = require("react");
 		
 		// src/util/context-occupancy.ts
 		var CONTEXT_METER_CIRCUMFERENCE = 34.55751918948772;
@@ -5741,7 +5741,7 @@ var __defProp = Object.defineProperty;
 		}
 		
 		// client/src/pill/WingWheel.tsx
-		var import_react23 = require("react");
+		var import_react24 = require("react");
 		
 		// client/src/pill/SessionInfoArea.tsx
 		var import_react22 = require("react");
@@ -5852,8 +5852,91 @@ var __defProp = Object.defineProperty;
 		  ] });
 		}
 		
-		// client/src/pill/WingWheel.tsx
+		// client/src/pill/SessionRecalledArea.tsx
+		var import_react23 = require("react");
 		var import_jsx_runtime23 = require("react/jsx-runtime");
+		var SHOW_CAP = 6;
+		var POLL_MS2 = 4e3;
+		var MATURITY_LABEL = { high: "成熟·高", mid: "成熟·中", low: "成熟·低" };
+		function SessionRecalledArea(props) {
+		  const rpc = props.rpc;
+		  const sessionId = props.sessionId;
+		  const [records, setRecords] = (0, import_react23.useState)(void 0);
+		  (0, import_react23.useEffect)(() => {
+		    if (!rpc || !sessionId) return void 0;
+		    let alive = true;
+		    let timer = null;
+		    let seq = 0;
+		    const tick = () => {
+		      const token = ++seq;
+		      rpc("dsh-memory/session-recalled", { sessionId }).then((r) => {
+		        if (!alive || token !== seq) return;
+		        if (r && r.ok && r.value) setRecords(r.value.records);
+		      }).catch(() => {
+		      }).then(() => {
+		        if (alive) timer = setTimeout(tick, POLL_MS2);
+		      });
+		    };
+		    tick();
+		    return () => {
+		      alive = false;
+		      if (timer) clearTimeout(timer);
+		    };
+		  }, [rpc, sessionId]);
+		  if (records === void 0) return null;
+		  const recentFirst = [...records].reverse();
+		  const shown = recentFirst.slice(0, SHOW_CAP);
+		  const hidden = recentFirst.length - shown.length;
+		  return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "dsh-mem-sinfo", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		      "div",
+		      {
+		        style: { fontSize: 11, color: "var(--dsh-mem-text-3)", marginBottom: 6 },
+		        title: "本会话召回注入、且目前仍在上下文里的记忆（压缩/清空后自动消失，不是常驻）",
+		        children: "本会话召回 " + records.length + " 条"
+		      }
+		    ),
+		    records.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)", lineHeight: "16px" }, children: "还没召回到记忆（聊几轮后按相关性自动浮现）" }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: [
+		      shown.map((r) => /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { style: rowStyle, title: rowTitle(r), children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		          "span",
+		          {
+		            className: "dsh-mem-tag dsh-mem-tag-" + r.type,
+		            style: { flexShrink: 0, whiteSpace: "nowrap" },
+		            children: TYPE_LABELS[r.type] || r.type
+		          }
+		        ),
+		        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "dsh-mem-sinfo-val", style: textStyle, children: r.content }),
+		        r.maturity ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 10, color: "var(--dsh-mem-text-3)", whiteSpace: "nowrap", flexShrink: 0 }, children: MATURITY_LABEL[r.maturity] }) : null
+		      ] }, r.id)),
+		      hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: "+ " + hidden + " 条更早召回（详见面板「记忆」页）" }) : null
+		    ] })
+		  ] });
+		}
+		var rowStyle = {
+		  display: "flex",
+		  alignItems: "flex-start",
+		  gap: 6,
+		  lineHeight: "16px"
+		};
+		var textStyle = {
+		  fontSize: 12,
+		  lineHeight: "16px",
+		  fontWeight: 400,
+		  minWidth: 0,
+		  display: "-webkit-box",
+		  WebkitLineClamp: 2,
+		  WebkitBoxOrient: "vertical",
+		  overflow: "hidden"
+		};
+		function rowTitle(r) {
+		  const head = "[" + (TYPE_LABELS[r.type] || r.type) + "] " + r.content;
+		  const sc = r.usageScenario && r.usageScenario.length > 0 ? "\n使用场景：" + r.usageScenario.join("；") : "";
+		  return head + sc;
+		}
+		
+		// client/src/pill/WingWheel.tsx
+		var import_jsx_runtime24 = require("react/jsx-runtime");
 		var SIZE = 196;
 		var CENTER = SIZE / 2;
 		var R = 64;
@@ -5896,17 +5979,17 @@ var __defProp = Object.defineProperty;
 		function WingWheel(props) {
 		  ensureThemeStyle();
 		  const isOff = props.mode === "off";
-		  const [overview, setOverview] = (0, import_react23.useState)(null);
-		  const [backfillBusy, setBackfillBusy] = (0, import_react23.useState)(false);
-		  const [localError, setLocalError] = (0, import_react23.useState)(null);
-		  const timersRef = (0, import_react23.useRef)([]);
-		  (0, import_react23.useEffect)(
+		  const [overview, setOverview] = (0, import_react24.useState)(null);
+		  const [backfillBusy, setBackfillBusy] = (0, import_react24.useState)(false);
+		  const [localError, setLocalError] = (0, import_react24.useState)(null);
+		  const timersRef = (0, import_react24.useRef)([]);
+		  (0, import_react24.useEffect)(
 		    () => () => {
 		      for (const t of timersRef.current) window.clearTimeout(t);
 		    },
 		    []
 		  );
-		  (0, import_react23.useEffect)(() => {
+		  (0, import_react24.useEffect)(() => {
 		    let alive = true;
 		    props.rpc("dsh-memory/wing-overview", {}).then((r) => {
 		      if (!alive) return;
@@ -5952,28 +6035,28 @@ var __defProp = Object.defineProperty;
 		      finish();
 		    });
 		  };
-		  const boxRef = (0, import_react23.useRef)(null);
-		  const startRef = (0, import_react23.useRef)(null);
-		  const movedRef = (0, import_react23.useRef)(false);
-		  const downIndexRef = (0, import_react23.useRef)(null);
-		  const dragTargetRef = (0, import_react23.useRef)(null);
-		  const [drag, setDrag] = (0, import_react23.useState)(null);
+		  const boxRef = (0, import_react24.useRef)(null);
+		  const startRef = (0, import_react24.useRef)(null);
+		  const movedRef = (0, import_react24.useRef)(false);
+		  const downIndexRef = (0, import_react24.useRef)(null);
+		  const dragTargetRef = (0, import_react24.useRef)(null);
+		  const [drag, setDrag] = (0, import_react24.useState)(null);
 		  const lockedIndex = (() => {
 		    if (props.halls.length !== 1 || !overview) return null;
 		    const i = overview.corners.findIndex((c) => c.id === props.halls[0]);
 		    return i >= 0 ? i : null;
 		  })();
 		  const activeCorner = drag ? drag.index : lockedIndex;
-		  const blockPosRef = (0, import_react23.useRef)(
+		  const blockPosRef = (0, import_react24.useRef)(
 		    activeCorner != null ? cornerXY(activeCorner) : { x: CENTER, y: CENTER }
 		  );
-		  const blockTargetRef = (0, import_react23.useRef)(blockPosRef.current);
-		  const [blockPos, setBlockPos] = (0, import_react23.useState)(blockPosRef.current);
-		  (0, import_react23.useEffect)(() => {
+		  const blockTargetRef = (0, import_react24.useRef)(blockPosRef.current);
+		  const [blockPos, setBlockPos] = (0, import_react24.useState)(blockPosRef.current);
+		  (0, import_react24.useEffect)(() => {
 		    blockTargetRef.current = activeCorner != null ? cornerXY(activeCorner) : { x: CENTER, y: CENTER };
 		  }, [activeCorner]);
-		  const reducedMotionRef = (0, import_react23.useRef)(false);
-		  (0, import_react23.useEffect)(() => {
+		  const reducedMotionRef = (0, import_react24.useRef)(false);
+		  (0, import_react24.useEffect)(() => {
 		    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
 		    const apply2 = () => {
 		      reducedMotionRef.current = mq.matches;
@@ -5982,7 +6065,7 @@ var __defProp = Object.defineProperty;
 		    mq.addEventListener("change", apply2);
 		    return () => mq.removeEventListener("change", apply2);
 		  }, []);
-		  (0, import_react23.useEffect)(() => {
+		  (0, import_react24.useEffect)(() => {
 		    let raf = 0;
 		    const loop = () => {
 		      const cur = blockPosRef.current;
@@ -6071,8 +6154,8 @@ var __defProp = Object.defineProperty;
 		  }).join(" ");
 		  const grayStyle = isOff ? { opacity: 0.45, pointerEvents: "none" } : {};
 		  const boundariesDisabled = props.halls.length === 0 || isOff;
-		  return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { style: { width: SIZE }, children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { style: { width: SIZE }, children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
 		      "div",
 		      {
 		        ref: boxRef,
@@ -6082,7 +6165,7 @@ var __defProp = Object.defineProperty;
 		        onPointerUp: onBoxUp,
 		        onPointerCancel: onBoxUp,
 		        children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
 		            "svg",
 		            {
 		              width: SIZE,
@@ -6090,7 +6173,7 @@ var __defProp = Object.defineProperty;
 		              style: { position: "absolute", inset: 0, pointerEvents: "none" },
 		              "aria-hidden": "true",
 		              children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		                /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		                  "polygon",
 		                  {
 		                    points: polyPoints,
@@ -6101,7 +6184,7 @@ var __defProp = Object.defineProperty;
 		                    opacity: 0.45
 		                  }
 		                ),
-		                /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		                /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		                  "polygon",
 		                  {
 		                    points: polyPoints,
@@ -6112,7 +6195,7 @@ var __defProp = Object.defineProperty;
 		                ),
 		                [0, 1, 2, 3, 4, 5, 6, 7].map((i) => {
 		                  const p = cornerPos(i);
-		                  return /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		                  return /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		                    "line",
 		                    {
 		                      x1: CENTER,
@@ -6128,7 +6211,7 @@ var __defProp = Object.defineProperty;
 		              ]
 		            }
 		          ),
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		            "div",
 		            {
 		              "aria-hidden": "true",
@@ -6147,7 +6230,7 @@ var __defProp = Object.defineProperty;
 		              }
 		            }
 		          ),
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		            "button",
 		            {
 		              type: "button",
@@ -6181,7 +6264,7 @@ var __defProp = Object.defineProperty;
 		            const dim = activeCorner != null && !active;
 		            const empty = count === 0;
 		            const p = cornerPos(i);
-		            return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+		            return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
 		              "div",
 		              {
 		                title: id ? `「${label}」${count ?? 0} 条
@@ -6210,8 +6293,8 @@ var __defProp = Object.defineProperty;
 		                  zIndex: 2
 		                },
 		                children: [
-		                  /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { children: label }),
-		                  /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 8, opacity: 0.75, fontVariantNumeric: "tabular-nums" }, children: count === null ? " " : empty ? "空角" : `${count} 条` })
+		                  /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: label }),
+		                  /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { style: { fontSize: 8, opacity: 0.75, fontVariantNumeric: "tabular-nums" }, children: count === null ? " " : empty ? "空角" : `${count} 条` })
 		                ]
 		              },
 		              id ?? i
@@ -6220,7 +6303,7 @@ var __defProp = Object.defineProperty;
 		        ]
 		      }
 		    ),
-		    /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+		    /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
 		      "div",
 		      {
 		        title: props.halls.length === 0 ? "选定某个角（单 Wing）后，这两项才生效" : "锁定 Wing 时两类无角记忆是否参与召回",
@@ -6234,9 +6317,9 @@ var __defProp = Object.defineProperty;
 		          pointerEvents: boundariesDisabled ? "none" : void 0
 		        },
 		        children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: overview ? `另有 ${overview.unlabeled} 条未打标` : "未打标" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: overview ? `另有 ${overview.unlabeled} 条未打标` : "未打标" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		              Segmented,
 		              {
 		                value: props.hallIncludeUnlabeled ? "in" : "ex",
@@ -6247,7 +6330,7 @@ var __defProp = Object.defineProperty;
 		                onChange: (key) => props.onCommitWingBoundaries({ includeUnlabeled: key === "in" })
 		              }
 		            ),
-		            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		              Segmented,
 		              {
 		                value: props.hallIncludeGeneral ? "in" : "ex",
@@ -6262,7 +6345,7 @@ var __defProp = Object.defineProperty;
 		        ]
 		      }
 		    ),
-		    /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Row, { label: "会话", children: /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		    /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Row, { label: "会话", children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		      Segmented,
 		      {
 		        value: isOff ? "off" : "on",
@@ -6277,7 +6360,7 @@ var __defProp = Object.defineProperty;
 		        onChange: (key) => props.onCommit(key === "off" ? "off" : "auto")
 		      }
 		    ) }),
-		    props.recall !== void 0 && props.onCommitRecall ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Row, { label: "注入", children: /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		    props.recall !== void 0 && props.onCommitRecall ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(Row, { label: "注入", children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		      Segmented,
 		      {
 		        value: props.recall === null ? "follow" : props.recall ? "on" : "off",
@@ -6290,7 +6373,7 @@ var __defProp = Object.defineProperty;
 		        onChange: (key) => props.onCommitRecall(key === "on" ? true : key === "off" ? false : null)
 		      }
 		    ) }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+		    /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
 		      "div",
 		      {
 		        style: {
@@ -6301,8 +6384,8 @@ var __defProp = Object.defineProperty;
 		          marginTop: 10
 		        },
 		        children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: overview ? `未打标 ${overview.unlabeled} 条` : "未打标计数加载中" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: overview ? `未打标 ${overview.unlabeled} 条` : "未打标计数加载中" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		            ActionButton,
 		            {
 		              label: backfillBusy ? "回填中…" : "回填",
@@ -6314,12 +6397,13 @@ var __defProp = Object.defineProperty;
 		        ]
 		      }
 		    ),
-		    props.error || localError ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-danger)", marginTop: 8 }, children: props.error || localError }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(SessionInfoArea, { rpc: props.rpc, sessionId: props.sessionId })
+		    props.error || localError ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-danger)", marginTop: 8 }, children: props.error || localError }) : null,
+		    /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(SessionRecalledArea, { rpc: props.rpc, sessionId: props.sessionId }),
+		    /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(SessionInfoArea, { rpc: props.rpc, sessionId: props.sessionId })
 		  ] });
 		}
 		function Row(props) {
-		  return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
 		    "div",
 		    {
 		      style: {
@@ -6329,7 +6413,7 @@ var __defProp = Object.defineProperty;
 		        marginTop: 10
 		      },
 		      children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 12, color: "var(--dsh-mem-text-3)" }, children: props.label }),
+		        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { style: { fontSize: 12, color: "var(--dsh-mem-text-3)" }, children: props.label }),
 		        props.children
 		      ]
 		    }
@@ -6337,9 +6421,9 @@ var __defProp = Object.defineProperty;
 		}
 		var LABEL_FALLBACK = ["工作", "人际", "学习", "创作娱乐", "居家", "健康", "财务", "出行"];
 		function useViewportClamp(popRef) {
-		  const shiftRef = (0, import_react23.useRef)(0);
-		  const [shiftX, setShiftX] = (0, import_react23.useState)(0);
-		  (0, import_react23.useEffect)(() => {
+		  const shiftRef = (0, import_react24.useRef)(0);
+		  const [shiftX, setShiftX] = (0, import_react24.useState)(0);
+		  (0, import_react24.useEffect)(() => {
 		    const clamp = () => {
 		      const el = popRef.current;
 		      if (!el) return;
@@ -6369,24 +6453,24 @@ var __defProp = Object.defineProperty;
 		}
 		
 		// client/src/pill/MemoryModePill.tsx
-		var import_jsx_runtime24 = require("react/jsx-runtime");
+		var import_jsx_runtime25 = require("react/jsx-runtime");
 		function MemoryModePill(props) {
 		  const rpc = props.rpc;
 		  const sessionId = props.sessionId || props.session && props.session.sessionId;
-		  const [mode, setMode] = (0, import_react24.useState)(null);
-		  const [recall, setRecall] = (0, import_react24.useState)(null);
-		  const [recallResolved, setRecallResolved] = (0, import_react24.useState)(true);
-		  const [halls, setWings] = (0, import_react24.useState)([]);
-		  const [hallIncludeUnlabeled, setWingIncludeUnlabeled] = (0, import_react24.useState)(true);
-		  const [hallIncludeGeneral, setWingIncludeGeneral] = (0, import_react24.useState)(false);
-		  const [wingLabels, setHallLabels] = (0, import_react24.useState)({});
-		  const [error, setError] = (0, import_react24.useState)(null);
-		  const [open, setOpen] = (0, import_react24.useState)(false);
-		  const wrapRef = (0, import_react24.useRef)(null);
-		  const popRef = (0, import_react24.useRef)(null);
+		  const [mode, setMode] = (0, import_react25.useState)(null);
+		  const [recall, setRecall] = (0, import_react25.useState)(null);
+		  const [recallResolved, setRecallResolved] = (0, import_react25.useState)(true);
+		  const [halls, setWings] = (0, import_react25.useState)([]);
+		  const [hallIncludeUnlabeled, setWingIncludeUnlabeled] = (0, import_react25.useState)(true);
+		  const [hallIncludeGeneral, setWingIncludeGeneral] = (0, import_react25.useState)(false);
+		  const [wingLabels, setHallLabels] = (0, import_react25.useState)({});
+		  const [error, setError] = (0, import_react25.useState)(null);
+		  const [open, setOpen] = (0, import_react25.useState)(false);
+		  const wrapRef = (0, import_react25.useRef)(null);
+		  const popRef = (0, import_react25.useRef)(null);
 		  const shiftX = useViewportClamp(popRef);
-		  const seqRef = (0, import_react24.useRef)(0);
-		  const load = (0, import_react24.useCallback)(() => {
+		  const seqRef = (0, import_react25.useRef)(0);
+		  const load = (0, import_react25.useCallback)(() => {
 		    if (!sessionId || !rpc) return;
 		    const token = ++seqRef.current;
 		    setError(null);
@@ -6411,13 +6495,13 @@ var __defProp = Object.defineProperty;
 		    }).catch(() => {
 		    });
 		  }, [sessionId, rpc]);
-		  (0, import_react24.useEffect)(() => {
+		  (0, import_react25.useEffect)(() => {
 		    load();
 		  }, [load]);
-		  (0, import_react24.useEffect)(() => {
+		  (0, import_react25.useEffect)(() => {
 		    watchSidebarIcon();
 		  }, []);
-		  (0, import_react24.useEffect)(() => {
+		  (0, import_react25.useEffect)(() => {
 		    initOccupancyIndicator(
 		      (endpoint, payload) => rpc(endpoint, payload)
 		    );
@@ -6425,7 +6509,7 @@ var __defProp = Object.defineProperty;
 		    watchContextMeter();
 		    noteOccupancySession(sessionId ?? null);
 		  }, [sessionId, rpc]);
-		  (0, import_react24.useEffect)(() => {
+		  (0, import_react25.useEffect)(() => {
 		    if (!open) return;
 		    const onDown = (e) => {
 		      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
@@ -6565,8 +6649,8 @@ var __defProp = Object.defineProperty;
 		    pillStyle.boxShadow = "0 0 12px color-mix(in srgb, " + info.color + " 30%, transparent)";
 		    pillStyle["--dsh-mem-pill-tint"] = info.color;
 		  }
-		  return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { ref: wrapRef, style: { position: "relative", display: "inline-flex" }, children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { ref: wrapRef, style: { position: "relative", display: "inline-flex" }, children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)(
 		      "button",
 		      {
 		        type: "button",
@@ -6579,11 +6663,11 @@ var __defProp = Object.defineProperty;
 		        style: pillStyle,
 		        children: [
 		          "记忆 · ",
-		          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { children: faceLabel })
+		          /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { children: faceLabel })
 		        ]
 		      }
 		    ),
-		    open ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+		    open ? /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
 		      "div",
 		      {
 		        ref: popRef,
@@ -6594,12 +6678,12 @@ var __defProp = Object.defineProperty;
 		          transform: "translateX(calc(-50% + " + shiftX + "px))",
 		          zIndex: 1e3
 		        },
-		        children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+		        children: /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
 		          "div",
 		          {
 		            className: "dsh-mem-popover",
 		            style: { position: "relative", padding: "10px 12px" },
-		            children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+		            children: /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
 		              WingWheel,
 		              {
 		                mode: mode || "auto",

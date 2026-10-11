@@ -1,0 +1,16 @@
+feat(G-live): 旧 slot 语义迁移 cfg.slots.migrateLegacy（默认关，反刍收尾软退场常驻约定）
+
+修复历史遗留：早期把"已存在的 L1 记忆"钉成 rule 槽位 → 每轮硬注入 + 概要显示成常驻清单，
+与新取向（记忆按相关性隐式浮现，除非手动提醒激活）相悖。
+
+- src/pipeline/slot-migrate.ts: pickMigratableSlots(纯读预览) + migrateLegacySlots(执行)。
+  判据四条同时满足才动：① 开关显式开；② status=open && pinned && kind='rule'
+  （todo/anchor/pointer 各有语义，一律不碰）；③ refs 至少一条解析到**未退场** L1 记录
+  （内容另有载体，退场不丢信息）；④ 该记录可被召回。
+  动作 = close(id,'dropped') 软退场（不删数据，需要时可重新 memory_slot_write），逐条 info 日志。
+- config: slots.migrateLegacy 默认 false（interface + schema）——动的是用户手动建的约定，不自动生效。
+- ruminate: finalize 与 doLightRefresh 两条收尾各挂一次（幂等，退场后不再命中 open）；
+  stores 形参加可选 slots（index.ts 整体传 stores，无需改调用点）。
+- 测试 slot-migrate.test.ts 9 例（含"refs 指向已退场记录不退场""close 抛错不冒泡"）。
+- 修正一处类型面：MemoryRecord.validTo 是 epoch number 非 ISO 串（tsc 抓到，vitest 不查类型）。
+- 全量 1170/1170；tsc、build 0。

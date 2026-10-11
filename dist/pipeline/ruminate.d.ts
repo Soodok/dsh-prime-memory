@@ -21,6 +21,7 @@ import type { SceneStore } from '../store/scenes.js';
 import type { StateStore } from '../store/state.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { MemoryFamily, MemoryLogger } from '../types.js';
+import { type SlotMigrateStoreFace } from './slot-migrate.js';
 import { type RelabelStats } from './relabel.js';
 import type { MemoryRunner } from './runner.js';
 export interface RuminateStatus {
@@ -77,6 +78,8 @@ export declare class RuminateController {
         scenes: Record<MemoryFamily, SceneStore>;
         persona: Record<MemoryFamily, PersonaStore>;
         state: StateStore;
+        /** 常驻槽位面（仅 cfg.slots.migrateLegacy 开启时读/写，缺省不碰）。 */
+        slots?: SlotMigrateStoreFace;
     }, logger: MemoryLogger, live: LiveSettingsHandle, pendingFile: string, 
     /** Room 注册表(可选;孤儿候选预标记的合并词表来源)。 */
     roomRegistry?: {

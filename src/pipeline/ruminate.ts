@@ -28,6 +28,7 @@ import {
 import type { ConversationMessage, ExtractMode, MemoryFamily, MemoryLogger } from '../types.js';
 import { errDetail } from '../util/filelog.js';
 import { runSceneConsolidation } from './l2.js';
+import { migrateLegacySlots, type SlotMigrateStoreFace } from './slot-migrate.js';
 import { relabelPass, type RelabelStats } from './relabel.js';
 import { processSceneReclusterJobs } from './recluster.js';
 import { annotateOrphanCandidates } from '../room-review.js';
@@ -121,6 +122,8 @@ export class RuminateController {
       scenes: Record<MemoryFamily, SceneStore>;
       persona: Record<MemoryFamily, PersonaStore>;
       state: StateStore;
+      /** 常驻槽位面（仅 cfg.slots.migrateLegacy 开启时读/写，缺省不碰）。 */
+      slots?: SlotMigrateStoreFace;
     },
     private readonly logger: MemoryLogger,
     private readonly live: LiveSettingsHandle,
@@ -299,6 +302,12 @@ export class RuminateController {
       // （正常蒸馏路径由 runTurn 末尾 save；反刍 finalize 是独立路径，需自己 save。）
       await this.stores.state.save();
 
+      // 旧 slot 语义迁移（cfg.slots.migrateLegacy 默认关 → 直接 0 动作）：
+      // 把“钉成常驻、内容已由活 L1 记忆承载”的 rule 槽位软退场。
+      if (this.stores.slots !== undefined) {
+        await migrateLegacySlots(this.stores.slots, this.stores.l1, this.cfg.slots.migrateLegacy === true, this.logger);
+      }
+
       // 标注校验/重标定:Wing 合法性 + 认知 hall 映射 + 未打标补标 + 涌现标签
       // 批次进度经 onProgress 写入 detail + sub 子进度(非会话阶段的进度由重标批次决定)
       this.status.phase = 'relabeling';
@@ -474,6 +483,12 @@ export class RuminateController {
       await this.stores.state.save();
     } catch (err) {
       this.logger.warn(`[memory] 反刍轻量刷新 state 落盘失败(计数可能不持久): ${errDetail(err)}`);
+    }
+
+    // 旧 slot 语义迁移：无 pending 缓冲时走的是本路径（“待 L3 12/20”那类场景），
+    // 与 finalize 同一动作、同样默认关；两处幂等（退场后不再命中 open）。
+    if (this.stores.slots !== undefined) {
+      await migrateLegacySlots(this.stores.slots, this.stores.l1, this.cfg.slots.migrateLegacy === true, this.logger);
     }
 
     this.status.running = false;

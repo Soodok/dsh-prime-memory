@@ -254,6 +254,8 @@ export const memorySchema = Schema.object({
         maxSlots: Schema.number().min(1).max(32).default(8),
         maxAlwaysOnBytes: Schema.number().min(128).max(16_384).default(2048),
         maxBodyChars: Schema.number().min(32).max(2048).default(512),
+        // 旧 slot 语义迁移：默认关（不自动碰用户手动 pin 的常驻约定）。
+        migrateLegacy: Schema.boolean().default(false),
     }),
     tools: Schema.boolean().default(true),
     benchControl: Schema.boolean().default(false),

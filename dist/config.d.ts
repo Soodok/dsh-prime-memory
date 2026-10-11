@@ -246,6 +246,12 @@ export interface MemoryConfig {
         maxAlwaysOnBytes: number;
         /** 槽位正文最大字符数。 */
         maxBodyChars: number;
+        /**
+         * 旧语义迁移（默认关）：反刍收尾时，把“钉成常驻、但内容已由一条活 L1 记忆承载”的
+         * rule 槽位软退场（dropped），让那条记忆回到相关性召回而非每轮硬注入。
+         * 需用户显式授权：动的是手动建的约定，不自动生效。
+         */
+        migrateLegacy: boolean;
     };
     /** 是否注册模型可调用的记忆工具。 */
     tools: boolean;
@@ -820,12 +826,14 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxSlots: Schema<number, number, "defined">;
         maxAlwaysOnBytes: Schema<number, number, "defined">;
         maxBodyChars: Schema<number, number, "defined">;
+        migrateLegacy: Schema<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         inject: Schema<boolean, boolean, "defined">;
         maxSlots: Schema<number, number, "defined">;
         maxAlwaysOnBytes: Schema<number, number, "defined">;
         maxBodyChars: Schema<number, number, "defined">;
+        migrateLegacy: Schema<boolean, boolean, "defined">;
     }>>, "plain">;
     tools: Schema<boolean, boolean, "defined">;
     benchControl: Schema<boolean, boolean, "defined">;
@@ -1381,12 +1389,14 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxSlots: Schema<number, number, "defined">;
         maxAlwaysOnBytes: Schema<number, number, "defined">;
         maxBodyChars: Schema<number, number, "defined">;
+        migrateLegacy: Schema<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         inject: Schema<boolean, boolean, "defined">;
         maxSlots: Schema<number, number, "defined">;
         maxAlwaysOnBytes: Schema<number, number, "defined">;
         maxBodyChars: Schema<number, number, "defined">;
+        migrateLegacy: Schema<boolean, boolean, "defined">;
     }>>, "plain">;
     tools: Schema<boolean, boolean, "defined">;
     benchControl: Schema<boolean, boolean, "defined">;
