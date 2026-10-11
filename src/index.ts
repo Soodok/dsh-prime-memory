@@ -50,6 +50,7 @@ import { SkillStore } from './store/skill-store.js';
 import { registerSkillRecall } from './hooks/skill-recall.js';
 import { registerSkillTools } from './tools/skills.js';
 import { RecallUsageStore } from './store/recall-usage.js';
+import { registerSlotsProjection } from './projection/slots.js';
 import type { MemoryLogger } from './types.js';
 import { errDetail, withFileLog } from './util/filelog.js';
 import { buildRouteChain, resolveModelRoute, invalidateEffortCache } from './llm.js';
@@ -441,10 +442,11 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   // 轨2 技能：工具面与常驻注入（均 cfg.skills.enabled 默认关时自 no-op，零表面积）。
   registerSkillTools(ctx, config, skillStore, logger, live);
   registerSkillRecall(ctx, config, skillStore, logger, live);
-  // 不再向宿主注册 memorySlots 投影：那张侧栏卡把"手动常驻约定"渲染成槽位注册表，
-  // 与"记忆按相关性隐式浮现、非常驻"的取向相悖（用户明确要求不显示）。
-  // 槽位本体不受影响：stores.slots + registerSlotTools + registerSlotRecall 照常，
-  // 手动 pin 的约定仍每轮注入，只是不再占据侧栏席位。
+  // 必须保持注册：memorySlots 这个 key 已在会话历史帧里，单方面摘除注册 = 孤儿化 key，
+  // 宿主按 key 冷加载会话历史会整段失败（实测：新对话全挂）。
+  // 不想在概要侧栏看到常驻槽位：用 dsh-brief-sidebar 的「记忆槽位分区」开关（客户端隐藏，
+  // 不动注册）。本包只额外提供会话召回的另一个展示面，不拿摘注册当“下线卡片”的手段。
+  registerSlotsProjection(ctx, stores.slots, stores.l1);
   void slotRecall;
   registerMemoryRpc(
     ctx,
