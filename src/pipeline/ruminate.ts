@@ -427,7 +427,17 @@ export class RuminateController {
       this.status.detail = `L3 画像更新(${family})`;
       const fstate = this.runner.states?.[family];
       try {
+        // 强制 L3：runPersona 自带触发判定(memoriesSinceL3>=interval 才跑)，反刍是显式整理动作，
+        // 需绕过阈值真跑——置 personaRequestedReason 走“主动请求”分支。
+        if (fstate) fstate.personaRequestedReason = '反刍轻量刷新';
         await runPersona(this.ctx, this.cfg, this.stores.scenes[family], this.stores.persona[family], fstate, this.logger, family);
+        // 与 L2 循环对称：无论 runPersona 是否因“无变化场景”早退，都清零 L3 计数，
+        // 否则“待 L3 新记忆”永远卡在阈值下。runPersona 成功时已自清，这里幂等兜底。
+        if (fstate) {
+          fstate.memoriesSinceL3 = 0;
+          fstate.lastL3At = Date.now();
+          fstate.personaRequestedReason = undefined;
+        }
       } catch (err) {
         this.logger.warn(`[memory] 反刍轻量刷新 L3 失败(family=${family}): ${errDetail(err)}`);
       }
@@ -456,6 +466,14 @@ export class RuminateController {
       // 计数与成败解耦:该步已执行(无论成败都算走完),否则失败时 done 永远追不上 total
       this.status.sub = null;
       this.status.done++;
+    }
+
+    // 轻量刷新改了 L2/L3 计数（runner.states 是 StateStore 活引用）——必须显式落盘，
+    // 否则重启从 state.json 读回旧值，表现为“待 L2/L3 计数反复”。
+    try {
+      await this.stores.state.save();
+    } catch (err) {
+      this.logger.warn(`[memory] 反刍轻量刷新 state 落盘失败(计数可能不持久): ${errDetail(err)}`);
     }
 
     this.status.running = false;
