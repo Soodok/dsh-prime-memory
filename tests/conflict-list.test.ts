@@ -152,3 +152,23 @@ describe('listConflictPairs：分页与总数', () => {
     }
   });
 });
+
+describe('listConflictPairs：G3 成熟度旁注（读时派生，不自动裁决）', () => {
+  it('默认（priority 50、无 usage、无半衰期）→ mid', () => {
+    const records = [rec('w-1', 'A'), rec('l-1', 'B')];
+    const v = listConflictPairs({ l1: fakeL1([pair(1)], records), conflictFreezeEnabled: true });
+    expect(v.items[0]!.winner_maturity).toBe('mid');
+    expect(v.items[0]!.loser_maturity).toBe('mid');
+  });
+  it('高优先级 + 多次被用 → high（usage 参与合成）', () => {
+    const records = [{ ...rec('w-1', 'A'), priority: 90 }, rec('l-1', 'B')];
+    const usage = { get: (_id: string) => ({ used: 8 }) };
+    const v = listConflictPairs({ l1: fakeL1([pair(1)], records), conflictFreezeEnabled: true, usage, decayHalfLifeDays: 30 });
+    expect(v.items[0]!.winner_maturity).toBe('high');
+  });
+  it('低优先级 → low（仅展示，outcome 集不变）', () => {
+    const records = [{ ...rec('w-1', 'A'), priority: 10 }, rec('l-1', 'B')];
+    const v = listConflictPairs({ l1: fakeL1([pair(1)], records), conflictFreezeEnabled: true, decayHalfLifeDays: 30 });
+    expect(v.items[0]!.winner_maturity).toBe('low');
+  });
+});

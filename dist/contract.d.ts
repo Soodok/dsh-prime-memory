@@ -1226,6 +1226,9 @@ export interface ConflictPairView {
     loser_valid_from_ms?: number | null;
     loser_valid_to_ms?: number | null;
     loser_persistence?: string | null;
+    /** G3 成熟度旁注（读时派生，仅帮人工看“哪条更确立”，不参与自动裁决）。 */
+    winner_maturity?: 'low' | 'mid' | 'high';
+    loser_maturity?: 'low' | 'mid' | 'high';
     review_state?: 'unseen' | 'deferred';
     /** R1:复看次数(面板据此显示"已复看 N 次");达 `DEFER_MAX` 即钉子户。 */
     defer_count?: number;

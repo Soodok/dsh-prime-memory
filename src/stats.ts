@@ -1479,7 +1479,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       // cfg.conflictFreeze.enabled —— 面板开关写的是 live,而部署静态值恒 false,
       // 于是开关已开、settings.yaml 已落 true,本页仍报"矛盾冻结未开启"。
       return listConflictPairs(
-        { l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true },
+        { l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true, usage: stores.usage, decayHalfLifeDays: effectiveCfg(cfg, live).recall?.decayHalfLifeDays },
         { limit: Number(p.limit) || undefined },
       );
     }

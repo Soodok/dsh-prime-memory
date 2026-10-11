@@ -886,11 +886,13 @@ var __defProp = Object.defineProperty;
 		}
 		function Side(props) {
 		  const axis = props.pair && props.side ? axisText(props.pair, props.side) : "";
+		  const mt = props.pair && props.side ? props.side === "winner" ? props.pair.winner_maturity : props.pair.loser_maturity : void 0;
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginTop: 6 }, children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { ...S.muted, fontWeight: props.accent ? 600 : void 0 }, children: props.label }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: S.content, children: props.content || GONE }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { ...S.muted, fontFamily: "ui-monospace, Consolas, monospace" }, children: props.id }),
-		    axis ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { ...S.muted, marginTop: 2, fontSize: 11 }, children: axis }) : null
+		    axis ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { ...S.muted, marginTop: 2, fontSize: 11 }, children: axis }) : null,
+		    mt ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { ...S.muted, marginTop: 2, fontSize: 11 }, children: "成熟度 · " + (mt === "high" ? "高" : mt === "mid" ? "中" : "低") }) : null
 		  ] });
 		}
 		

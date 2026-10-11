@@ -39,6 +39,14 @@ export interface ConflictListDeps {
     l1: Pick<L1Store, 'listConflictPending' | 'countConflictPendingUnresolved' | 'getByIds'>;
     /** `conflictFreeze.enabled`。 */
     conflictFreezeEnabled: boolean;
+    /** G3 成熟度旁注用：召回使用统计（缺省按 0 强化）。 */
+    usage?: {
+        get(id: string): {
+            used: number;
+        } | null | undefined;
+    };
+    /** 时效半衰期（天）；≤0 = 衰减关 → aging 视为 null。 */
+    decayHalfLifeDays?: number;
 }
 /**
  * 列出待裁决对。

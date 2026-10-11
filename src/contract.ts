@@ -1230,6 +1230,9 @@ export interface ConflictPairView {
   loser_valid_from_ms?: number | null;
   loser_valid_to_ms?: number | null;
   loser_persistence?: string | null;
+  /** G3 成熟度旁注（读时派生，仅帮人工看“哪条更确立”，不参与自动裁决）。 */
+  winner_maturity?: 'low' | 'mid' | 'high';
+  loser_maturity?: 'low' | 'mid' | 'high';
   // R1 未决态(task_2.4):把「没人看过」与「看过但未裁决」在读取面分开。
   // `unseen` = `reviewed_at` 为空;`deferred` = 有人复看过、但仍未给出结论。
   // 派生字段(不存在独立列):该区分必须由读取面算出来,否则"人看了没判"这件事

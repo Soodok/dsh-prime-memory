@@ -1380,7 +1380,7 @@ export function registerMemoryTools(
           return { enabled: false, total: 0, items: [], notice: blockNoticeOf(exec) };
         }
         return listConflictPairs(
-          { l1: stores.l1, conflictFreezeEnabled: live.get().conflictFreeze === true },
+          { l1: stores.l1, conflictFreezeEnabled: live.get().conflictFreeze === true, decayHalfLifeDays: cfg.recall?.decayHalfLifeDays },
           { limit: typeof args.limit === 'number' ? args.limit : undefined },
         );
       },

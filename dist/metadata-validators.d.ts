@@ -1,3 +1,4 @@
+import { type CognitiveHall } from './cognitive-hall.js';
 /**
  * Wing 严格校验:只认 8 域 + general 兜底。
  *
@@ -31,3 +32,16 @@ export { isCognitiveHall, COGNITIVE_HALLS, type CognitiveHall } from './cognitiv
  * 非数组或空→ `[]`（缺字段中性，不抛——防单条抽取失败波及整切片重试）。
  */
 export declare function normUsageScenario(v: unknown, max?: number): string[];
+/**
+ * 读 **Wing（生活域）**。⚠️ 磁盘键是 `metadata.hall`——历史别名，存的其实是 **wing 值**。
+ * 只认词表内的合法 wing（8 角 + general），否则 undefined。
+ *
+ * 用它取代裸读 `metadata.hall`：从入口上把“wing 轴”与“认知 hall 轴”分开，
+ * 防止把认知 hall 值（facts/events/…）误当 wing 读——两轴不串。
+ */
+export declare function readWing(metadata: Record<string, unknown> | undefined | null): string | undefined;
+/**
+ * 读 **认知 hall（大类）**。磁盘键 `metadata.cogHall`，与 wing 的磁盘键 `hall` 正交。
+ * 只认五个枚举值，否则 undefined（wing 值不当认知 hall 读）。
+ */
+export declare function readCognitiveHall(metadata: Record<string, unknown> | undefined | null): CognitiveHall | undefined;

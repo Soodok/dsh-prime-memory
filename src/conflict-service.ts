@@ -11,6 +11,7 @@
 import type { L1Store } from './store/l1.js';
 import { DEFER_MAX } from './store/conflicts.js';
 import type { ConflictResolution } from './store/conflicts.js';
+import { computeMaturity } from './util/maturity.js';
 // 对外形状的唯一事实源在 contract.ts(它没有任何 import,客户端那档类型检查以
 // `types: []` 拉它)。这里**只引用、不重声明** —— 重声明就会与端点/面板用的形状
 // 悄悄分叉,而"工具、端点、面板看同一份形状"正是本模块存在的理由。
@@ -181,6 +182,10 @@ export interface ConflictListDeps {
   l1: Pick<L1Store, 'listConflictPending' | 'countConflictPendingUnresolved' | 'getByIds'>;
   /** `conflictFreeze.enabled`。 */
   conflictFreezeEnabled: boolean;
+  /** G3 成熟度旁注用：召回使用统计（缺省按 0 强化）。 */
+  usage?: { get(id: string): { used: number } | null | undefined };
+  /** 时效半衰期（天）；≤0 = 衰减关 → aging 视为 null。 */
+  decayHalfLifeDays?: number;
 }
 
 /**
@@ -215,6 +220,9 @@ export function listConflictPairs(deps: ConflictListDeps, opts: { limit?: number
   const contentById = new Map<string, string>();
   // §C 三轴(conflict-3axis):记忆记录自带有效期与持续性,取出来用于裁决视图对比。
   const axisById = new Map<string, { validFrom: number | null; validTo: number | null; persistence: string | null }>();
+  // G3 成熟度旁注：取 priority/updatedAt 供 computeMaturity（读时派生，不落库）。
+  const priorityById = new Map<string, number>();
+  const updatedAtById = new Map<string, number>();
   for (const r of deps.l1.getByIds([...ids])) {
     contentById.set(r.id, r.content);
     axisById.set(r.id, {
@@ -222,9 +230,19 @@ export function listConflictPairs(deps: ConflictListDeps, opts: { limit?: number
       validTo: (r.validTo ?? null) as number | null,
       persistence: (r.persistence ?? null) as string | null,
     });
+    priorityById.set(r.id, r.priority ?? 60);
+    updatedAtById.set(r.id, r.updatedAt ?? 0);
   }
 
   const axisOf = (id: string) => axisById.get(id) ?? { validFrom: null, validTo: null, persistence: null };
+  // 成熟度（priority + 被用次数 + 老化）——仅帮人工裁决看“哪条更确立”，不参与自动了结。
+  const halfLife = deps.decayHalfLifeDays ?? 0;
+  const maturityOf = (id: string): 'low' | 'mid' | 'high' => {
+    const aging = halfLife > 0
+      ? Math.max(0.5, Math.pow(0.5, Math.max(0, (Date.now() - (updatedAtById.get(id) ?? 0)) / 86_400_000) / halfLife))
+      : null;
+    return computeMaturity({ priority: priorityById.get(id) ?? 60, usage: deps.usage?.get(id) ?? null, agingWeight: aging });
+  };
 
   const items: ConflictPairView[] = pending.map((p) => {
     const w = axisOf(p.winnerId);
@@ -251,6 +269,8 @@ export function listConflictPairs(deps: ConflictListDeps, opts: { limit?: number
       // ('hard' / ''),使"旧行经 ALTER 回填"与"读取面兜底"呈现同一个形状。
       conflict_type: p.conflictType ?? 'hard',
       claim_key: p.claimKey ?? '',
+      winner_maturity: maturityOf(p.winnerId),
+      loser_maturity: maturityOf(p.loserId),
     };
   });
 
@@ -268,12 +288,14 @@ export function renderConflicts(v: ConflictsView): string {
     const vf = side === 'winner' ? p.winner_valid_from_ms : p.loser_valid_from_ms;
     const vt = side === 'winner' ? p.winner_valid_to_ms : p.loser_valid_to_ms;
     const ps = side === 'winner' ? p.winner_persistence : p.loser_persistence;
+    const mt = side === 'winner' ? p.winner_maturity : p.loser_maturity;
     const parts: string[] = [];
     const vfS = iso(vf);
     const vtS = iso(vt);
     if (vfS) parts.push(`有效期起 ${vfS}`);
     if (vtS) parts.push(`有效期止 ${vtS}`);
     if (ps) parts.push(`持续性 ${ps}`);
+    if (mt) parts.push(`成熟度 ${mt}`);
     return parts.length ? `   三轴: ${parts.join(' / ')}` : '';
   };
 

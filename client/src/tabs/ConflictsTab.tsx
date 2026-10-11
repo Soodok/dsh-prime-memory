@@ -235,12 +235,14 @@ function ConflictCard(props: { pair: ConflictPairView; busy: boolean; onResolve:
 /** 冲突的一侧：id + 正文 + 三轴（正文缺失时明确说是"记录不在库"，不冒充空内容）。 */
 function Side(props: { label: string; id: string; content: string; accent?: boolean; pair?: ConflictPairView; side?: 'winner' | 'loser' }) {
   const axis = props.pair && props.side ? axisText(props.pair, props.side) : '';
+  const mt = props.pair && props.side ? (props.side === 'winner' ? props.pair.winner_maturity : props.pair.loser_maturity) : undefined;
   return (
     <div style={{ marginTop: 6 }}>
       <div style={{ ...S.muted, fontWeight: props.accent ? 600 : undefined }}>{props.label}</div>
       <div style={S.content}>{props.content || GONE}</div>
       <div style={{ ...S.muted, fontFamily: 'ui-monospace, Consolas, monospace' }}>{props.id}</div>
       {axis ? <div style={{ ...S.muted, marginTop: 2, fontSize: 11 }}>{axis}</div> : null}
+      {mt ? <div style={{ ...S.muted, marginTop: 2, fontSize: 11 }}>{'成熟度 · ' + (mt === 'high' ? '高' : mt === 'mid' ? '中' : '低')}</div> : null}
     </div>
   );
 }

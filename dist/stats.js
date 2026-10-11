@@ -1266,7 +1266,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
             // (live.conflictFreeze 覆盖静态 cfg.conflictFreeze.enabled)。此前这里直接读
             // cfg.conflictFreeze.enabled —— 面板开关写的是 live,而部署静态值恒 false,
             // 于是开关已开、settings.yaml 已落 true,本页仍报"矛盾冻结未开启"。
-            return listConflictPairs({ l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true }, { limit: Number(p.limit) || undefined });
+            return listConflictPairs({ l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true, usage: stores.usage, decayHalfLifeDays: effectiveCfg(cfg, live).recall?.decayHalfLifeDays }, { limit: Number(p.limit) || undefined });
         }
         // ── §C 矛盾冻结裁决(task_25):与 memory_resolve_conflict 工具共用同一形状 ──
         // 端点层同样不给"提示文案"出口的例外只有一条:**队列未开启**不是调用错误而是
