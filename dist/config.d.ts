@@ -118,6 +118,13 @@ export interface MemoryConfig {
         /** active 技能闲置多少天后自动归档（0 = 不做闲置归档）。 */
         idleArchiveDays: number;
     };
+    /** wing 存量回填护栏（默认 300 条/120s；想一次多跑点可调大，代价是后台占用更久）。 */
+    backfill: {
+        /** 单次回填处理条数上限。 */
+        maxRecords: number;
+        /** 单次回填墙钟预算(ms)，超时剩留待再次触发。 */
+        timeBudgetMs: number;
+    };
     recall: {
         enabled: boolean;
         /** 每步自动召回注入的 L1 条数。 */
@@ -556,6 +563,13 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxSkillCatalogBytes: Schema<number, number, "defined">;
         excerptChars: Schema<number, number, "defined">;
         idleArchiveDays: Schema<number, number, "defined">;
+    }>>, "plain">;
+    backfill: Schema<Schemastery.ObjectS<NoInfer<{
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
@@ -1100,6 +1114,13 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxSkillCatalogBytes: Schema<number, number, "defined">;
         excerptChars: Schema<number, number, "defined">;
         idleArchiveDays: Schema<number, number, "defined">;
+    }>>, "plain">;
+    backfill: Schema<Schemastery.ObjectS<NoInfer<{
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;

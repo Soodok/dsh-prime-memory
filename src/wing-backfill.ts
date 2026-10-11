@@ -19,8 +19,10 @@ import { parseJsonLogged } from './llm.js';
 import { isWingId, normTags } from './metadata-validators.js';
 import { yieldLoop } from './util/yield.js';
 
-/** 单次任务处理上限(524 条存量一次跑完约为 LLM 成本大头;分批触发,可重复执行)。 */
-const MAX_RECORDS = 300;
+/** 单次任务处理上限默认值(可被 cfg.backfill.maxRecords 覆盖;分批触发,可重复执行)。 */
+const DEFAULT_MAX_RECORDS = 300;
+/** 墙钟预算默认值 ms(可被 cfg.backfill.timeBudgetMs 覆盖):超时剩留待再次触发。 */
+const DEFAULT_TIME_BUDGET_MS = 120_000;
 /** 每块条数(一次 LLM 调用判定的记录数)。 */
 const CHUNK = 20;
 
@@ -66,14 +68,15 @@ export function startWingBackfill(deps: HallBackfillDeps): { started: boolean; r
 
 async function run(deps: HallBackfillDeps): Promise<void> {
   const { ctx, cfg, backend, logger } = deps;
+  const MAX_RECORDS = cfg.backfill?.maxRecords ?? DEFAULT_MAX_RECORDS;
+  const TIME_BUDGET_MS = cfg.backfill?.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
   const halls = normWingEnabled(cfg.hall?.enabled);
   if (halls.length === 0) {
     logger.warn('[memory] wing 回填跳过:wing.enabled 为空(打标功能已关闭)');
     return;
   }
-  // 墙钟预算:超时即停,剩余留待再次触发(任务本身设计为可重复执行)。
+  // 墙钟预算(cfg.backfill.timeBudgetMs,默认 120s):超时即停,剩余留待再次触发(任务本身设计为可重复执行)。
   // 保证后台回填不长时间占据事件循环,设置面板的状态 RPC 始终优先。
-  const TIME_BUDGET_MS = 120_000;
   const startedAt = Date.now();
   const candidates = [...halls, WING_FALLBACK].join(' / ');
   // 未打标集:游标分批扫描轻量投影(不一次性全量反序列化含正文的记录)。

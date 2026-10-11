@@ -203,7 +203,18 @@ export class RuminateController {
                         if (scenes.length === 0)
                             continue;
                         const fstate = this.runner.states?.[family];
+                        // 强制 L3：runPersona 自带触发判定(memoriesSinceL3>=interval 才跑)，反刍是用户
+                        // 显式整理动作，需绕过阈值真跑——置 personaRequestedReason 走“主动请求”分支。
+                        if (fstate)
+                            fstate.personaRequestedReason = '反刍收尾';
                         await runPersona(this.ctx, this.cfg, this.stores.scenes[family], this.stores.persona[family], fstate || undefined, this.logger, family);
+                        // 与 L2 块对称：无论 runPersona 是否因“无变化场景”早退，反刍收尾都清零 L3 计数，
+                        // 否则“待 L3 新记忆”会永远卡在阈值下(本 bug 根因)。runPersona 成功时已自清，这里幂等兜底。
+                        if (fstate) {
+                            fstate.memoriesSinceL3 = 0;
+                            fstate.lastL3At = Date.now();
+                            fstate.personaRequestedReason = undefined;
+                        }
                         this.logger.info(`[memory] 反刍 L3 完成(family=${family})`);
                     }
                     catch (err) {

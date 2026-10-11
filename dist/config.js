@@ -149,6 +149,11 @@ export const memorySchema = Schema.object({
         excerptChars: Schema.number().min(0).max(4000).default(240),
         idleArchiveDays: Schema.number().min(0).max(3650).default(90),
     }),
+    // wing 回填护栏：默认与旧行为一致(300 条 / 120s)，需一次多跑点时调大。
+    backfill: Schema.object({
+        maxRecords: Schema.number().min(1).max(10_000).default(300),
+        timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+    }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),
         maxResults: Schema.number().min(1).max(20).default(5),
