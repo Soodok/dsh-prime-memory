@@ -19,6 +19,7 @@ import type { RpcFn } from '../rpc.js';
 import type { WingOverviewResponse } from '../../../src/contract.js';
 import { ensureThemeStyle } from '../theme.js';
 import { SessionInfoArea } from './SessionInfoArea.js';
+import { SessionRecalledArea } from './SessionRecalledArea.js';
 
 /** 轮盘几何（px）：容器边长 / 中心 / 固定半径。 */
 const SIZE = 196;
@@ -562,6 +563,9 @@ export function WingWheel(props: {
           {props.error || localError}
         </div>
       ) : null}
+
+      {/* 本会话召回（G-live）：普通只读列表，不挂任何常驻槽位语义 */}
+      <SessionRecalledArea rpc={props.rpc} sessionId={props.sessionId} />
 
       {/* 会话信息区 */}
       <SessionInfoArea rpc={props.rpc} sessionId={props.sessionId} />
