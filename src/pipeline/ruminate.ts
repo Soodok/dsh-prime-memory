@@ -221,7 +221,11 @@ export class RuminateController {
     // 原先 setImmediate 连发会把全部会话一次性塞进 runner 队列(无界堆积),
     // LLM e2e 延迟波动时既拖慢 live 任务也让取消语义变钝;链式入队后
     // 进度(done)真实逐会话推进,取消即刻停止入队。
-    this.runner.enqueue(session.sessionId, session.messages, session.mode, {
+    // 传空消息（与 enqueueSessionSlices 同一语义）：让 runTurn 不回灌缓冲，
+    // 由 distillSession 直接处理该会话在内存缓冲里的既有切片。
+    // （旧代码传 session.messages——那是从 pending.json 读出的、已在缓冲中的消息，
+    //   经 runTurn 的 `bucket.push(...messages)` 会重复入桶 → 反刍后待处理计数“还原/变多”。）
+    this.runner.enqueue(session.sessionId, [], session.mode, {
       force: true,
       onTurnDone: (records) => {
         this.totalL1 += records;

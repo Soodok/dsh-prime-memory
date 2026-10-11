@@ -8,7 +8,7 @@ export const S: Record<string, CSSProperties> = {
   section: { padding: '0 4px' },
   heading: { fontSize: 16, fontWeight: 600, margin: '0 0 4px', color: 'var(--dsh-mem-text-1)' },
   intro: { fontSize: 13, color: 'var(--dsh-mem-text-3)', margin: '0 0 12px' },
-  tabbar: { display: 'flex', gap: 2, borderBottom: '1px solid var(--dsh-mem-border)', marginBottom: 14 },
+  tabbar: { display: 'flex', gap: 1, flexWrap: 'nowrap', overflowX: 'auto', borderBottom: '1px solid var(--dsh-mem-border)', marginBottom: 14 },
   error: {
     marginTop: 10,
     fontSize: 13,

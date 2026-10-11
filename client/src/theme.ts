@@ -176,7 +176,7 @@ const COMPONENT_CSS: string[] = [
   '.dsh-mem-pop-empty { padding: 10px; font-size: 13px; color: var(--dsh-mem-text-3); }',
   // ── Tab（下划线式）：active 品牌蓝下划线 + 主文字色 ──
   '.dsh-mem-tab {',
-  '  padding: 6px 12px; font-size: 13px; cursor: pointer; background: none; border: none;',
+  '  padding: 6px 6px; font-size: 13px; cursor: pointer; background: none; border: none; white-space: nowrap;',
   '  color: var(--dsh-mem-text-2); border-bottom: 2px solid transparent; margin-bottom: -1px;',
   '}',
   '.dsh-mem-tab:hover { color: var(--dsh-mem-text-1); }',

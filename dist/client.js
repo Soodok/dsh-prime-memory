@@ -131,7 +131,7 @@ var __defProp = Object.defineProperty;
 		  section: { padding: "0 4px" },
 		  heading: { fontSize: 16, fontWeight: 600, margin: "0 0 4px", color: "var(--dsh-mem-text-1)" },
 		  intro: { fontSize: 13, color: "var(--dsh-mem-text-3)", margin: "0 0 12px" },
-		  tabbar: { display: "flex", gap: 2, borderBottom: "1px solid var(--dsh-mem-border)", marginBottom: 14 },
+		  tabbar: { display: "flex", gap: 1, flexWrap: "nowrap", overflowX: "auto", borderBottom: "1px solid var(--dsh-mem-border)", marginBottom: 14 },
 		  error: {
 		    marginTop: 10,
 		    fontSize: 13,
@@ -418,7 +418,7 @@ var __defProp = Object.defineProperty;
 		  ".dsh-mem-pop-empty { padding: 10px; font-size: 13px; color: var(--dsh-mem-text-3); }",
 		  // ── Tab（下划线式）：active 品牌蓝下划线 + 主文字色 ──
 		  ".dsh-mem-tab {",
-		  "  padding: 6px 12px; font-size: 13px; cursor: pointer; background: none; border: none;",
+		  "  padding: 6px 6px; font-size: 13px; cursor: pointer; background: none; border: none; white-space: nowrap;",
 		  "  color: var(--dsh-mem-text-2); border-bottom: 2px solid transparent; margin-bottom: -1px;",
 		  "}",
 		  ".dsh-mem-tab:hover { color: var(--dsh-mem-text-1); }",

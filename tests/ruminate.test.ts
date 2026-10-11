@@ -51,7 +51,7 @@ function liveHandle(): LiveSettingsHandle {
   return { supported: true, get: () => s, update: async () => {} } as unknown as LiveSettingsHandle;
 }
 
-interface Enqueued { sessionId: string; mode: string }
+interface Enqueued { sessionId: string; mode: string; messageCount: number }
 
 /** 装配一个只记录入队参数的控制器(不触真实抽取/存储)。
  *  桩与真实 runner 的契约一致:任务跑完后调用 onTurnDone——反刍的链式背压
@@ -59,7 +59,7 @@ interface Enqueued { sessionId: string; mode: string }
 function makeController(file: string, seen: Enqueued[]): RuminateController {
   const runner = {
     enqueue: (sessionId: string, _messages: unknown, mode: string, opts?: { onTurnDone?: (n: number) => void }) => {
-      seen.push({ sessionId, mode });
+      seen.push({ sessionId, mode, messageCount: Array.isArray(_messages) ? _messages.length : -1 });
       setImmediate(() => opts?.onTurnDone?.(0));
     },
     states: {},
@@ -94,7 +94,13 @@ describe('ruminate: 控制器读取 pending.json(形状契约护栏)', () => {
     // doEnqueue 用 setImmediate 逐个入队:等两个会话都排到再断言顺序与 mode
     await vi.waitFor(() => expect(seen).toHaveLength(2));
     // mode 必须由桶键推导——统一成 'auto' 会造成混桶 + L1 场景名错档
-    expect(seen).toEqual([{ sessionId: 's1', mode: 'chat' }, { sessionId: 's2', mode: 'work' }]);
+    expect(seen).toEqual([
+      { sessionId: 's1', mode: 'chat', messageCount: 0 },
+      { sessionId: 's2', mode: 'work', messageCount: 0 },
+    ]);
+    // 回归护栏：反刍必须传空消息（让 runTurn 不回灌缓冲，由 distillSession 处理既有切片）。
+    // 传非空会把 pending.json 里已在缓冲中的消息重复入桶 → 反刍后待处理计数“还原/变多”。
+    expect(seen.every((e) => e.messageCount === 0)).toBe(true);
   });
 
   it('手写磁盘形状 JSON(不经 savePending 往返)同样被正确解析', async () => {
@@ -115,7 +121,7 @@ describe('ruminate: 控制器读取 pending.json(形状契约护栏)', () => {
     const st = await makeController(file, seen).start();
 
     expect(st.total).toBe(1);
-    expect(seen).toEqual([{ sessionId: 's1', mode: 'chat' }]);
+    expect(seen).toEqual([{ sessionId: 's1', mode: 'chat', messageCount: 0 }]);
   });
 
   it('三桶皆空时走轻量刷新:运行期间必须如实上报 running/phase/进度', async () => {
