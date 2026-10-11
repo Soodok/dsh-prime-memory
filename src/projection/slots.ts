@@ -1,6 +1,12 @@
 /**
  * 激活槽位服务端投影(memorySlots)。
  *
+ * ⚠️ **当前不接线**（v0.22.2 起）：index.ts 不再调 registerSlotsProjection，侧栏
+ * 因此不展示常驻槽位卡——用户明确否决“把记忆做成可见的常驻清单”（记忆按相关性
+ * 隐式浮现；槽位只作为手动提醒的注入手段存在）。实现与契约测试有意保留：
+ * 若某条宿主线需要它，只需恢复 index.ts 里那一行，勿当成“漏接”去补。
+ * 另：会话召回展示走 client 浮层（SessionRecalledArea），不得经本投影。
+ *
  * 只注册服务端单元,绝不做 client——前端展示由未来 brief-sidebar 消费(下一轮)。
  * 注册经 ctx.inject(['sessionProjections'], …):服务缺席时静默不注册、不抛错
  * (注册表里没有 key 时客户端读 faceOf(key) 恒为 undefined,侧边栏栏位自然隐藏)。

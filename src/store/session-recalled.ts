@@ -8,7 +8,8 @@
  * - **写穿持久化到 `session-recalled.json`**（独立 sidecar，与 recall-dedupe 同款：串行原子写 +
  *   未知版本/损坏只读降级、失败绝不抛进召回热路径）→ 重启/旧会话重开时 `init()` 载回，卡不空。
  *
- * 供只读端点 `dsh-memory/session-recalled` 与 memorySlots 投影消费。
+ * 供只读端点 `dsh-memory/session-recalled` 消费（client 浮层 SessionRecalledArea 展示）。
+ * 不经 memorySlots 投影：那条路会把召回渲染成常驻槽位注册表，与召回的非常驻语义错位。
  */
 import * as path from 'node:path';
 import type { MemoryLogger } from '../types.js';
