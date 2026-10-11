@@ -180,8 +180,8 @@ export async function apply(ctx, config) {
             work: new PersonaStore(dataDir, 'work', logger),
         },
         state: new StateStore(StateStore.pathFor(dataDir), logger),
-        // 会话“活召回集”累积器（G-live）：ownerId → 本会话已注入未压缩的记录 id；纯内存不落盘。
-        recalled: new SessionRecalledStore(),
+        // 会话“活召回集”（G-live）：sessionKey → 本会话已注入未压缩的记录 id；持久化，旧会话重开载回。
+        recalled: new SessionRecalledStore(dataDir, logger),
         // 激活槽位(active slot):独立 slots.json,高频小改不拖累 checkpoint 原子写
         slots: new SlotStore(SlotStore.pathFor(dataDir), logger, {
             maxSlots: config.slots.maxSlots,

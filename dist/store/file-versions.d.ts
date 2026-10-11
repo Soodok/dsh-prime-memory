@@ -21,6 +21,8 @@ export declare const SESSION_MODES_FILE_VERSION = 1;
 export declare const OCCUPANCY_FILE_VERSION = 1;
 /** `recall-dedupe.json`。 */
 export declare const RECALL_DEDUPE_FILE_VERSION = 1;
+/** `session-recalled.json`（G-live 活召回集，持久化以令旧会话重开可读）。 */
+export declare const SESSION_RECALLED_FILE_VERSION = 1;
 /** `pending.json`。 */
 export declare const PENDING_FILE_VERSION = 1;
 /** `reconcile-state.json`。 */

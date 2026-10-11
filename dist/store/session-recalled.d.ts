@@ -1,11 +1,25 @@
+import type { MemoryLogger } from '../types.js';
 export declare class SessionRecalledStore {
+    private readonly logger?;
+    private readonly file;
     private readonly entries;
-    /** 记入本 ownerId 本轮实际注入的记录 id（插入序淘汰最旧，防无界）。 */
-    add(ownerId: string, recordIds: readonly string[]): void;
-    /** 该 ownerId 当前的活召回集（插入序，最新在后）；无则空数组。 */
-    list(ownerId: string): string[];
-    /** 压缩/清空：该会话注入内容已离开上下文，清空其活召回集。 */
-    reset(ownerId: string): void;
-    /** 诊断/测试：当前跟踪的会话数。 */
+    private degraded;
+    private degradedLogged;
+    private lastPersisted;
+    private writeChain;
+    /** 脏检序号：每次真实变更 +1，投影 apply 据此 O(1) 判断是否重建。 */
+    private rev;
+    constructor(dataDir: string, logger?: MemoryLogger | undefined);
+    revision(): number;
+    private init;
+    /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。 */
+    add(sessionKey: string, recordIds: readonly string[]): void;
+    list(sessionKey: string): string[];
+    /** 压缩/清空：注入内容已离开上下文，清该会话活召回集（写穿）。 */
+    reset(sessionKey: string): void;
     size(): number;
+    /** 等待在途持久化写完成（测试/停机）。 */
+    flush(): Promise<void>;
+    private persist;
+    private serialize;
 }
