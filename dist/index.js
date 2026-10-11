@@ -13,6 +13,7 @@ import { memorySchema, resolveDataDir } from './config.js';
 import { registerBenchControl } from './bench-control.js';
 import { registerCapture } from './hooks/capture.js';
 import { registerRecall } from './hooks/recall.js';
+import { SessionRecalledStore } from './store/session-recalled.js';
 import { MemoryRunner } from './pipeline/runner.js';
 import { RebuildController } from './pipeline/rebuild.js';
 import { RuminateController } from './pipeline/ruminate.js';
@@ -179,6 +180,8 @@ export async function apply(ctx, config) {
             work: new PersonaStore(dataDir, 'work', logger),
         },
         state: new StateStore(StateStore.pathFor(dataDir), logger),
+        // 会话“活召回集”累积器（G-live）：ownerId → 本会话已注入未压缩的记录 id；纯内存不落盘。
+        recalled: new SessionRecalledStore(),
         // 激活槽位(active slot):独立 slots.json,高频小改不拖累 checkpoint 原子写
         slots: new SlotStore(SlotStore.pathFor(dataDir), logger, {
             maxSlots: config.slots.maxSlots,

@@ -20,6 +20,7 @@ import type { MemoryConfig } from '../config.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { L1Store } from '../store/l1.js';
 import type { PersonaStore } from '../store/persona.js';
+import type { SessionRecalledStore } from '../store/session-recalled.js';
 import type { SceneStore } from '../store/scenes.js';
 import type { SessionModeStore } from '../store/session-modes.js';
 import type { RecallUsageStore } from '../store/recall-usage.js';
@@ -90,6 +91,7 @@ export declare function registerRecall(ctx: Context, cfg: MemoryConfig, stores: 
     l1: L1Store;
     scenes: Record<'chat' | 'work', SceneStore>;
     persona: Record<'chat' | 'work', PersonaStore>;
+    recalled?: SessionRecalledStore;
 }, logger: MemoryLogger, live: LiveSettingsHandle, modes: SessionModeStore, dataDir: string, 
 /** 召回使用统计(可选;未装配 = 零成本旁路):进 topN(注入)才算 used。 */
 usage?: RecallUsageStore): RecallHooks;

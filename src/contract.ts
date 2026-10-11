@@ -1438,6 +1438,16 @@ export interface SkillsActionResponse {
   notice: string;
 }
 
+/** dsh-memory/session-recalled (G-live)：本会话已注入、未被压缩覆盖的召回集。 */
+export interface SessionRecalledRequest {
+  sessionId: string;
+}
+export interface SessionRecalledResponse {
+  sessionId: string;
+  /** 按召回插入序（旧→新）；复用 UiRecord（含 maturity/usageScenario）。 */
+  records: UiRecord[];
+}
+
 export interface DshMemoryRequestMap {
   'dsh-memory/stats': Record<string, never>;
   'dsh-memory/token-cost': TokenCostRequest;
@@ -1490,6 +1500,7 @@ export interface DshMemoryRequestMap {
   'dsh-memory/memory-sources-retire': MemorySourcesRetireRequest;
   'dsh-memory/memport-scan': MemportScanRequest;
   'dsh-memory/skills-list': Record<string, never>;
+  'dsh-memory/session-recalled': SessionRecalledRequest;
   'dsh-memory/skills-action': SkillsActionRequest;
 }
 
@@ -1545,6 +1556,7 @@ export interface DshMemoryResponseMap {
   'dsh-memory/memory-sources-retire': MemorySourcesRetireResponse;
   'dsh-memory/memport-scan': MemportScanResponse;
   'dsh-memory/skills-list': SkillsListResponse;
+  'dsh-memory/session-recalled': SessionRecalledResponse;
   'dsh-memory/skills-action': SkillsActionResponse;
 }
 

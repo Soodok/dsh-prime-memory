@@ -225,6 +225,7 @@ usage) {
     ctx.on('agent/created', async (payload) => {
         if (payload.source === 'compact' || payload.source === 'clear') {
             dedupe.reset(payload.agent.id);
+            stores.recalled?.reset(resolveModeOwner(payload.agent.id, payload.agent));
             const led = ledgerFor(payload.agent.id);
             resetForCompaction(led);
             occupancyStore.save(payload.agent.id, led); // stock 归零 ⇒ 流水条目删除
@@ -457,6 +458,8 @@ usage) {
                 });
                 // 使用统计:候选=scoped(尝试),进 topN(注入)=used
                 usage?.recordAttempt(scoped.map((h) => h.id), fresh.slice(0, lines.length).map((h) => h.id));
+                // G-live:按 ownerId(与档位/pill 同源，非 agent.id)记入本会话“活召回集”，供侧栏卡读取；压缩时 reset。
+                stores.recalled?.add(ownerId, fresh.slice(0, lines.length).map((h) => h.id));
                 // 入账在成功构造注入消息之后、返回 enter 之前——任何前置抛错路径账目零扰动
                 const led = ledgerFor(payload.agent.id);
                 recordRecallInjection(led, text.length);

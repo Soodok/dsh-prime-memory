@@ -100,6 +100,7 @@ export const MEMORY_ENDPOINTS = [
     'dsh-memory/memory-sources-retire',
     'dsh-memory/memport-scan',
     'dsh-memory/skills-list',
+    'dsh-memory/session-recalled',
     'dsh-memory/skills-action',
 ];
 /** HTTP 路由前缀(客户端 fetch `/dsh-memory/rpc/<短方法名>`)。 */
@@ -399,6 +400,21 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 hallIncludeGeneral: bounds.includeGeneral,
             };
             return v;
+        }
+        case 'dsh-memory/session-recalled': {
+            // G-live：返回本会话（按 ownerId）已注入、尚未被压缩覆盖的召回记忆。
+            const p = (payload ?? {});
+            const sessionId = expectSessionId(p.sessionId);
+            const ids = stores.recalled?.list(sessionId) ?? [];
+            if (ids.length === 0)
+                return { sessionId, records: [] };
+            const halfLife = effectiveCfg(cfg, live).recall?.decayHalfLifeDays ?? 0;
+            const byId = new Map(stores.l1.getByIds(ids).map((r) => [r.id, r]));
+            const records = ids
+                .map((id) => byId.get(id))
+                .filter((r) => r !== undefined)
+                .map((r) => hitToUiRecord(r, { agingWeight: agingWeightOf(r.updatedAt, halfLife), usage: stores.usage?.get(r.id) ?? null }));
+            return { sessionId, records };
         }
         case 'dsh-memory/session-mode-set': {
             if (!modes)

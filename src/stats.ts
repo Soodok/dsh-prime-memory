@@ -55,6 +55,7 @@ import { startWingBackfill } from './wing-backfill.js';
 import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
 import { computeMaturity } from './util/maturity.js';
+import type { SessionRecalledStore } from './store/session-recalled.js';
 
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = (require('../package.json') as { version: string }).version;
@@ -130,6 +131,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/memory-sources-retire',
   'dsh-memory/memport-scan',
   'dsh-memory/skills-list',
+  'dsh-memory/session-recalled',
   'dsh-memory/skills-action',
 ];
 
@@ -538,6 +540,8 @@ export interface EndpointDeps {
     /** 记忆后端(后台边界);未装配时回退为包 l1 的进程内实现。 */
     backend?: MemoryBackend;
     graph?: GraphStore;
+    /** 会话“活召回集”累积器（G-live）；缺省 = 端点返回空。 */
+    recalled?: SessionRecalledStore;
   };
   status?: MemoryStatusSource;
   live?: LiveSettingsHandle;
@@ -610,6 +614,21 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         hallIncludeGeneral: bounds.includeGeneral,
       };
       return v;
+    }
+
+    case 'dsh-memory/session-recalled': {
+      // G-live：返回本会话（按 ownerId）已注入、尚未被压缩覆盖的召回记忆。
+      const p = (payload ?? {}) as { sessionId?: string };
+      const sessionId = expectSessionId(p.sessionId);
+      const ids = stores.recalled?.list(sessionId) ?? [];
+      if (ids.length === 0) return { sessionId, records: [] };
+      const halfLife = effectiveCfg(cfg, live).recall?.decayHalfLifeDays ?? 0;
+      const byId = new Map(stores.l1.getByIds(ids).map((r) => [r.id, r] as const));
+      const records = ids
+        .map((id) => byId.get(id))
+        .filter((r): r is NonNullable<typeof r> => r !== undefined)
+        .map((r) => hitToUiRecord(r, { agingWeight: agingWeightOf(r.updatedAt, halfLife), usage: stores.usage?.get(r.id) ?? null }));
+      return { sessionId, records };
     }
 
     case 'dsh-memory/session-mode-set': {

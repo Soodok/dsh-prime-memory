@@ -18,6 +18,7 @@ import type { EmbeddingManager } from './store/embedding-source.js';
 import type { StateStore } from './store/state.js';
 import { type MemoryFamily, type MemoryLogger } from './types.js';
 import { type MemoryBackend } from './store/memory-backend.js';
+import type { SessionRecalledStore } from './store/session-recalled.js';
 export declare const PLUGIN_VERSION: string;
 /** 运行态来源(index.ts 注入):避免 stats 撒谎字段。 */
 export interface MemoryStatusSource {
@@ -130,6 +131,8 @@ export interface EndpointDeps {
         /** 记忆后端(后台边界);未装配时回退为包 l1 的进程内实现。 */
         backend?: MemoryBackend;
         graph?: GraphStore;
+        /** 会话“活召回集”累积器（G-live）；缺省 = 端点返回空。 */
+        recalled?: SessionRecalledStore;
     };
     status?: MemoryStatusSource;
     live?: LiveSettingsHandle;
