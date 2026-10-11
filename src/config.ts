@@ -101,6 +101,27 @@ export interface MemoryConfig {
     /** 单源扫描记录上限(0 = 不限;仍受总护栏)。 */
     scanMaxRecords: number;
   };
+  /** 轨2 技能结晶(程序性记忆)。**默认关**：allowPromote 也默认关（上线先只计数不晋升，
+   *  distinct-session 达阈后才开）；injectionTier 不用 union，消费侧归一。 */
+  skills: {
+    enabled: boolean;
+    /** 开且 enabled 时，每轮 pre-step 才注入 active 技能。 */
+    inject: boolean;
+    /** candidate→active 自动晋升总闸（默认关，只计数）。 */
+    allowPromote: boolean;
+    /** 晋升需 distinct session 数。 */
+    minSessions: number;
+    /** 晋升需证据条数下限（与 minSessions 同时满足）。 */
+    minEvidence: number;
+    /** 每轮技能注入字节预算（独立于召回 2000 预算）。 */
+    maxPerTurnBytes: number;
+    /** 技能目录常驻字节预算。 */
+    maxSkillCatalogBytes: number;
+    /** excerpt 档每技能正文截断。 */
+    excerptChars: number;
+    /** active 技能闲置多少天后自动归档（0 = 不做闲置归档）。 */
+    idleArchiveDays: number;
+  };
   recall: {
     enabled: boolean;
     /** 每步自动召回注入的 L1 条数。 */
@@ -343,6 +364,18 @@ export const memorySchema = Schema.object({
     enabled: Schema.boolean().default(false),
     // 单源扫描上限（防极端大包在事件循环里阻塞 RPC；scan 是手动触发，仍留护栏）。
     scanMaxRecords: Schema.number().min(0).max(20_000).default(5000),
+  }),
+  // 轨2 技能结晶：默认关 + allowPromote 关（先只计数不晋升）。
+  skills: Schema.object({
+    enabled: Schema.boolean().default(false),
+    inject: Schema.boolean().default(true),
+    allowPromote: Schema.boolean().default(false),
+    minSessions: Schema.number().min(1).max(100).default(3),
+    minEvidence: Schema.number().min(1).max(1000).default(5),
+    maxPerTurnBytes: Schema.number().min(0).max(8192).default(600),
+    maxSkillCatalogBytes: Schema.number().min(0).max(8192).default(2048),
+    excerptChars: Schema.number().min(0).max(4000).default(240),
+    idleArchiveDays: Schema.number().min(0).max(3650).default(90),
   }),
   recall: Schema.object({
     enabled: Schema.boolean().default(true),
