@@ -125,6 +125,7 @@ const ALWAYS_ON: MemoryLiveSettings = {
   embedRemoteDimensions: 0,
   memoryMutate: false,
   conflictFreeze: false,
+  skillsEnabled: false,
   toolRoom: true,
   toolGraph: true,
   toolRuminate: true,
@@ -367,6 +368,8 @@ function resolveSettings(value: unknown): MemoryLiveSettings {
     memoryMutate: v.memoryMutate === true,
     // §C 人工冲突裁决:严格 === true(默认关,冻结消耗注意力)
     conflictFreeze: v.conflictFreeze === true,
+    // 轨2 技能结晶:严格 === true(默认关,新功能默认关)
+    skillsEnabled: v.skillsEnabled === true,
     // 工具分组封印:严格 !== false(缺省/异常值 = 未封印,工具照常注册)
     toolRoom: v.toolRoom !== false,
     toolGraph: v.toolGraph !== false,

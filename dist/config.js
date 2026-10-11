@@ -69,6 +69,8 @@ export function liveSettingsSchema() {
         memoryMutate: Schema.boolean().default(false),
         // §C 人工冲突裁决总开关:默认 false(冻结消耗注意力,不可默认全开)
         conflictFreeze: Schema.boolean().default(false),
+        // 轨2 技能结晶总开关(看板可拨):默认 false。开=注册 memory_skill_* 工具 + 注入 active 技能 + skills-* 端点可用。
+        skillsEnabled: Schema.boolean().default(false),
         // 工具分组封印(v0.21.0):false = 该组工具不注册,从模型工具列表消失。
         // 核心读(memory_search/read_scene/receipts/conversation_search)与槽位三件不受控。
         toolRoom: Schema.boolean().default(true),

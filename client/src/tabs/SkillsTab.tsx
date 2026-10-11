@@ -54,7 +54,7 @@ export function SkillsTab(props: { rpc: RpcFn }) {
   };
 
   if (data && !data.enabled) {
-    return <p style={S.intro}>技能结晶（程序性记忆）未启用。在设置开启 <code>skills.enabled</code> 后，重复工作流会固化为技能候选，在此审阅晋升。</p>;
+    return <p style={S.intro}>技能结晶（程序性记忆）未启用。到「概览」页开启「技能」开关（或部署配置 skills.enabled），重复工作流会固化为技能候选，在此审阅晋升。</p>;
   }
 
   const mutateHint = data && !data.memoryMutate ? <div style={S.hint}>提示：晋升/归档/固定需在面板开启「高权限模式」。</div> : null;

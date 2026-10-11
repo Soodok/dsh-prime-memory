@@ -350,6 +350,7 @@ export declare function liveSettingsSchema(): Schema<NoInfer<Schemastery.ObjectS
     embedRemoteDimensions: Schema<number, number, "defined">;
     memoryMutate: Schema<boolean, boolean, "defined">;
     conflictFreeze: Schema<boolean, boolean, "defined">;
+    skillsEnabled: Schema<boolean, boolean, "defined">;
     toolRoom: Schema<boolean, boolean, "defined">;
     toolGraph: Schema<boolean, boolean, "defined">;
     toolRuminate: Schema<boolean, boolean, "defined">;
@@ -452,6 +453,7 @@ export declare function liveSettingsSchema(): Schema<NoInfer<Schemastery.ObjectS
     embedRemoteDimensions: Schema<number, number, "defined">;
     memoryMutate: Schema<boolean, boolean, "defined">;
     conflictFreeze: Schema<boolean, boolean, "defined">;
+    skillsEnabled: Schema<boolean, boolean, "defined">;
     toolRoom: Schema<boolean, boolean, "defined">;
     toolGraph: Schema<boolean, boolean, "defined">;
     toolRuminate: Schema<boolean, boolean, "defined">;
@@ -892,6 +894,7 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         embedRemoteDimensions: Schema<number, number, "defined">;
         memoryMutate: Schema<boolean, boolean, "defined">;
         conflictFreeze: Schema<boolean, boolean, "defined">;
+        skillsEnabled: Schema<boolean, boolean, "defined">;
         toolRoom: Schema<boolean, boolean, "defined">;
         toolGraph: Schema<boolean, boolean, "defined">;
         toolRuminate: Schema<boolean, boolean, "defined">;
@@ -994,6 +997,7 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         embedRemoteDimensions: Schema<number, number, "defined">;
         memoryMutate: Schema<boolean, boolean, "defined">;
         conflictFreeze: Schema<boolean, boolean, "defined">;
+        skillsEnabled: Schema<boolean, boolean, "defined">;
         toolRoom: Schema<boolean, boolean, "defined">;
         toolGraph: Schema<boolean, boolean, "defined">;
         toolRuminate: Schema<boolean, boolean, "defined">;
@@ -1434,6 +1438,7 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         embedRemoteDimensions: Schema<number, number, "defined">;
         memoryMutate: Schema<boolean, boolean, "defined">;
         conflictFreeze: Schema<boolean, boolean, "defined">;
+        skillsEnabled: Schema<boolean, boolean, "defined">;
         toolRoom: Schema<boolean, boolean, "defined">;
         toolGraph: Schema<boolean, boolean, "defined">;
         toolRuminate: Schema<boolean, boolean, "defined">;
@@ -1536,6 +1541,7 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         embedRemoteDimensions: Schema<number, number, "defined">;
         memoryMutate: Schema<boolean, boolean, "defined">;
         conflictFreeze: Schema<boolean, boolean, "defined">;
+        skillsEnabled: Schema<boolean, boolean, "defined">;
         toolRoom: Schema<boolean, boolean, "defined">;
         toolGraph: Schema<boolean, boolean, "defined">;
         toolRuminate: Schema<boolean, boolean, "defined">;

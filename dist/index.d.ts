@@ -449,6 +449,7 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         embedRemoteDimensions: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         memoryMutate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         conflictFreeze: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        skillsEnabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRoom: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolGraph: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRuminate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
@@ -551,6 +552,7 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         embedRemoteDimensions: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         memoryMutate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         conflictFreeze: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        skillsEnabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRoom: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolGraph: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRuminate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
@@ -991,6 +993,7 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         embedRemoteDimensions: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         memoryMutate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         conflictFreeze: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        skillsEnabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRoom: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolGraph: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRuminate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
@@ -1093,6 +1096,7 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         embedRemoteDimensions: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         memoryMutate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         conflictFreeze: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        skillsEnabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRoom: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolGraph: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         toolRuminate: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;

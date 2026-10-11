@@ -1047,11 +1047,7 @@ var __defProp = Object.defineProperty;
 		    }).catch((e) => setError(String(e?.message || e))).finally(() => setBusy(false));
 		  };
 		  if (data && !data.enabled) {
-		    return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { style: S.intro, children: [
-		      "技能结晶（程序性记忆）未启用。在设置开启 ",
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: "skills.enabled" }),
-		      " 后，重复工作流会固化为技能候选，在此审阅晋升。"
-		    ] });
+		    return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { style: S.intro, children: "技能结晶（程序性记忆）未启用。到「概览」页开启「技能」开关（或部署配置 skills.enabled），重复工作流会固化为技能候选，在此审阅晋升。" });
 		  }
 		  const mutateHint = data && !data.memoryMutate ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { style: S.hint, children: "提示：晋升/归档/固定需在面板开启「高权限模式」。" }) : null;
 		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { children: [
@@ -3403,6 +3399,7 @@ var __defProp = Object.defineProperty;
 		  const toolRuminate = settingsData && settingsData.settings ? settingsData.settings.toolRuminate !== false : true;
 		  const toolConflict = settingsData && settingsData.settings ? settingsData.settings.toolConflict !== false : true;
 		  const toolMutate = settingsData && settingsData.settings ? settingsData.settings.toolMutate !== false : true;
+		  const skillsEnabled = settingsData && settingsData.settings ? settingsData.settings.skillsEnabled === true : false;
 		  return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { children: [
 		    settingsData && settingsData.supported === false ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { style: S.hint, children: "settings 服务不可用，记忆模式开关未启用（记忆保持全开）。" }) : settingsData ? /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { style: S.switchPanel, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { style: S.panelLabel, children: "记忆模式" }),
@@ -3462,6 +3459,18 @@ var __defProp = Object.defineProperty;
 		          checked: mutate,
 		          onChange: (v) => {
 		            toggle("memoryMutate", v);
+		          }
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { style: S.panelLabel, children: "技能结晶" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+		        SwitchRow,
+		        {
+		          label: "技能（程序性记忆）",
+		          desc: skillsEnabled ? "已开启：重复工作方法会结晶为技能候选，注入活跃技能，可在「技能」页审阅晋升" : "默认关闭；开启后注册 memory_skill_* 工具与注入（新装工具需重启后完全生效）",
+		          checked: skillsEnabled,
+		          onChange: (v) => {
+		            toggle("skillsEnabled", v);
 		          }
 		        }
 		      ),

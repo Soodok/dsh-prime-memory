@@ -385,7 +385,7 @@ export async function apply(ctx, config) {
     const slotRecall = registerSlotRecall(ctx, config, stores.slots, logger, live);
     // 轨2 技能：工具面与常驻注入（均 cfg.skills.enabled 默认关时自 no-op，零表面积）。
     registerSkillTools(ctx, config, skillStore, logger, live);
-    registerSkillRecall(ctx, config, skillStore, logger);
+    registerSkillRecall(ctx, config, skillStore, logger, live);
     registerSlotsProjection(ctx, stores.slots, stores.l1);
     void slotRecall;
     registerMemoryRpc(ctx, config, stores, logger, {

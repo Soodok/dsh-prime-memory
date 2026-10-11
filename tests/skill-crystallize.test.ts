@@ -66,6 +66,8 @@ describe('renderSkill 三档', () => {
 describe('registerSkillRecall.buildInjection 门控与预算', () => {
   const ctxStub = { on: () => {} } as unknown as Context;
   const logger = { warn: () => {}, info: () => {}, error: () => {} } as never;
+  // registerSkillRecall 现需 live（第 5 参）；skillsEnabled=false 使 on() 仅由 cfg.skills.enabled 决定。
+  const liveStub = { get: () => ({ skillsEnabled: false }) } as unknown as Parameters<typeof registerSkillRecall>[4];
   const mkCfg = (skills: Partial<MemoryConfig['skills']>): MemoryConfig =>
     ({ skills: { enabled: false, inject: true, allowPromote: false, minSessions: 3, minEvidence: 5, maxPerTurnBytes: 600, maxSkillCatalogBytes: 2048, excerptChars: 240, idleArchiveDays: 90, ...skills } }) as unknown as MemoryConfig;
 
@@ -73,7 +75,7 @@ describe('registerSkillRecall.buildInjection 门控与预算', () => {
     const store = new SkillStore(await tmp());
     await store.init();
     await store.create({ title: 't', body: 'b', status: 'active' });
-    const ctrl = registerSkillRecall(ctxStub, mkCfg({ enabled: false }), store, logger);
+    const ctrl = registerSkillRecall(ctxStub, mkCfg({ enabled: false }), store, logger, liveStub);
     expect(ctrl.buildInjection()).toBeNull();
   });
 
@@ -83,7 +85,7 @@ describe('registerSkillRecall.buildInjection 门控与预算', () => {
     await store.init();
     await store.create({ title: 'Alpha', body: 'aaa', status: 'active' });
     await store.create({ title: 'Beta', body: 'bbb', status: 'candidate' });
-    const ctrl = registerSkillRecall(ctxStub, mkCfg({ enabled: true }), store, logger);
+    const ctrl = registerSkillRecall(ctxStub, mkCfg({ enabled: true }), store, logger, liveStub);
     const text = ctrl.buildInjection();
     expect(text).toContain('<system-reminder>');
     expect(text).toContain('Alpha');
@@ -94,7 +96,7 @@ describe('registerSkillRecall.buildInjection 门控与预算', () => {
     const store = new SkillStore(await tmp());
     await store.init();
     for (let i = 0; i < 30; i++) await store.create({ title: 'long-title-' + i, body: 'x'.repeat(80), status: 'active', injectionTier: 'full' });
-    const ctrl = registerSkillRecall(ctxStub, mkCfg({ enabled: true, maxPerTurnBytes: 200 }), store, logger);
+    const ctrl = registerSkillRecall(ctxStub, mkCfg({ enabled: true, maxPerTurnBytes: 200 }), store, logger, liveStub);
     const text = ctrl.buildInjection();
     expect(text).toContain('因预算未显示');
   });

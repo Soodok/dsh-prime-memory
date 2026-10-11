@@ -15,6 +15,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { MemoryConfig } from '../config.js';
+import type { LiveSettingsHandle } from '../settings.js';
 import type { Skill, SkillStore } from '../store/skill-store.js';
 import type { MemoryLogger } from '../types.js';
 
@@ -47,9 +48,12 @@ export function registerSkillRecall(
   cfg: MemoryConfig,
   skills: SkillStore,
   logger: MemoryLogger,
+  live: LiveSettingsHandle,
 ): SkillRecallController {
+  // 生效开关：部署 cfg.skills.enabled 或看板 live.skillsEnabled 任一开。
+  const on = (): boolean => cfg.skills.enabled === true || live.get().skillsEnabled === true;
   const buildInjection = (): string | null => {
-    if (!cfg.skills.enabled || !cfg.skills.inject) return null;
+    if (!on() || !cfg.skills.inject) return null;
     const active = skills.listActive();
     if (active.length === 0) return null;
     const budget = cfg.skills.maxPerTurnBytes;
@@ -74,7 +78,7 @@ export function registerSkillRecall(
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next();
     if (decision.kind === 'reject' || (payload.signal && payload.signal.aborted)) return decision;
-    if (!cfg.skills.enabled || !cfg.skills.inject) return decision;
+    if (!on() || !cfg.skills.inject) return decision;
     try {
       await skills.archiveDue(Date.now(), cfg.skills.idleArchiveDays);
       const text = buildInjection();

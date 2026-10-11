@@ -116,6 +116,9 @@ export interface MemoryLiveSettings {
   /** §C 人工冲突裁决总开关:true = 去重判定"两边都像对的"时冻结冲突对,停放到待人工裁决区;
    *  false = 默认,冲突按 LLM 的 winner/loser 自动了结。运行时覆盖静态 config 的 conflictFreeze.enabled。 */
   conflictFreeze: boolean;
+  /** 轨2 技能结晶总开关（看板可拨）:true = 注册 memory_skill_* 工具、注入 active 技能、skills-* 端点可用。
+   *  默认 false（新功能默认关）；与部署 cfg.skills.enabled 取或（任一开则生效）。 */
+  skillsEnabled: boolean;
 }
 
 /** 召回停用原因(session-stats recall.enabled=false 时带出;短路序第一个为假的因子)。 */

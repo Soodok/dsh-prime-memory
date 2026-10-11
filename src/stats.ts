@@ -817,7 +817,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
 
     // ── 轨2 技能（SkillsTab）：列表 + 人工审阅动作（晋升/归档/pin/改档）。整面默认关（cfg.skills.enabled）。
     case 'dsh-memory/skills-list': {
-      const enabled = cfg.skills?.enabled === true;
+      const enabled = cfg.skills?.enabled === true || live?.get().skillsEnabled === true;
       const v: SkillsListResponse = {
         enabled,
         allowPromote: cfg.skills?.allowPromote === true,
@@ -839,7 +839,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
     }
 
     case 'dsh-memory/skills-action': {
-      if (cfg.skills?.enabled !== true) throw new Error('技能功能未启用（config skills.enabled）。');
+      if (!(cfg.skills?.enabled === true || live?.get().skillsEnabled === true)) throw new Error('技能功能未启用（在概览页开启「技能」开关，或 config skills.enabled）。');
       if (!skillStore) throw new Error('技能存储未装配。');
       if (!live?.get().memoryMutate) throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能管理技能。');
       const p = (payload ?? {}) as { id?: string; action?: string; tier?: string; reason?: string };
@@ -1181,6 +1181,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           embedRemoteBaseURL: '', embedRemoteApiKey: '', embedRemoteModel: '', embedRemoteDimensions: 0,
           memoryMutate: false,
           conflictFreeze: live?.get()?.conflictFreeze === true,
+          skillsEnabled: live?.get()?.skillsEnabled === true,
         }),
         // 静态部署上限(cordis.patch.yml):运行时开关与它取 AND
         ceilings: { capture: cfg.capture.enabled, distill: cfg.extract.enabled, recall: cfg.recall.enabled },
@@ -1219,7 +1220,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const patch = (payload ?? {}) as Record<string, unknown>;
       const clean: Record<string, boolean | string | number | DistillChainEntry[] | { extract: number; dedup: number; l2: number; l3: number; graph: number } | { l1: DistillChainEntry[]; l2: DistillChainEntry[]; l3: DistillChainEntry[] }> = {};
       // 布尔开关组:memoryMutate(高权限写删门)与主开关同列;conflictFreeze(§C 人工冲突裁决)
-      for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate'] as const) {
+      for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'skillsEnabled', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate'] as const) {
         if (typeof patch[key] === 'boolean') clean[key] = patch[key] as boolean;
       }
       // 运行时统一路由链:结构校验后整体写入(空数组 = 回到跟随部署配置)

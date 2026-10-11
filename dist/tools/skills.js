@@ -1,8 +1,8 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 const MUTATE_OFF_NOTICE = '记忆写删未开放：请在记忆库面板开启「高权限模式」后，模型才能改动技能。';
 export function registerSkillTools(ctx, cfg, skills, logger, live) {
-    if (!cfg.skills.enabled)
-        return; // 默认关：一个工具都不注册
+    if (!(cfg.skills.enabled === true || live.get().skillsEnabled === true))
+        return; // 默认关：部署 cfg 或看板 live 任一开才注册
     // memory_skill_list：列全部技能摘要（含 status/sessionCount，candidate 也列出供审阅）。
     ctx.tools.register(defineTool({
         name: 'memory_skill_list',

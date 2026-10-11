@@ -14,6 +14,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { MemoryConfig } from '../config.js';
+import type { LiveSettingsHandle } from '../settings.js';
 import type { Skill, SkillStore } from '../store/skill-store.js';
 import type { MemoryLogger } from '../types.js';
 /** 按档位现场组词：full=标题+正文+步骤；excerpt=标题+正文截断；hint=仅标题+读取指引。 */
@@ -21,4 +22,4 @@ export declare function renderSkill(s: Skill, excerptChars: number): string;
 export interface SkillRecallController {
     buildInjection(): string | null;
 }
-export declare function registerSkillRecall(ctx: Context, cfg: MemoryConfig, skills: SkillStore, logger: MemoryLogger): SkillRecallController;
+export declare function registerSkillRecall(ctx: Context, cfg: MemoryConfig, skills: SkillStore, logger: MemoryLogger, live: LiveSettingsHandle): SkillRecallController;

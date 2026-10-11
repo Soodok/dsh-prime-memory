@@ -21,7 +21,7 @@ export function registerSkillTools(
   logger: MemoryLogger,
   live: LiveSettingsHandle,
 ): void {
-  if (!cfg.skills.enabled) return; // 默认关：一个工具都不注册
+  if (!(cfg.skills.enabled === true || live.get().skillsEnabled === true)) return; // 默认关：部署 cfg 或看板 live 任一开才注册
 
   // memory_skill_list：列全部技能摘要（含 status/sessionCount，candidate 也列出供审阅）。
   ctx.tools.register(

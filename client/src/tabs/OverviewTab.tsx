@@ -12,7 +12,7 @@ import { RebuildPanel } from './RebuildPanel.js';
 import { RuminatePanel } from './RuminatePanel.js';
 
 /** 可通过开关切换的 settings 键。 */
-type ToggleKey = 'enabled' | 'capture' | 'distill' | 'recall' | 'memoryMutate' | 'conflictFreeze' | 'toolRoom' | 'toolGraph' | 'toolRuminate' | 'toolConflict' | 'toolMutate';
+type ToggleKey = 'enabled' | 'capture' | 'distill' | 'recall' | 'memoryMutate' | 'conflictFreeze' | 'skillsEnabled' | 'toolRoom' | 'toolGraph' | 'toolRuminate' | 'toolConflict' | 'toolMutate';
 
 export function OverviewTab(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
@@ -110,6 +110,7 @@ export function OverviewTab(props: { rpc: RpcFn }) {
   const toolRuminate = settingsData && settingsData.settings ? settingsData.settings.toolRuminate !== false : true;
   const toolConflict = settingsData && settingsData.settings ? settingsData.settings.toolConflict !== false : true;
   const toolMutate = settingsData && settingsData.settings ? settingsData.settings.toolMutate !== false : true;
+  const skillsEnabled = settingsData && settingsData.settings ? settingsData.settings.skillsEnabled === true : false;
 
   return (
     <div>
@@ -166,6 +167,16 @@ export function OverviewTab(props: { rpc: RpcFn }) {
             checked={mutate}
             onChange={(v) => {
               toggle('memoryMutate', v);
+            }}
+          />
+          {/* 分组：技能结晶（轨2）——看板可拨总开关，控工具注册/注入/端点；工具注册变更需重启生效 */}
+          <div style={S.panelLabel}>技能结晶</div>
+          <SwitchRow
+            label="技能（程序性记忆）"
+            desc={skillsEnabled ? '已开启：重复工作方法会结晶为技能候选，注入活跃技能，可在「技能」页审阅晋升' : '默认关闭；开启后注册 memory_skill_* 工具与注入（新装工具需重启后完全生效）'}
+            checked={skillsEnabled}
+            onChange={(v) => {
+              toggle('skillsEnabled', v);
             }}
           />
           {/* 分组：工具封印（v0.21.0）——false = 该组工具不注册,从模型工具列表消失;

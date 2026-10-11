@@ -17,9 +17,11 @@ export function renderSkill(s, excerptChars) {
     const body = s.body.length > excerptChars ? s.body.slice(0, excerptChars) + '…' : s.body;
     return `[技能·${s.title}] ${body}`;
 }
-export function registerSkillRecall(ctx, cfg, skills, logger) {
+export function registerSkillRecall(ctx, cfg, skills, logger, live) {
+    // 生效开关：部署 cfg.skills.enabled 或看板 live.skillsEnabled 任一开。
+    const on = () => cfg.skills.enabled === true || live.get().skillsEnabled === true;
     const buildInjection = () => {
-        if (!cfg.skills.enabled || !cfg.skills.inject)
+        if (!on() || !cfg.skills.inject)
             return null;
         const active = skills.listActive();
         if (active.length === 0)
@@ -48,7 +50,7 @@ export function registerSkillRecall(ctx, cfg, skills, logger) {
         const decision = await next();
         if (decision.kind === 'reject' || (payload.signal && payload.signal.aborted))
             return decision;
-        if (!cfg.skills.enabled || !cfg.skills.inject)
+        if (!on() || !cfg.skills.inject)
             return decision;
         try {
             await skills.archiveDue(Date.now(), cfg.skills.idleArchiveDays);
