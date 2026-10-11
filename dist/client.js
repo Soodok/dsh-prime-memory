@@ -4052,6 +4052,21 @@ var __defProp = Object.defineProperty;
 		                }
 		              ) : null,
 		              /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("span", { style: S.muted, children: "优先级 " + m.priority }),
+		              m.maturity ? /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+		                "span",
+		                {
+		                  title: "成熟度（优先级 + 被用次数 + 新鲜度合成）：" + m.maturity,
+		                  style: {
+		                    fontSize: 11,
+		                    padding: "1px 6px",
+		                    borderRadius: 999,
+		                    whiteSpace: "nowrap",
+		                    border: "1px solid var(--dsh-mem-border)",
+		                    color: "var(--dsh-mem-text-2)"
+		                  },
+		                  children: m.maturity === "high" ? "成熟·高" : m.maturity === "mid" ? "成熟·中" : "成熟·低"
+		                }
+		              ) : null,
 		              m.agingWeight != null ? /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
 		                "span",
 		                {

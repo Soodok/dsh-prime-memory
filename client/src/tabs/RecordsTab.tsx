@@ -529,6 +529,21 @@ export function RecordsTab(props: { rpc: RpcFn }) {
                   </span>
                 ) : null}
                 <span style={S.muted}>{'优先级 ' + m.priority}</span>
+                {m.maturity ? (
+                  <span
+                    title={'成熟度（优先级 + 被用次数 + 新鲜度合成）：' + m.maturity}
+                    style={{
+                      fontSize: 11,
+                      padding: '1px 6px',
+                      borderRadius: 999,
+                      whiteSpace: 'nowrap',
+                      border: '1px solid var(--dsh-mem-border)',
+                      color: 'var(--dsh-mem-text-2)',
+                    }}
+                  >
+                    {m.maturity === 'high' ? '成熟·高' : m.maturity === 'mid' ? '成熟·中' : '成熟·低'}
+                  </span>
+                ) : null}
                 {m.agingWeight != null ? (
                   <span
                     style={{

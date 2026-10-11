@@ -34,6 +34,7 @@ import { isWingCorner } from './store/session-modes.js';
 import { startWingBackfill } from './wing-backfill.js';
 import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
+import { computeMaturity } from './util/maturity.js';
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = require('../package.json').version;
 /**
@@ -1872,6 +1873,8 @@ export function hitToUiRecord(r, extra) {
         retiredReason: retired ? (mark?.reason ?? 'unknown') : null,
         agingWeight: extra?.agingWeight ?? null,
         usage: extra?.usage ?? null,
+        // G3 成熟度：读时派生（priority + used + 老化），无额外端点/存储。
+        maturity: computeMaturity({ priority: r.priority ?? 60, usage: extra?.usage ?? null, agingWeight: extra?.agingWeight ?? null }),
     };
 }
 /**
