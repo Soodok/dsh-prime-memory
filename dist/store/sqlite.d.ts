@@ -199,6 +199,11 @@ export declare class MemoryDb {
     clearL1(): boolean;
     countL1(): number;
     /**
+     * 按外部导入幂等键查已存在记录 id(轨3-P0 幂等 pre-check)。
+     * 空键/降级一律返回 undefined;未迁移旧库(无 ext_key 列)由 catch 兜底 undefined(fail-open)。
+     */
+    findRecordIdByExtKey(extKey: string): string | undefined;
+    /**
      * 游标分批取 L1 元信息(**仅三列**):后台巡检专用。
      *
      * 为什么不复用 `getAllL1()`:后者会连 `content` 全文一起拉,且是一次性全量同步反序列化——

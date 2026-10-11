@@ -226,6 +226,12 @@ export interface MemoryRecord {
     repoKeyOwner?: string;
     /** 记录级 applicability(ADR-0015 T1.10):'' 未声明(不围栏)| 'this-repo' | 'cross-project';显式不从 family 推导。 */
     applicability?: string;
+    /**
+     * 外部导入幂等键(轨3-P0):`sha1(source_id \0 身份)`;非外部导入(内部蒸馏/add)= undefined/''。
+     * 非空值受 `l1_records` 上部分唯一索引约束——同一 (来源, 内容/稳定身份) 重复导入结构性不可能。
+     * 与 `scene_name`/`metadata.origin` 不同:这是**存储层强制去重键**,不是展示用的溯源标签。
+     */
+    extKey?: string;
 }
 /** L2 场景块摘要(META 解析结果)。 */
 export interface SceneSummary {

@@ -1,3 +1,17 @@
+/**
+ * 模型可调用工具:memory_search(L1)、conversation_search(L0)、memory_read_scene(L2/L3)、
+ * 高权限 memory_add / memory_delete。
+ *
+ * 会话档位联动:execute 的 exec.agent 即发起调用的 agent(agent.id === sessionId),
+ * memory_search 按会话档位过滤族(auto 不过滤,纯档只查本族);off 档下读类工具统一
+ * 返回提示(本会话已对记忆系统隐身)。conversation_search 检索范围保持全库。
+ * 只写会话(注入覆盖=关)同款拒读,notice 区分文案——写入走捕获钩子不经工具,
+ * 拒读不影响"只写"语义。
+ *
+ * 写删工具受 live.memoryMutate 高权限门控(默认 false):显式记忆指令语义——
+ * 用户说"记得 X" → memory_add;说"忘了/删除该记忆" → memory_delete。
+ */
+import { createHash } from 'node:crypto';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { RECEIPTS_QUERY_LIMIT_MAX, dimensionOf, toReceiptView } from '../store/receipts.js';
 import { listConflictPairs, renderConflictResolution, renderConflicts, resolveConflictPair } from '../conflict-service.js';
@@ -491,7 +505,14 @@ roomRegistry) {
      * 时间轴同时写顶层字段(时间增强列)与 metadata(列迁移前的兼容层,
      * 也是面板与图谱时间锚的读取点);`cf`/`rw` 落在 metadata.conflict/rewritten。
      */
-    function buildRecord(item, sceneName, now, workspaceId) {
+    /** 外部导入幂等键:sha1(source_id \0 稳定身份)。身份取 dedupe_key,缺省用内容规范化。 */
+    const computeExtKey = (sourceId, item, content) => {
+        const identity = typeof item.dedupe_key === 'string' && item.dedupe_key.trim()
+            ? item.dedupe_key.trim()
+            : content.replace(/\s+/g, ' ').toLowerCase();
+        return createHash('sha1').update(`${sourceId}\u0000${identity}`, 'utf8').digest('hex');
+    };
+    function buildRecord(item, sceneName, now, workspaceId, sourceId) {
         const content = String(item.content ?? '').trim();
         const type = ADD_TYPES.includes(String(item.type ?? '')) ? String(item.type) : 'episodic';
         const family = type.startsWith('work') ? 'work' : 'chat';
@@ -536,6 +557,7 @@ roomRegistry) {
             ...(validFrom !== undefined ? { validFrom } : {}),
             ...(validTo !== undefined ? { validTo } : {}),
             ...(persistence !== undefined ? { persistence } : {}),
+            ...(sourceId && sourceId.trim() ? { extKey: computeExtKey(sourceId.trim(), item, content) } : {}),
         };
     }
     /** 时间轴/溯源字段的可选入参(两个写工具共用同一形状)。 */
@@ -618,6 +640,10 @@ roomRegistry) {
                         },
                         ...writeFields,
                         priority: { type: 'number', description: '优先级 0-100(缺省 80)' },
+                        dedupe_key: {
+                            type: 'string',
+                            description: '可选稳定身份(外部包内该条的稳定 id);与顶层 source_id 组合算幂等键,缺省用内容规范化哈希',
+                        },
                     },
                 },
             },
@@ -625,12 +651,17 @@ roomRegistry) {
                 type: 'string',
                 description: `归属场景名(缺省 ${DEFAULT_IMPORT_SCENE};建议用"${DEFAULT_IMPORT_SCENE}/<来源>")`,
             },
+            source_id: {
+                type: 'string',
+                description: '来源标识(如 "workbuddy"/"claude-code"/外部包名);非空时启用幂等——同一来源重复导入相同 dedupe_key/内容会被跳过并计入 deduped',
+            },
         },
         output: {
             schema: {
                 type: 'object',
                 properties: {
                     written: { type: 'number' },
+                    deduped: { type: 'number' },
                     ids: { type: 'array', items: { type: 'string' } },
                     skipped: {
                         type: 'array',
@@ -653,15 +684,16 @@ roomRegistry) {
         },
         execute: async (args, exec) => {
             if (!live.get().memoryMutate) {
-                return { written: 0, ids: [], skipped: [], notice: MUTATE_OFF_NOTICE };
+                return { written: 0, deduped: 0, ids: [], skipped: [], notice: MUTATE_OFF_NOTICE };
             }
             const raw = Array.isArray(args.records) ? args.records : [];
             if (raw.length === 0) {
-                return { written: 0, ids: [], skipped: [], notice: 'records 为空,未写入' };
+                return { written: 0, deduped: 0, ids: [], skipped: [], notice: 'records 为空,未写入' };
             }
             if (raw.length > MAX_IMPORT) {
                 return {
                     written: 0,
+                    deduped: 0,
                     ids: [],
                     skipped: [],
                     notice: `单次上限 ${MAX_IMPORT} 条(收到 ${raw.length} 条),请拆批导入`,
@@ -670,10 +702,13 @@ roomRegistry) {
             const scene = typeof args.scene === 'string' && args.scene.trim()
                 ? args.scene.trim().slice(0, 120)
                 : DEFAULT_IMPORT_SCENE;
+            const sourceId = typeof args.source_id === 'string' ? args.source_id.trim() : '';
             const now = Date.now();
             const seen = new Set();
+            const seenExt = new Set();
             const records = [];
             const skipped = [];
+            let deduped = 0;
             raw.forEach((item, index) => {
                 const content = String(item?.content ?? '').trim();
                 if (!content) {
@@ -686,14 +721,30 @@ roomRegistry) {
                     return;
                 }
                 seen.add(key);
-                const record = buildRecord(item, scene, now, workspaceIdOf(exec));
+                // 幂等(轨3-P0):带 source_id 时按 ext_key 拦截重复——先查库内、再查本批，
+                // 命中即计入 deduped 并跳过(不写 JSONL、不写检索库)。无 source_id 保持既有逐字行为。
+                if (sourceId) {
+                    const extKey = computeExtKey(sourceId, item, content);
+                    if (seenExt.has(extKey)) {
+                        deduped++;
+                        skipped.push({ index, reason: '与本批前面的记录外部键重复(幂等跳过)' });
+                        return;
+                    }
+                    if (stores.l1.findIdByExtKey(extKey)) {
+                        deduped++;
+                        skipped.push({ index, reason: '库内已存在同外部键记录(幂等跳过)' });
+                        return;
+                    }
+                    seenExt.add(extKey);
+                }
+                const record = buildRecord(item, scene, now, workspaceIdOf(exec), sourceId);
                 applyManualRedaction(record, cfg, logger);
                 records.push(record);
             });
             if (records.length > 0)
                 await stores.l1.appendNew(records);
-            logger.info(`[memory] 批量导入 ${records.length} 条(跳过 ${skipped.length} 条,场景 ${scene})`);
-            return { written: records.length, ids: records.map((r) => r.id), skipped };
+            logger.info(`[memory] 批量导入 ${records.length} 条(幂等跳过 ${deduped} 条,场景 ${scene}${sourceId ? `,来源 ${sourceId}` : ''})`);
+            return { written: records.length, deduped, ids: records.map((r) => r.id), skipped };
         },
     })));
     // memory_delete:显式"忘了 X"——按语义检索命中后删除(高权限门控)。

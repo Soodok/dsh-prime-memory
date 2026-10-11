@@ -36,10 +36,27 @@ body[data-ds-dark-theme] { --dsh-mem-...: <暗色值> }  /* 暗色整组覆盖 *
 - **强调色不链 dsw**（宿主交互令牌不是品牌蓝），由本层自定义，见下文"品牌强调色"。
 - 组件内联样式一律写 `var(--dsh-mem-*)` → **主题切换时无需 React 重渲染**，
   CSS 变量就地换值，且 `.dsh-mem-root *` 上挂了 0.18s 颜色过渡（见"动效"）。
--   样式表由 `ensureThemeStyle()` 惰性注入（`<style id="dsh-mem-theme-style">`，幂等），
+-   样式表由 `ensureThemeStyle(skin?)` 惰性注入（`<style id="dsh-mem-theme-style">`，**可重入**：
+  样式表只注入一次，之后每次调用只按生效皮肤刷新 `html[data-dsh-mem-skin]` 属性、**不重写表**），
   五个渲染入口都调用：`MemoryPanel`（`panel.tsx`）/ `MemoryModePill` / `HallWheel` /
-  `RebuildPanel` / `RuminatePanel`。
+  `RebuildPanel` / `RuminatePanel`。省略 `skin` 时回落到 `skin.ts` 的持久化偏好。
   `@keyframes`/`@property`/伪类/媒体查询进不了 inline style，只能走这张表。
+
+## 皮肤（插件自选外观，轨1-P0）
+
+在两层令牌之上，插件允许用户显式选外观，三态：**浅色 / 深色 / 跟随（auto）**。
+
+- **状态存 localStorage**（`dsh-mem-skin`，`client/src/skin.ts`），**不进插件 config / volatile 键集**——
+  皮肤是设备本地视觉偏好，写进 config 会触发"缺键丢用户已存值"的红线。
+- **令牌值不因皮肤改变**：浅色/深色两组值与 auto 兜底同源（`LIGHT_TOK`/`DARK_TOK`），
+  因此 AA 对比度与既有明/暗完全一致，无需重算。
+- 覆写落点：`html[data-dsh-mem-skin="light"]` / `="dark"`（`theme.ts` 用同一组 `*_TOK` 追加声明）。
+  与宿主暗色块同特异度、后置声明胜出 → 能压过宿主强切明暗。
+- **auto = 不表态**：`skin.ts` 把 `auto` 解析成具体 light/dark（优先宿主 `body[data-ds-dark-theme]`，
+  否则系统 `prefers-color-scheme`）写到 `html` 上；`MutationObserver`（全局仅一个，auto 档才动）
+  让宿主翻转暗色时 auto 跟随。`:root` 浅 + `body[data-ds-dark-theme]` 暗两块兜底**不得删**。
+- **皮肤切换不得动模型读到的文本**：`format.ts TYPE_LABELS`、`panel.tsx` intro、`recall.ts` 注入引导句、
+  `MEMORY_TOOLS_GUIDE` 与本节无关，皮肤轨严禁顺改（不拟人化红线）。
 
 ## 中性与状态令牌
 

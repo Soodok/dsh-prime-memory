@@ -142,6 +142,8 @@ export declare class L1Store {
     };
     /** 按 id 精确取记录(去重决策的版本号查询用,避免全表扫描)。 */
     getByIds(ids: string[]): MemoryRecord[];
+    /** 外部导入幂等 pre-check(轨3-P0):ext_key 命中已存在记录则返回其 id,否则 undefined。 */
+    findIdByExtKey(extKey: string): string | undefined;
     /**
      * §B 决策凭证落盘(L1Store 的薄缝)。
      * 刻意放在 store 上:`runExtraction` 已经持有 L1Store,凭证写入因此无需新增

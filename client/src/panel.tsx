@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import type { RpcFn } from './rpc.js';
 import { watchSidebarIcon } from './sidebar-icon.js';
+import { applySkin, getSkin, setSkin, type Skin } from './skin.js';
 import { S } from './styles.js';
 import { ensureThemeStyle } from './theme.js';
 import { ConflictsTab } from './tabs/ConflictsTab.js';
@@ -33,15 +34,31 @@ const TABS: Array<[string, string]> = [
   ['log', '日志'],
 ];
 
+/** 皮肤三态（轨1-P0）：纯表现层，偏好存 localStorage，不进插件 config。 */
+const SKIN_OPTS: Array<[Skin, string]> = [
+  ['light', '浅色'],
+  ['dark', '深色'],
+  ['auto', '跟随'],
+];
+
 export function MemoryPanel(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
   const [tab, setTab] = useState('overview');
+  const [skin, setSkinState] = useState<Skin>(() => getSkin());
 
-  // 主题令牌与组件样式在面板挂载时注入一次（输入栏 pill 也可能已注入，幂等）
-  ensureThemeStyle();
+  // 主题令牌与组件样式在面板挂载时注入（输入栏 pill 也可能已注入，幂等）；
+  // 每次渲染按当前皮肤刷新 html 属性（ensureThemeStyle 可重入，不重写样式表）。
+  ensureThemeStyle(skin);
   useEffect(() => {
+    // applySkin 挂上（至多一次的）宿主跟随监听；皮肤变更经 state 重渲染回流至此。
+    applySkin(skin);
     watchSidebarIcon();
-  }, []);
+  }, [skin]);
+
+  const switchSkin = (next: Skin) => {
+    setSkin(next); // 持久化到 localStorage
+    setSkinState(next); // 触发重渲染 → ensureThemeStyle(next) + effect applySkin(next)
+  };
 
   let body;
   if (tab === 'overview') body = <OverviewTab rpc={rpc} />;
@@ -58,6 +75,28 @@ export function MemoryPanel(props: { rpc: RpcFn }) {
     <div className="dsh-mem-root" style={S.section}>
       <h2 style={S.heading}>记忆 (Memory)</h2>
       <p style={S.intro}>L0~L3 分层蒸馏记忆：浏览被记住的内容，控制记忆模式开关。</p>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: 2,
+          marginTop: -6,
+          marginBottom: 10,
+        }}
+      >
+        <span style={{ fontSize: 12, color: 'var(--dsh-mem-text-3)', marginRight: 4 }}>皮肤</span>
+        {SKIN_OPTS.map((s) => (
+          <button
+            key={s[0]}
+            className={skin === s[0] ? 'dsh-mem-tab dsh-mem-tab-on' : 'dsh-mem-tab'}
+            onClick={() => switchSkin(s[0])}
+            title={`皮肤：${s[1]}`}
+          >
+            {s[1]}
+          </button>
+        ))}
+      </div>
       <div style={S.tabbar}>
         {TABS.map((t) => {
           return (

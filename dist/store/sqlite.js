@@ -318,6 +318,14 @@ export class MemoryDb {
             this.db.exec("ALTER TABLE l1_records ADD COLUMN applicability TEXT NOT NULL DEFAULT ''");
             this.logger?.info(`${TAG} l1_records 补 repo 归属列(DEFAULT 即标注,存量零回填)`);
         }
+        // ── 外部导入幂等键(轨3-P0):ext_key='' 即内部记录(不参与去重),DEFAULT '' 存量零搬运。
+        // 部分唯一索引只约束非空值——多条内部记录 ext_key 同为 '' 互不冲突;仅当外部导入的
+        // 同一 (来源, 稳定身份) 重复导入才被结构性拒绝(写侧 pre-check + 索引双保险)。
+        if (!this.hasColumn('l1_records', 'ext_key')) {
+            this.db.exec("ALTER TABLE l1_records ADD COLUMN ext_key TEXT NOT NULL DEFAULT ''");
+            this.logger?.info(`${TAG} l1_records 补 ext_key 列(外部导入幂等键)`);
+        }
+        this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS l1_records_ext_key_uidx ON l1_records(ext_key) WHERE ext_key <> ''");
         // L2 场景重聚类作业队列(治理 W3 T3.10;ruminate 空闲档消费,每轮至多 1 作业)。
         // source 区分触发来源('demote'|'repo-change'),便于诊断与重入队语义区分。
         this.db.exec(`
@@ -434,8 +442,8 @@ export class MemoryDb {
         record_id, content, type, priority, scene_name, session_id, version,
         timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json, family,
         valid_from, valid_to, persistence, scope, workspace_id,
-        repo_key_name, repo_key_owner, applicability
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        repo_key_name, repo_key_owner, applicability, ext_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -455,7 +463,8 @@ export class MemoryDb {
         workspace_id=excluded.workspace_id,
         repo_key_name=excluded.repo_key_name,
         repo_key_owner=excluded.repo_key_owner,
-        applicability=excluded.applicability
+        applicability=excluded.applicability,
+        ext_key=excluded.ext_key
     `);
         this.stmtGetL1 = this.db.prepare(`
       SELECT record_id, content, type, priority, scene_name, version, timestamp_str,
@@ -907,7 +916,7 @@ export class MemoryDb {
         // 旧版导入都会经这里写回记录,若照常重建 FTS/向量行,一条带退场标记的记录
         // 会**悄悄回到检索结果里**(而检索侧刻意不看 valid_to,正是为了零漂移)。
         const retiredNow = record.validTo !== undefined || readSupersedeMarker(record.metadata) !== undefined;
-        this.stmtUpsertL1.run(record.id, record.content, type, priority, sceneName, record.sessionId ?? 'default', record.version ?? 0, ts.str, ts.start, ts.end, toIso(record.createdAt), toIso(record.updatedAt), JSON.stringify(record.metadata ?? {}), family, toIso(record.validFrom), toIso(record.validTo), normPersistence(record.persistence) ?? '', scope, workspaceId, record.repoKeyName ?? '', record.repoKeyOwner ?? '', normApplicability(record.applicability));
+        this.stmtUpsertL1.run(record.id, record.content, type, priority, sceneName, record.sessionId ?? 'default', record.version ?? 0, ts.str, ts.start, ts.end, toIso(record.createdAt), toIso(record.updatedAt), JSON.stringify(record.metadata ?? {}), family, toIso(record.validFrom), toIso(record.validTo), normPersistence(record.persistence) ?? '', scope, workspaceId, record.repoKeyName ?? '', record.repoKeyOwner ?? '', normApplicability(record.applicability), record.extKey ?? '');
         // vec0 不支持 ON CONFLICT → 先删后插;零向量跳过(cosine 未定义)。
         // 已退场则**只删不插**(见上方 retiredNow 的说明)。
         if (this.stmtDeleteL1Vec && this.stmtInsertL1Vec) {
@@ -1132,6 +1141,23 @@ export class MemoryDb {
         catch {
             // 建表前(init 的 embedding 变更检测)会先调用计数
             return 0;
+        }
+    }
+    /**
+     * 按外部导入幂等键查已存在记录 id(轨3-P0 幂等 pre-check)。
+     * 空键/降级一律返回 undefined;未迁移旧库(无 ext_key 列)由 catch 兜底 undefined(fail-open)。
+     */
+    findRecordIdByExtKey(extKey) {
+        if (this.degraded || !extKey)
+            return undefined;
+        try {
+            const row = this.db
+                .prepare("SELECT record_id FROM l1_records WHERE ext_key = ? AND ext_key <> '' LIMIT 1")
+                .get(extKey);
+            return row?.record_id;
+        }
+        catch {
+            return undefined;
         }
     }
     /**

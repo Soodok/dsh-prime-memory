@@ -229,6 +229,10 @@ export class L1Store {
     getByIds(ids) {
         return this.db.getL1ByIds(ids);
     }
+    /** 外部导入幂等 pre-check(轨3-P0):ext_key 命中已存在记录则返回其 id,否则 undefined。 */
+    findIdByExtKey(extKey) {
+        return this.db.findRecordIdByExtKey(extKey);
+    }
     /**
      * §B 决策凭证落盘(L1Store 的薄缝)。
      * 刻意放在 store 上:`runExtraction` 已经持有 L1Store,凭证写入因此无需新增
