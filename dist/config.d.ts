@@ -129,6 +129,10 @@ export interface MemoryConfig {
     usageScenario: {
         enabled: boolean;
     };
+    /** 类型叙述模板（G2）：抽取时按 7 类型各自的“前因后果”骨架写 content。默认关，关时 prompt 逐字不变。 */
+    narrativeTemplates: {
+        enabled: boolean;
+    };
     recall: {
         enabled: boolean;
         /** 每步自动召回注入的 L1 条数。 */
@@ -576,6 +580,11 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
     usageScenario: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+    }>>, "plain">;
+    narrativeTemplates: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
@@ -1132,6 +1141,11 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
     usageScenario: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+    }>>, "plain">;
+    narrativeTemplates: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;

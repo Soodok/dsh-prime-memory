@@ -49,3 +49,25 @@ describe('G1b sortByUsageScenario（纯函数细排）', () => {
     expect(out.find((h) => h.id === 'b')!.score).toBe(1);
   });
 });
+
+describe('G2 narrativeTemplates 门控', () => {
+  for (const mode of ['auto', 'work', 'chat'] as const) {
+    it(`off 逐字不变（${mode}）`, () => {
+      expect(getExtractMemoriesSystemPrompt(mode, { narrative: false })).toBe(getExtractMemoriesSystemPrompt(mode));
+    });
+    it(`on 追加内容骨架且 off 是前缀（${mode}）`, () => {
+      const off = getExtractMemoriesSystemPrompt(mode);
+      const on = getExtractMemoriesSystemPrompt(mode, { narrative: true });
+      expect(on).toContain('内容骨架');
+      expect(on.startsWith(off)).toBe(true);
+      expect(on.length).toBeGreaterThan(off.length);
+    });
+  }
+  it('usageScenario + narrative 同时开，off 仍是前缀且两段都在', () => {
+    const off = getExtractMemoriesSystemPrompt('auto');
+    const on = getExtractMemoriesSystemPrompt('auto', { usageScenario: true, narrative: true });
+    expect(on.startsWith(off)).toBe(true);
+    expect(on).toContain('内容骨架');
+    expect(on).toContain('usageScenario');
+  });
+});

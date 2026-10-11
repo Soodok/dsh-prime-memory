@@ -450,9 +450,26 @@ export function getExtractMemoriesSystemPrompt(mode, opts) {
     const base = mode === 'auto' ? EXTRACT_ALL_MEMORIES_SYSTEM_PROMPT
         : mode === 'work' ? EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT
             : EXTRACT_MEMORIES_SYSTEM_PROMPT;
-    // off（默认）返回与今逐字一致的常量；on 才追加 usageScenario 指令（零漂移）。
-    return opts?.usageScenario ? base + USAGE_SCENARIO_CLAUSE : base;
+    // off（默认）返回与今逐字一致的常量；on 才追加指令段（零漂移，off 是 on 前缀）。
+    let out = base;
+    if (opts?.narrative)
+        out += NARRATIVE_CLAUSE;
+    if (opts?.usageScenario)
+        out += USAGE_SCENARIO_CLAUSE;
+    return out;
 }
+/** 类型叙述模板（G2）指令段：仅在 cfg.narrativeTemplates.enabled 时拼到系统提示末尾。 */
+const NARRATIVE_CLAUSE = `
+
+【内容骨架】每条 content 按类型写成“前因后果”的分节陈述（用短句拼成一段，让记忆自带因果链而非零散一句）：
+- work_method：目标 → 步骤(每步带为什么) → 前置/注意
+- work_fact：结论/事实 → 依据(谁在何时确认) → 适用范围/失效条件
+- work_task：任务 → 当前状态 → 下一步/阻塞(负责人·截止)
+- work_artifact：交付物 → 位置(路径/链接) → 用途/结论
+- instruction：规则 → 触发时机 → 反例/边界
+- episodic：事件 → 时间/参与者 → 结果
+- persona：偏好/习惯 → 表现/例子 → 强度
+信息不足以填满某节时省略该节，不要编造；保持 content 精炼、不堆砌。`;
 /** 使用场景（G1）指令段：仅在 cfg.usageScenario.enabled 时拼到系统提示末尾。 */
 const USAGE_SCENARIO_CLAUSE = `
 

@@ -158,6 +158,10 @@ export const memorySchema = Schema.object({
     usageScenario: Schema.object({
         enabled: Schema.boolean().default(false),
     }),
+    // 类型叙述模板（G2）：默认关；开时抽取 prompt 追加分类型 content 骨架（off 逐字不变）。
+    narrativeTemplates: Schema.object({
+        enabled: Schema.boolean().default(false),
+    }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),
         maxResults: Schema.number().min(1).max(20).default(5),

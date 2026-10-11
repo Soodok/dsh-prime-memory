@@ -321,7 +321,7 @@ export async function runExtraction(
       halls,
     });
     const raw = await callLLM(ctx, cfg, {
-      system: getExtractMemoriesSystemPrompt(mode, { usageScenario: cfg.usageScenario?.enabled === true }),
+      system: getExtractMemoriesSystemPrompt(mode, { usageScenario: cfg.usageScenario?.enabled === true, narrative: cfg.narrativeTemplates?.enabled === true }),
       user: userPrompt,
       maxTokens: resolveLayerTokens(cfg, 'extract'),
       layer: 'l1-extract',
