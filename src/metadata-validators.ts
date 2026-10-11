@@ -68,3 +68,26 @@ export function normTags(v: unknown, max = 3): string[] {
 }
 
 export { isCognitiveHall, COGNITIVE_HALLS, type CognitiveHall } from './cognitive-hall.js';
+
+/** usageScenario 单条最大长度(“何时该浮现”的短语，非 slug，故不校 isTag 字符集)。 */
+const USAGE_SCENARIO_MAX_CHARS = 60;
+
+/**
+ * usageScenario 归一 + 去重 + 上限。**所有写回点必须过这里**。
+ *
+ * 与 normTags 的区别：usageScenario 是自然语言短语（如“修改 profile 配置时”），
+ * 不是 slug，所以不做字符集校验，只做 trim/去重/长度钳制/上限。
+ * 非数组或空→ `[]`（缺字段中性，不抛——防单条抽取失败波及整切片重试）。
+ */
+export function normUsageScenario(v: unknown, max = 3): string[] {
+  if (!Array.isArray(v) || max <= 0) return [];
+  const out: string[] = [];
+  for (const raw of v) {
+    if (typeof raw !== 'string') continue;
+    const t = raw.trim();
+    if (!t || out.includes(t)) continue;
+    out.push(t.slice(0, USAGE_SCENARIO_MAX_CHARS));
+    if (out.length >= max) break;
+  }
+  return out;
+}

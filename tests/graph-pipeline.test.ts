@@ -162,6 +162,8 @@ describe('提示词防漂移', () => {
     expect(prompt).toContain('20'); // aliases 上限
     expect(prompt).toContain('12'); // tags 上限
     expect(prompt).toContain('使用'); // 关系词
+    // G4 因果边：GRAPH_RELATION_WORDS 与 prompt 同源内插，四个因果词必须在提示词里。
+    for (const causal of ['导致', '因为', '修复了', '取代']) expect(prompt).toContain(causal);
   });
 
   it('golden 样例(prompt 示例)过 apply 零丢弃——提示词与校验器同真值', () => {

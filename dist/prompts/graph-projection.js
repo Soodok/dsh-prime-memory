@@ -82,6 +82,9 @@ ${GRAPH_NODE_TYPES.join(' | ')}
 
 ${GRAPH_RELATION_WORDS.join('、')}(也可用其他贴切的中文动词短语,≤${GRAPH_CAP.relation} 字)
 
+当记录**显式陈述了因果**时,优先用因果边表达(如「X 导致 Y」「X 修复了 Y」「X 因为 Y」「A 取代 B」),
+这能让前因后果跨记录成链。因果边只写在**记录里有明确依据**的关系上,不做常识推断(见铁律)。
+
 ## 字段上限
 
 - name ≤${GRAPH_CAP.name} 字;aliases ≤${GRAPH_CAP.aliases} 条;tags ≤${GRAPH_CAP.tags} 个

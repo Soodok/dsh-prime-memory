@@ -16,8 +16,10 @@ export const GRAPH_NODE_TYPE_SET: ReadonlySet<string> = new Set(GRAPH_NODE_TYPES
 export const GRAPH_STATUSES: readonly GraphRecordStatus[] = ['active', 'superseded', 'disputed', 'archived'];
 export const GRAPH_STATUS_SET: ReadonlySet<string> = new Set(GRAPH_STATUSES);
 
-/** 规范中文关系词(提示词给枚举;校验不做白名单——关系是开放词表,只做长度钳制)。 */
-export const GRAPH_RELATION_WORDS = ['使用', '属于', '创建', '参与', '贡献', '依赖', '位于', '相关'] as const;
+/** 规范中文关系词(提示词给枚举;校验不做白名单——关系是开放词表,只做长度钳制)。
+ *  后四个为因果边(导致/因为/修复了/取代)——让"前因后果"跨记录成链;仅当 graph.enabled 时
+ *  才参与投影(整块图谱默认关,不碰非图谱用户的蒸馏产物)。 */
+export const GRAPH_RELATION_WORDS = ['使用', '属于', '创建', '参与', '贡献', '依赖', '位于', '相关', '导致', '因为', '修复了', '取代'] as const;
 
 /** 提案字段上限(校验侧截断/丢弃与提示词内插共用同一组数字)。 */
 export const GRAPH_CAP = {

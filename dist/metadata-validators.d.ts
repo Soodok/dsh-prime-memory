@@ -23,3 +23,11 @@ export declare function isTag(v: unknown): boolean;
  */
 export declare function normTags(v: unknown, max?: number): string[];
 export { isCognitiveHall, COGNITIVE_HALLS, type CognitiveHall } from './cognitive-hall.js';
+/**
+ * usageScenario 归一 + 去重 + 上限。**所有写回点必须过这里**。
+ *
+ * 与 normTags 的区别：usageScenario 是自然语言短语（如“修改 profile 配置时”），
+ * 不是 slug，所以不做字符集校验，只做 trim/去重/长度钳制/上限。
+ * 非数组或空→ `[]`（缺字段中性，不抛——防单条抽取失败波及整切片重试）。
+ */
+export declare function normUsageScenario(v: unknown, max?: number): string[];

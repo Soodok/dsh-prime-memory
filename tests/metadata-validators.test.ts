@@ -6,7 +6,7 @@
  * `metadata.hall`,污染生活域轴。
  */
 import { describe, expect, it } from 'vitest';
-import { COGNITIVE_HALLS, isCognitiveHall, isRoomSlug, isTag, isWingId, normTags } from '../src/metadata-validators.js';
+import { COGNITIVE_HALLS, isCognitiveHall, isRoomSlug, isTag, isWingId, normTags, normUsageScenario } from '../src/metadata-validators.js';
 import { WING_CATALOG, WING_FALLBACK } from '../src/types.js';
 
 describe('isWingId', () => {
@@ -92,5 +92,28 @@ describe('normTags', () => {
 
   it('去重发生在截断之前(不然会因重复项浪费配额)', () => {
     expect(normTags(['a', 'a', 'a', 'b', 'c', 'd'])).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('normUsageScenario (G1)', () => {
+  it('保留自然语言短语(不做 slug 字符集校验)，trim + 去重 + 默认≤ 3', () => {
+    expect(normUsageScenario([' 修改 profile 时', '重启服务前', '改依赖后', '第四条'])).toEqual([
+      '修改 profile 时',
+      '重启服务前',
+      '改依赖后',
+    ]);
+  });
+  it('非数组/空一律 []（缺字段中性，不抛）', () => {
+    expect(normUsageScenario(undefined)).toEqual([]);
+    expect(normUsageScenario(null)).toEqual([]);
+    expect(normUsageScenario('single')).toEqual([]);
+    expect(normUsageScenario([])).toEqual([]);
+  });
+  it('过滤空串/非字符串项，单条长度钳制≤ 60', () => {
+    const long = 'x'.repeat(100);
+    const out = normUsageScenario(['', long, 42, 'ok']);
+    expect(out[0]).toHaveLength(60);
+    expect(out).toContain('ok');
+    expect(out).not.toContain('');
   });
 });
