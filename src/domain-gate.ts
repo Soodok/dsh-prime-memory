@@ -176,3 +176,37 @@ export function sortByDomainWeight<T extends { id: string; score: number }>(
   };
   return [...hits].sort((a, b) => weightOf(b.id) - weightOf(a.id) || b.score - a.score);
 }
+
+/** 分词(小写、按非字母数字/非 CJK 切、去长度<2 的碎片)。供场景词重叠用。 */
+function normTokens(s: string): Set<string> {
+  return new Set(
+    s.toLowerCase().split(/[^0-9a-z\u4e00-\u9fa5]+/).map((t) => t.trim()).filter((t) => t.length >= 2),
+  );
+}
+
+/**
+ * G1 使用场景细排(纯函数、**score 不改写**、默认关时不进此路径):
+ * 命中查询词的 usageScenario 记忆上浮；未命中/无场景的记录保持原序(fail-open)。
+ * 保守：只按“命中强度”重排，不引入新相关性判断；无查询词时原样返回。
+ */
+export function sortByUsageScenario<T extends { id: string }>(
+  hits: readonly T[],
+  scenariosOf: (id: string) => readonly string[],
+  query: string,
+): T[] {
+  const q = normTokens(query);
+  if (q.size === 0) return [...hits];
+  const matchOf = (id: string): number => {
+    let best = 0;
+    for (const s of scenariosOf(id)) {
+      let ov = 0;
+      for (const t of normTokens(s)) if (q.has(t)) ov++;
+      if (ov > best) best = ov;
+    }
+    return best;
+  };
+  return hits
+    .map((h, i) => ({ h, i, m: matchOf(h.id) }))
+    .sort((a, b) => b.m - a.m || a.i - b.i)
+    .map((x) => x.h);
+}

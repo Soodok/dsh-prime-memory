@@ -47,3 +47,11 @@ export declare function sortByDomainWeight<T extends {
     id: string;
     score: number;
 }>(hits: readonly T[], wingOf: (id: string) => unknown, weights: Record<string, number>): T[];
+/**
+ * G1 使用场景细排(纯函数、**score 不改写**、默认关时不进此路径):
+ * 命中查询词的 usageScenario 记忆上浮；未命中/无场景的记录保持原序(fail-open)。
+ * 保守：只按“命中强度”重排，不引入新相关性判断；无查询词时原样返回。
+ */
+export declare function sortByUsageScenario<T extends {
+    id: string;
+}>(hits: readonly T[], scenariosOf: (id: string) => readonly string[], query: string): T[];

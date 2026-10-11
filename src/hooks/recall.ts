@@ -56,7 +56,7 @@ import {
 } from '../util/context-occupancy.js';
 import { errDetail } from '../util/filelog.js';
 import { blocksToText } from '../util/text.js';
-import { domainGate, formatWeights, hardFilterByWingLock, sortByDomainWeight, WING_ANCHORS } from '../domain-gate.js';
+import { domainGate, formatWeights, hardFilterByWingLock, sortByDomainWeight, sortByUsageScenario, WING_ANCHORS } from '../domain-gate.js';
 
 const PROFILE_TTL = 60_000;
 
@@ -492,6 +492,23 @@ export function registerRecall(
             logger.info(
               `[memory] repo 软围栏:currentRepo=${currentRepoKey || '(未识别)'} 跨仓乘子=${cfg.recall.scopeFence.crossRepoMultiplier} agent=${payload.agent.id}`,
             );
+          }
+          // ── G1 使用场景细排(默认关):命中 usageScenario 的记忆上浮,纯函数重排,score 不改写。
+          // 关闭时不进本分支(零 getByIds、零重排,召回逐字现状);无场景/未命中保持原序(fail-open)。
+          if (cfg.usageScenario?.enabled === true && scoped.length > 1) {
+            const scenarioById = new Map(
+              stores.l1.getByIds(scoped.map((h) => h.id)).map((r) => [
+                r.id,
+                Array.isArray((r.metadata as Record<string, unknown> | undefined)?.dsh_usage_scenario)
+                  ? ((r.metadata as Record<string, unknown>).dsh_usage_scenario as string[])
+                  : ([] as string[]),
+              ]),
+            );
+            const before = scoped.map((h) => h.id).join(',');
+            scoped = sortByUsageScenario(scoped, (id) => scenarioById.get(id) ?? [], query);
+            if (scoped.map((h) => h.id).join(',') !== before) {
+              logger.info(`[memory] 使用场景细排生效:agent=${payload.agent.id}`);
+            }
           }
           // 召回去重:同会话已注入过的记录不再重复注入(模型上下文已持有,省 token)。
           // 纯过滤——剩几条注几条,全量压制(0 条新鲜命中)是正确状态而非未命中。
