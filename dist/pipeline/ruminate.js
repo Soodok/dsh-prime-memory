@@ -222,6 +222,10 @@ export class RuminateController {
                     }
                 }
             }
+            // 反刍收尾改了 L2/L3 计数（runner.states 是 StateStore 的活引用，内存态）——
+            // 必须显式落盘，否则重启从 state.json 读回旧值，表现为“待处理计数反复”。
+            // （正常蒸馏路径由 runTurn 末尾 save；反刍 finalize 是独立路径，需自己 save。）
+            await this.stores.state.save();
             // 标注校验/重标定:Wing 合法性 + 认知 hall 映射 + 未打标补标 + 涌现标签
             // 批次进度经 onProgress 写入 detail + sub 子进度(非会话阶段的进度由重标批次决定)
             this.status.phase = 'relabeling';
