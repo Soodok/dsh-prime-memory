@@ -37,4 +37,12 @@ describe('本会话召回显示层（构建产物）', () => {
     // 会默默丢分区；要隐藏请用它的「记忆槽位分区」开关。
     expect(serverEntry).toContain('projection/slots');
   });
+
+  it('memoryRecall 投影已接线（brief 侧栏「本会话召回」分区的数据源）', () => {
+    expect(serverEntry).toContain('projection/recall');
+    const recall = readFileSync(join(HERE, '..', 'dist', 'projection', 'recall.js'), 'utf8');
+    expect(recall).toContain('memoryRecall');
+    // 召回集不得反过来挂到槽位投影上（两边各走各的 key）。
+    expect(slotsProjection).not.toContain('memoryRecall');
+  });
 });

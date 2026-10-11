@@ -51,6 +51,7 @@ import { registerSkillRecall } from './hooks/skill-recall.js';
 import { registerSkillTools } from './tools/skills.js';
 import { RecallUsageStore } from './store/recall-usage.js';
 import { registerSlotsProjection } from './projection/slots.js';
+import { registerRecallProjection } from './projection/recall.js';
 import type { MemoryLogger } from './types.js';
 import { errDetail, withFileLog } from './util/filelog.js';
 import { buildRouteChain, resolveModelRoute, invalidateEffortCache } from './llm.js';
@@ -448,6 +449,9 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   // 但那是把跨插件展示契约直接抽掉，旧版 brief-sidebar 会默默丢分区——隐藏请走它自己的
   // 「记忆槽位分区」开关。本包另提供一个会话感知的 memoryRecall 投影。
   registerSlotsProjection(ctx, stores.slots, stores.l1);
+  // memoryRecall 投影：本会话“已注入且未被压缩覆盖”的召回集（会话感知，init 取 header.id），
+  // 与常驻槽位是两条轴：那个是手动 pin 的硬注入约定，这个是非常驻的相关性浮现结果。
+  registerRecallProjection(ctx, stores.recalled, stores.l1);
   void slotRecall;
   registerMemoryRpc(
     ctx,
