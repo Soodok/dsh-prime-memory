@@ -16,21 +16,26 @@ import { useState } from 'react';
 import { NButton } from '../ui/primitives.js';
 import { S } from '../styles.js';
 import type { RpcFn } from '../rpc.js';
-import type { DshMemoryResponseMap } from '../../../src/contract.js';
+import type { DshMemoryRequestMap, DshMemoryResponseMap } from '../../../src/contract.js';
 
-/** 本节会发的三个端点（导出 / 对账 / 反向同步）。 */
-type ArchiveEndpoint = 'dsh-memory/mem-export' | 'dsh-memory/mem-reconcile' | 'dsh-memory/mem-sync';
+/** 本节会发的四个端点（导出 / 对账 / 反向同步 / 清理）。 */
+type ArchiveEndpoint = 'dsh-memory/mem-export' | 'dsh-memory/mem-reconcile' | 'dsh-memory/mem-sync' | 'dsh-memory/cleanup-retired';
 type ExportReport = DshMemoryResponseMap['dsh-memory/mem-export'];
 type ReconcileReport = DshMemoryResponseMap['dsh-memory/mem-reconcile'];
 type SyncReport = DshMemoryResponseMap['dsh-memory/mem-sync'];
+type CleanupReport = DshMemoryResponseMap['dsh-memory/cleanup-retired'];
 
 const HINT_STYLE = { fontSize: 12, color: 'var(--dsh-mem-text-3)', lineHeight: '18px' } as const;
 const ROOT_STYLE = { fontSize: 11, color: 'var(--dsh-mem-text-3)', wordBreak: 'break-all' } as const;
 
 /** 把一次 RPC 的返回拆成 `{report, error}`，envelope 的两种形状都在此收口。 */
-async function call<K extends ArchiveEndpoint>(rpc: RpcFn, method: K): Promise<{ report?: DshMemoryResponseMap[K]; error?: string }> {
+async function call<K extends ArchiveEndpoint>(
+  rpc: RpcFn,
+  method: K,
+  payload: DshMemoryRequestMap[K],
+): Promise<{ report?: DshMemoryResponseMap[K]; error?: string }> {
   try {
-    const r = await rpc(method, {});
+    const r = await rpc(method, payload);
     if (r && r.ok && r.value !== undefined) return { report: r.value };
     const msg = r && !r.ok ? r.error?.message : undefined;
     return { error: typeof msg === 'string' && msg.length > 0 ? msg : '端点无响应' };
@@ -63,6 +68,14 @@ function lineOfSync(rep: SyncReport): string {
   return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
 }
 
+function lineOfCleanup(rep: CleanupReport): string {
+  if (rep.aborted) return `清理已中止（未删任何记录）：${rep.diffs.join('；') || '门禁未通过'}`;
+  if (rep.dryRun) return `待删 ${rep.targets} 条（预览了前 ${rep.items?.length ?? 0} 条）——未删除任何东西`;
+  const f = rep.files ?? { moved: 0, failed: 0, absent: 0 };
+  const head = `已删 ${rep.purged} 条 · 归档正文 ${rep.archiveMd === undefined || rep.archiveMd === '' ? '未写' : '已写'} · 文件搬家 ${f.moved}(失败 ${f.failed}) · 图索引 ${rep.graphForgotten ?? 0}`;
+  return rep.otherChanged && rep.otherChanged > 0 ? `${head} · 本批之外 ${rep.otherChanged} 条处于漂移（不影响本批）` : head;
+}
+
 /** 「外部存档」一节。 */
 export function ArchiveSection(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
@@ -70,13 +83,21 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
   const [exported, setExported] = useState<ExportReport | undefined>(undefined);
   const [recon, setRecon] = useState<ReconcileReport | undefined>(undefined);
   const [synced, setSynced] = useState<SyncReport | undefined>(undefined);
+  const [cleanup, setCleanup] = useState<CleanupReport | undefined>(undefined);
+  // 物理删除不可逆，而本节已有“不弹框”纪律 ⇒ 用两步 arming 当确认门槛：
+  // 必须先跑一次预览（否则连要删什么都不知道），再点两次才真删。
+  const [armed, setArmed] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
-  const run = <K extends ArchiveEndpoint>(method: K, sink: (rep: DshMemoryResponseMap[K]) => void): void => {
+  const run = <K extends ArchiveEndpoint>(
+    method: K,
+    sink: (rep: DshMemoryResponseMap[K]) => void,
+    payload: DshMemoryRequestMap[K],
+  ): void => {
     if (busy) return;
     setBusy(true);
     setError(undefined);
-    void call<K>(rpc, method).then((out) => {
+    void call<K>(rpc, method, payload).then((out) => {
       if (out.report !== undefined) sink(out.report);
       if (out.error !== undefined) setError(out.error);
       setBusy(false);
@@ -93,33 +114,60 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
         <NButton
           disabled={busy}
           title="把当前全部记忆渲染为 <根>/<类型>/<名称>.memory.md，并记下内容指纹（只写文件，不改库）"
-          onClick={() => { run('dsh-memory/mem-export', setExported); }}
+          onClick={() => { run('dsh-memory/mem-export', setExported, {}); }}
         >
           导出为可携存档
         </NButton>
         <NButton
           disabled={busy}
           title="按账本基线比对库与磁盘，只出报告：什么都不写，因此不需要高权限"
-          onClick={() => { run('dsh-memory/mem-reconcile', setRecon); }}
+          onClick={() => { run('dsh-memory/mem-reconcile', setRecon, {}); }}
         >
           与存档对账
         </NButton>
         <NButton
           disabled={busy}
           title="文件 → 库：只有文件变过的回灌入库，`.disable` 后缀的退场；两边都变的那些两侧都不动，只挂账。会写库，因此需要高权限模式"
-          onClick={() => { run('dsh-memory/mem-sync', setSynced); }}
+          onClick={() => { run('dsh-memory/mem-sync', setSynced, {}); }}
         >
           从存档同步回库
         </NButton>
+        <NButton
+          disabled={busy}
+          title="只读预览：列出将被物理删除的退场记忆（前 50 条）与总数，不删任何东西"
+          onClick={() => {
+            setArmed(false);
+            run('dsh-memory/cleanup-retired', setCleanup, { dryRun: true });
+          }}
+        >
+          清理预览（干跑）
+        </NButton>
+        <NButton
+          disabled={busy || cleanup === undefined || !cleanup.dryRun || cleanup.targets === 0}
+          title={armed
+            ? '再点一次就真的删——物理删除不可逆（但会先落快照与归档正文）'
+            : '不可逆动作：需要先跑预览，再点两次确认；服务端那边还要高权限模式'}
+          onClick={() => {
+            if (!armed) { setArmed(true); return; }
+            setArmed(false);
+            run('dsh-memory/cleanup-retired', setCleanup, { dryRun: false });
+          }}
+        >
+          {armed ? '确认物理删除' : '清理并归档'}
+        </NButton>
       </div>
       <div style={{ ...HINT_STYLE, marginTop: 6 }}>
-        {error !== undefined ? `失败：${error}` : null}
-        {error === undefined && synced !== undefined ? lineOfSync(synced) : null}
-        {error === undefined && synced === undefined && exported !== undefined ? lineOf(exported) : null}
-        {error === undefined && synced === undefined && exported === undefined && recon !== undefined ? lineOfReconcile(recon) : null}
-        {error === undefined && synced === undefined && exported === undefined && recon === undefined
-          ? '导出=库→文件；对账=只读比较；同步=文件→库（需开启 md 投射与高权限模式）。'
-          : null}
+        {error !== undefined
+          ? `失败：${error}`
+          : cleanup !== undefined
+            ? lineOfCleanup(cleanup)
+            : synced !== undefined
+              ? lineOfSync(synced)
+              : exported !== undefined
+                ? lineOf(exported)
+                : recon !== undefined
+                  ? lineOfReconcile(recon)
+                  : '导出=库→文件；对账=只读比较；同步=文件→库；清理=物理删除（不可逆，需高权限模式）。'}
       </div>
       {recon !== undefined && error === undefined ? (
         <div style={HINT_STYLE}>最近差异样本：{recon.samples.map((s) => `${s.state}:${s.relPath}`).join('，') || '（无）'}</div>

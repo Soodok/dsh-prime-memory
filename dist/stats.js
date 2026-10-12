@@ -1603,6 +1603,10 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 ? await collectProjectionFiles(purgeRecords, cfg.memExport.root, deps.dataDir, deps.logger)
                 : undefined;
             const r = await stores.l1.purgeRetired(targets, 'cleanup-retired', { files });
+            // F19：图投影的两张索引表全仓原本**只增不减**。记录行删了而投影行还在，
+            // 从快照恢复回来的记录会被当成“已投影”而永不重投影（检索图静默缺一条，不报错）。
+            // 只在真删成功时抹：干跑与中止都不动图——图是派生索引，不该因为一次预览被改。
+            const graphForgotten = !r.aborted && r.purged > 0 ? (stores.graph?.forgetRecords(targets) ?? 0) : 0;
             const resp = {
                 dryRun: false,
                 targets: targets.length,
@@ -1614,6 +1618,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 otherChanged: r.otherChanged,
                 archiveMd: r.archiveMd,
                 files: r.files,
+                graphForgotten,
                 items: purgeRecords.slice(0, 50).map((x) => ({
                     id: x.id,
                     name: x.name ?? '',

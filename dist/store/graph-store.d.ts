@@ -107,6 +107,20 @@ export declare class GraphStore {
      */
     queueGraphProjection(recordIds: readonly string[], priority: number): number;
     /**
+     * 记录被物理删除后，把两张**索引表**里指向它的行一并抹掉。
+     *
+     * 为什么必需（F19）：`graph_projected_records` 之前全仓**只增不减**。记录行删了而投影行还在，
+     * 就留下两类静默问题：① 投影进度表里挂着一批查不到主人的 record_id；② 从快照**恢复**回来的
+     * 记录因为投影行已存在而被当成“已投影”，**永远不会重投影**（检索图里就这么缺一条，不报错）。
+     *
+     * 只删索引行，**不动图节点/边**：节点是跨记录聚合出来的事实，归图自己的生命周期管。
+     * 失败只 warn 并返回已删数——清理的既成事实不应被旁路索引拖挂。
+     *
+     * @param ids - 已被物理删除的记录 id。
+     * @returns 从投影表删掉的行数。
+     */
+    forgetRecords(ids: readonly string[]): number;
+    /**
      * 取下一个可执行 job 并置 running(attempts +1):只认当前 projectorVersion,
      * attempts 封顶与退避窗口在 WHERE 里过滤;来源全缺失 → job 判 dead 返 null
      * (不可重试不抛)。部分缺失时 job 收缩到真实存在的记录子集。

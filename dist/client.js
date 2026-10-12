@@ -3610,9 +3610,9 @@ var __defProp = Object.defineProperty;
 		var import_jsx_runtime17 = require("react/jsx-runtime");
 		var HINT_STYLE = { fontSize: 12, color: "var(--dsh-mem-text-3)", lineHeight: "18px" };
 		var ROOT_STYLE = { fontSize: 11, color: "var(--dsh-mem-text-3)", wordBreak: "break-all" };
-		async function call(rpc, method) {
+		async function call(rpc, method, payload) {
 		  try {
-		    const r = await rpc(method, {});
+		    const r = await rpc(method, payload);
 		    if (r && r.ok && r.value !== void 0) return { report: r.value };
 		    const msg = r && !r.ok ? r.error?.message : void 0;
 		    return { error: typeof msg === "string" && msg.length > 0 ? msg : "端点无响应" };
@@ -3641,18 +3641,27 @@ var __defProp = Object.defineProperty;
 		  const extra = rep.newFiles > 0 ? ` · 新文件 ${rep.newFiles} 个未入库（导入须走写入内核）` : "";
 		  return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
 		}
+		function lineOfCleanup(rep) {
+		  if (rep.aborted) return `清理已中止（未删任何记录）：${rep.diffs.join("；") || "门禁未通过"}`;
+		  if (rep.dryRun) return `待删 ${rep.targets} 条（预览了前 ${rep.items?.length ?? 0} 条）——未删除任何东西`;
+		  const f = rep.files ?? { moved: 0, failed: 0, absent: 0 };
+		  const head = `已删 ${rep.purged} 条 · 归档正文 ${rep.archiveMd === void 0 || rep.archiveMd === "" ? "未写" : "已写"} · 文件搬家 ${f.moved}(失败 ${f.failed}) · 图索引 ${rep.graphForgotten ?? 0}`;
+		  return rep.otherChanged && rep.otherChanged > 0 ? `${head} · 本批之外 ${rep.otherChanged} 条处于漂移（不影响本批）` : head;
+		}
 		function ArchiveSection(props) {
 		  const rpc = props.rpc;
 		  const [busy, setBusy] = (0, import_react17.useState)(false);
 		  const [exported, setExported] = (0, import_react17.useState)(void 0);
 		  const [recon, setRecon] = (0, import_react17.useState)(void 0);
 		  const [synced, setSynced] = (0, import_react17.useState)(void 0);
+		  const [cleanup, setCleanup] = (0, import_react17.useState)(void 0);
+		  const [armed, setArmed] = (0, import_react17.useState)(false);
 		  const [error, setError] = (0, import_react17.useState)(void 0);
-		  const run = (method, sink) => {
+		  const run = (method, sink, payload) => {
 		    if (busy) return;
 		    setBusy(true);
 		    setError(void 0);
-		    void call(rpc, method).then((out) => {
+		    void call(rpc, method, payload).then((out) => {
 		      if (out.report !== void 0) sink(out.report);
 		      if (out.error !== void 0) setError(out.error);
 		      setBusy(false);
@@ -3668,7 +3677,7 @@ var __defProp = Object.defineProperty;
 		          disabled: busy,
 		          title: "把当前全部记忆渲染为 <根>/<类型>/<名称>.memory.md，并记下内容指纹（只写文件，不改库）",
 		          onClick: () => {
-		            run("dsh-memory/mem-export", setExported);
+		            run("dsh-memory/mem-export", setExported, {});
 		          },
 		          children: "导出为可携存档"
 		        }
@@ -3679,7 +3688,7 @@ var __defProp = Object.defineProperty;
 		          disabled: busy,
 		          title: "按账本基线比对库与磁盘，只出报告：什么都不写，因此不需要高权限",
 		          onClick: () => {
-		            run("dsh-memory/mem-reconcile", setRecon);
+		            run("dsh-memory/mem-reconcile", setRecon, {});
 		          },
 		          children: "与存档对账"
 		        }
@@ -3690,19 +3699,41 @@ var __defProp = Object.defineProperty;
 		          disabled: busy,
 		          title: "文件 → 库：只有文件变过的回灌入库，`.disable` 后缀的退场；两边都变的那些两侧都不动，只挂账。会写库，因此需要高权限模式",
 		          onClick: () => {
-		            run("dsh-memory/mem-sync", setSynced);
+		            run("dsh-memory/mem-sync", setSynced, {});
 		          },
 		          children: "从存档同步回库"
 		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+		        NButton,
+		        {
+		          disabled: busy,
+		          title: "只读预览：列出将被物理删除的退场记忆（前 50 条）与总数，不删任何东西",
+		          onClick: () => {
+		            setArmed(false);
+		            run("dsh-memory/cleanup-retired", setCleanup, { dryRun: true });
+		          },
+		          children: "清理预览（干跑）"
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+		        NButton,
+		        {
+		          disabled: busy || cleanup === void 0 || !cleanup.dryRun || cleanup.targets === 0,
+		          title: armed ? "再点一次就真的删——物理删除不可逆（但会先落快照与归档正文）" : "不可逆动作：需要先跑预览，再点两次确认；服务端那边还要高权限模式",
+		          onClick: () => {
+		            if (!armed) {
+		              setArmed(true);
+		              return;
+		            }
+		            setArmed(false);
+		            run("dsh-memory/cleanup-retired", setCleanup, { dryRun: false });
+		          },
+		          children: armed ? "确认物理删除" : "清理并归档"
+		        }
 		      )
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { style: { ...HINT_STYLE, marginTop: 6 }, children: [
-		      error !== void 0 ? `失败：${error}` : null,
-		      error === void 0 && synced !== void 0 ? lineOfSync(synced) : null,
-		      error === void 0 && synced === void 0 && exported !== void 0 ? lineOf(exported) : null,
-		      error === void 0 && synced === void 0 && exported === void 0 && recon !== void 0 ? lineOfReconcile(recon) : null,
-		      error === void 0 && synced === void 0 && exported === void 0 && recon === void 0 ? "导出=库→文件；对账=只读比较；同步=文件→库（需开启 md 投射与高权限模式）。" : null
-		    ] }),
+		    /* @__PURE__ */ (0, import_jsx_runtime17.jsx)("div", { style: { ...HINT_STYLE, marginTop: 6 }, children: error !== void 0 ? `失败：${error}` : cleanup !== void 0 ? lineOfCleanup(cleanup) : synced !== void 0 ? lineOfSync(synced) : exported !== void 0 ? lineOf(exported) : recon !== void 0 ? lineOfReconcile(recon) : "导出=库→文件；对账=只读比较；同步=文件→库；清理=物理删除（不可逆，需高权限模式）。" }),
 		    recon !== void 0 && error === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { style: HINT_STYLE, children: [
 		      "最近差异样本：",
 		      recon.samples.map((s) => `${s.state}:${s.relPath}`).join("，") || "（无）"

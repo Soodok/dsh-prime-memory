@@ -919,6 +919,8 @@ export interface CleanupRetiredResponse {
         failed: number;
         absent: number;
     };
+    /** 图投影索引表里一并抹掉的行数（F19；图面未装配或不该动时为 0）。 */
+    graphForgotten?: number;
     /** 本次涉及(干跑)或实际处理(真跑)的条数。 */
     targets: number;
     /** 真正物理删除的条数(干跑恒为 0;中止恒为 0)。 */
