@@ -1,15 +1,39 @@
-/** 跨 Tab 共用的格式化函数与标签词表。 */
+/** 跨 Tab 共用的格式化函数与类型词表目录。 */
 
-/** L1 记忆类型 → 中文标签（浏览器/筛选器共用）。 */
-export const TYPE_LABELS: Record<string, string> = {
-  persona: '画像偏好',
-  episodic: '客观事件',
-  instruction: '全局指令',
-  work_fact: '工作事实',
-  work_task: '工作任务',
-  work_method: '工作方法',
-  work_artifact: '工作资产',
-};
+/**
+ * 类型标签表（pm-name-distill task_1.5）：手抄 7 项 `TYPE_LABELS` 已下线，
+ * 目录由服务端随 `list-records` / `session-recalled` 下发（单一真源在
+ * `src/memory-types.ts`）。未注册前（旧服务端/首帧未到）降级显示 type 原值——
+ * 标签晚点出来，好过 client 侧再养一份会漂移的手抄表。
+ */
+let typeLabels: Record<string, string> = {};
+
+/** 注册下发的词表目录（幂等，多次调用累积覆盖）。 */
+export function registerTypeCatalog(entries: Array<{ id: string; label: string }> | undefined | null): void {
+  if (!entries || entries.length === 0) return;
+  const next: Record<string, string> = { ...typeLabels };
+  for (const e of entries) next[e.id] = e.label;
+  typeLabels = next;
+}
+
+/** type → 展示标签；未注册时回落原值（不编标签）。 */
+export function typeLabel(type: string): string {
+  return typeLabels[type] || type;
+}
+
+/** 已注册词表的 id 序（筛选器下拉选项源；未注册时为空，调用方自行降级）。 */
+export function typeCatalogIds(): string[] {
+  return Object.keys(typeLabels);
+}
+
+/**
+ * 标签 CSS 类（F11）：统一 slug（`_`→`-`）。
+ * 旧拼接直接用 `type` 原值，`dsh-mem-tag-work_fact` 匹配不上主题 CSS 的
+ * `.dsh-mem-tag-work-fact`，标签无色；拼接点只认这一个形状。
+ */
+export function tagClass(type: string): string {
+  return 'dsh-mem-tag dsh-mem-tag-' + type.replace(/_/g, '-');
+}
 
 /** ISO 时间 → 本地可读串；空值/非法输入回退原样或 '-'。 */
 export function fmtTime(iso: string | null | undefined): string {

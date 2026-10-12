@@ -13,7 +13,12 @@
 import { createHash } from 'node:crypto';
 /** MMF v1.1 默认列序（缺 `#cols=` 时按此解析；v1 包缺 vf/vt/st 列按 -/-/? 补齐）。 */
 export const DEFAULT_COLS = ['type', 'created', 'updated', 'vf', 'vt', 'st', 'cf', 'rw', 'tags', 'content'];
-/** 类型码 → 运行时 type（与 memport.py TYPE_CODES 一字不差）。 */
+/**
+ * 类型码 → 运行时 type（与 memport.py TYPE_CODES 一字不差）。
+ *
+ * 旧码（插件 7 类）不变；pm-name-distill task_1.7 补进宿主 29 类的新码，使外部包
+ * 带来的宿主分类不再被写侧抹平——两实现同表是 `memport-ts-consistency` 的前提。
+ */
 export const TYPE_CODES = {
     pe: 'persona',
     ep: 'episodic',
@@ -22,6 +27,39 @@ export const TYPE_CODES = {
     wt: 'work_task',
     wm: 'work_method',
     wa: 'work_artifact',
+    // —— 宿主分类·个人轴 ——
+    ui: 'user_info',
+    uh: 'user_hobby',
+    uc: 'user_communication',
+    ub: 'user_behavior',
+    // —— 宿主分类·项目轴 ——
+    pi: 'project_introduction',
+    pt: 'project_tech_stack',
+    pg: 'project_architecture',
+    pb: 'project_build_configuration',
+    pq: 'project_dependency_configuration',
+    po: 'project_ide_configuration',
+    ps: 'project_scm_configuration',
+    pw: 'project_environment_configuration',
+    pl: 'project_rule',
+    // —— 宿主分类·规范轴 ——
+    ds: 'development_code_specification',
+    dp: 'development_practice_specification',
+    dv: 'development_test_specification',
+    dn: 'development_comment_specification',
+    // —— 宿主分类·经验轴 ——
+    tm: 'task_summary_experience',
+    dk: 'task_breakdown_experience',
+    df: 'task_flow_experience',
+    td: 'task_experience',
+    tl: 'tool_experience',
+    mp: 'mcp_experience',
+    sl: 'skill_experience',
+    lk: 'learned_skill_experience',
+    ek: 'expert_experience',
+    im: 'important_decision_experience',
+    cp: 'common_pitfalls_experience',
+    hf: 'history_task_reference_files',
 };
 const TYPE_FULL = Object.fromEntries(Object.entries(TYPE_CODES).map(([k, v]) => [v, k]));
 /** 持续性取值域：p 时点 / s 已结束区间 / o 仍在持续 / t 无时间性 / ? 未判定。 */
@@ -269,8 +307,10 @@ export function parseBundle(text) {
         if (!(rec.type in TYPE_CODES) && !(rec.type in TYPE_FULL)) {
             if (rec.type === '' || rec.type === '?')
                 b.warnings.push(`${p}: 类型缺失，导入时将回落 episodic`);
+            // 口径与写侧 `memory_add` 一致（旧文案承诺“按原样透传”，写侧却静默抹平——
+            // 同一件事两套说法）。非词表值现在会被降级并留痕，不能再说是“透传”。
             else
-                b.warnings.push(`${p}: 非标准类型码 ${rec.type}，将按原样透传`);
+                b.warnings.push(`${p}: 非词表类型 ${rec.type}，导入时将降级为 episodic（服务端记 warn）`);
         }
         for (const [fld, val] of [
             ['cf', rec.cf],

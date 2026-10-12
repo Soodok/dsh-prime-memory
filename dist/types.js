@@ -4,6 +4,7 @@
  * 覆盖:记忆族/档位、Hall 目录、L0/L1 记录形状、抽取产出与族判定三级兜底、
  * L2 场景摘要与 L1 检索命中。字段名与取值是磁盘/管线两侧的既定契约,不可更名。
  */
+import { familyOf } from './memory-types.js';
 export const WING_CATALOG = [
     { id: 'work', label: '工作' },
     { id: 'relationships', label: '人际' },
@@ -27,9 +28,16 @@ export function wingLabel(id) {
     const h = WING_CATALOG.find((x) => x.id === id);
     return h ? h.label : id;
 }
-/** 记录族标签推断:work_* 前缀 → work,其余(含 auto 档兜底)→ chat。 */
+/**
+ * 记录族标签推断（pm-name-distill task_1.2）：查 `TYPE_FAMILY_MAP`（词表单一真源）。
+ *
+ * 旧实现是 `type.startsWith('work')` 前缀猜族——新词表里 `project_*`/`development_*`/
+ * `*_experience` 都是 work 族却不带 work 前缀，前缀判定会把它们静默归进 chat，
+ * 而 family 决定召回/浏览/去重的共享面。未知值仍回落旧前缀规则并 warn 一次（可观测，
+ * 不静默）。
+ */
 export function familyForType(type) {
-    return type.startsWith('work') ? 'work' : 'chat';
+    return familyOf(type);
 }
 export const PERSISTENCE_VALUES = ['p', 's', 'o', 't'];
 /** 持续性取值归一:只认 p/s/o/t,其余(缺省/非法)返回 undefined。 */

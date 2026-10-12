@@ -1,6 +1,11 @@
 /** MMF v1.1 默认列序（缺 `#cols=` 时按此解析；v1 包缺 vf/vt/st 列按 -/-/? 补齐）。 */
 export declare const DEFAULT_COLS: readonly ["type", "created", "updated", "vf", "vt", "st", "cf", "rw", "tags", "content"];
-/** 类型码 → 运行时 type（与 memport.py TYPE_CODES 一字不差）。 */
+/**
+ * 类型码 → 运行时 type（与 memport.py TYPE_CODES 一字不差）。
+ *
+ * 旧码（插件 7 类）不变；pm-name-distill task_1.7 补进宿主 29 类的新码，使外部包
+ * 带来的宿主分类不再被写侧抹平——两实现同表是 `memport-ts-consistency` 的前提。
+ */
 export declare const TYPE_CODES: Record<string, string>;
 /** 持续性取值域：p 时点 / s 已结束区间 / o 仍在持续 / t 无时间性 / ? 未判定。 */
 export declare const PERSISTENCE: readonly ["p", "s", "o", "t", "?"];

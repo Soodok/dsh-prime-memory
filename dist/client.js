@@ -264,6 +264,108 @@ var __defProp = Object.defineProperty;
 		  sceneTitle: { fontSize: 13, fontWeight: 600, fontFamily: "ui-monospace, Consolas, monospace", color: "var(--dsh-mem-text-1)" }
 		};
 		
+		// src/memory-types.ts
+		var HOST_MEMORY_TYPES = [
+		  // —— 个人可见（chat 族）：用户画像的四类 ——
+		  "user_info",
+		  "user_hobby",
+		  "user_communication",
+		  "user_behavior",
+		  // —— 项目轴（work 族）——
+		  "project_introduction",
+		  "project_tech_stack",
+		  "project_architecture",
+		  "project_build_configuration",
+		  "project_dependency_configuration",
+		  "project_ide_configuration",
+		  "project_scm_configuration",
+		  "project_environment_configuration",
+		  "project_rule",
+		  // —— 开发规范轴（work 族）——
+		  "development_code_specification",
+		  "development_practice_specification",
+		  "development_test_specification",
+		  "development_comment_specification",
+		  // —— 经验轴（work 族）——
+		  "task_summary_experience",
+		  "task_breakdown_experience",
+		  "task_flow_experience",
+		  "task_experience",
+		  "tool_experience",
+		  "mcp_experience",
+		  "skill_experience",
+		  "learned_skill_experience",
+		  "expert_experience",
+		  "important_decision_experience",
+		  "common_pitfalls_experience",
+		  "history_task_reference_files"
+		];
+		var LEGACY_MEMORY_TYPES = [
+		  "persona",
+		  "episodic",
+		  "instruction",
+		  "work_fact",
+		  "work_task",
+		  "work_method",
+		  "work_artifact"
+		];
+		var UNCLASSIFIED_DIR = "unclassified";
+		var MEMORY_TYPE_VOCABULARY = /* @__PURE__ */ new Set([
+		  ...LEGACY_MEMORY_TYPES,
+		  ...HOST_MEMORY_TYPES
+		]);
+		var TYPE_FAMILY_MAP = Object.freeze(
+		  (() => {
+		    const map = {};
+		    for (const t of LEGACY_MEMORY_TYPES) map[t] = t.startsWith("work") ? "work" : "chat";
+		    for (const t of HOST_MEMORY_TYPES) map[t] = t.startsWith("user_") ? "chat" : "work";
+		    map[UNCLASSIFIED_DIR] = "chat";
+		    return map;
+		  })()
+		);
+		var MEMORY_TYPE_LABELS = Object.freeze({
+		  persona: "画像偏好",
+		  episodic: "客观事件",
+		  instruction: "全局指令",
+		  work_fact: "工作事实",
+		  work_task: "工作任务",
+		  work_method: "工作方法",
+		  work_artifact: "工作资产",
+		  user_info: "用户信息",
+		  user_hobby: "用户爱好",
+		  user_communication: "沟通风格",
+		  user_behavior: "行为规范",
+		  project_introduction: "项目介绍",
+		  project_tech_stack: "技术栈",
+		  project_architecture: "架构设计",
+		  project_build_configuration: "构建配置",
+		  project_dependency_configuration: "依赖配置",
+		  project_ide_configuration: "IDE 配置",
+		  project_scm_configuration: "版本控制配置",
+		  project_environment_configuration: "环境配置",
+		  project_rule: "项目规则",
+		  development_code_specification: "代码规范",
+		  development_practice_specification: "实践规范",
+		  development_test_specification: "测试规范",
+		  development_comment_specification: "注释规范",
+		  task_summary_experience: "任务总结",
+		  task_breakdown_experience: "任务拆解",
+		  task_flow_experience: "任务流程",
+		  task_experience: "任务经验",
+		  tool_experience: "工具经验",
+		  mcp_experience: "MCP 经验",
+		  skill_experience: "技能经验",
+		  learned_skill_experience: "习得技能",
+		  expert_experience: "专家经验",
+		  important_decision_experience: "重要决策",
+		  common_pitfalls_experience: "常见陷阱",
+		  history_task_reference_files: "历史参考文件",
+		  [UNCLASSIFIED_DIR]: "未分类"
+		});
+		function slugOf(type) {
+		  return type.replace(/_/g, "-");
+		}
+		
 		// client/src/theme.ts
 		var THEME_STYLE_ID = "dsh-mem-theme-style";
 		var LIGHT_TOK = [
@@ -346,6 +448,18 @@ var __defProp = Object.defineProperty;
 		  "  --dsh-mem-shadow-card: var(--dsw-shadow-lv1, 0 2px 4px 0 rgba(0,0,0,0.3));",
 		  "  --dsh-mem-shadow-pop: var(--dsw-shadow-lv3, 0 0 1px 0 rgba(0,0,0,.2), 0 0 4px 0 rgba(0,0,0,.02), 0 12px 32px 0 rgba(0,0,0,0.08));"
 		];
+		var EXT_LIGHT = ["#8a5a00", "#0757b4", "#116629", "#6f42c1", "#b43a6f", "#076f6b", "#7a5c00", "#4a6fa5"];
+		var EXT_DARK = ["#e3b341", "#6cb2ff", "#6fca74", "#c297ff", "#f077b6", "#56d4c8", "#d9b64a", "#9db8e8"];
+		var EXT_TAG_RULES = HOST_MEMORY_TYPES.map(
+		  (t, i) => `.dsh-mem-tag-${slugOf(t)} { --dsh-mem-tag-c: ${EXT_LIGHT[i % EXT_LIGHT.length]}; }`
+		).concat(
+		  HOST_MEMORY_TYPES.map(
+		    (t, i) => `body[data-ds-dark-theme] .dsh-mem-tag-${slugOf(t)} { --dsh-mem-tag-c: ${EXT_DARK[i % EXT_DARK.length]}; }`
+		  ),
+		  // 兜底桶固定中性灰：它代表“没归类”，不该带族色暗示。
+		  `.dsh-mem-tag-${UNCLASSIFIED_DIR} { --dsh-mem-tag-c: #8a93a1; }`,
+		  `body[data-ds-dark-theme] .dsh-mem-tag-${UNCLASSIFIED_DIR} { --dsh-mem-tag-c: #9aa4b2; }`
+		);
 		var COMPONENT_CSS = [
 		  // conic 角度要 @property 注册才能插值动画；不支持 @property 的浏览器里
 		  // var(--dsh-mem-angle) 无定义 → conic 层失效 → background 整条退化为无背景
@@ -452,6 +566,8 @@ var __defProp = Object.defineProperty;
 		  "body[data-ds-dark-theme] .dsh-mem-tag-work-fact { --dsh-mem-tag-c: #6cb2ff; }",
 		  "body[data-ds-dark-theme] .dsh-mem-tag-work-task { --dsh-mem-tag-c: #6fca74; }",
 		  "body[data-ds-dark-theme] .dsh-mem-tag-work-method { --dsh-mem-tag-c: #c297ff; }",
+		  // —— 扩展类别（宿主 29 类 + 兜底桶）：类名从真源派生，缺一个类就是“标签无色” ——
+		  ...EXT_TAG_RULES,
 		  // ── pill 边缘流光（品牌蓝族，chat/work/auto 三档共用；off 无）：border 区画旋转
 		  // conic 光带；内部必须用【不透明】底色盖住光带——半透明内层会让 conic 透进按钮
 		  // 内部干扰文字（实测事故）。不透明底 = 主题底混 3% 档位色（--dsh-mem-pill-tint
@@ -561,15 +677,22 @@ var __defProp = Object.defineProperty;
 		var import_react2 = require("react");
 		
 		// client/src/format.ts
-		var TYPE_LABELS = {
-		  persona: "画像偏好",
-		  episodic: "客观事件",
-		  instruction: "全局指令",
-		  work_fact: "工作事实",
-		  work_task: "工作任务",
-		  work_method: "工作方法",
-		  work_artifact: "工作资产"
-		};
+		var typeLabels = {};
+		function registerTypeCatalog(entries) {
+		  if (!entries || entries.length === 0) return;
+		  const next = { ...typeLabels };
+		  for (const e of entries) next[e.id] = e.label;
+		  typeLabels = next;
+		}
+		function typeLabel(type) {
+		  return typeLabels[type] || type;
+		}
+		function typeCatalogIds() {
+		  return Object.keys(typeLabels);
+		}
+		function tagClass(type) {
+		  return "dsh-mem-tag dsh-mem-tag-" + type.replace(/_/g, "-");
+		}
 		function fmtTime(iso) {
 		  if (!iso) return "-";
 		  try {
@@ -3789,15 +3912,6 @@ var __defProp = Object.defineProperty;
 		  if (r === "retired") return true;
 		  return void 0;
 		}
-		var TYPE_CHOICES = [
-		  "persona",
-		  "episodic",
-		  "instruction",
-		  "work_fact",
-		  "work_task",
-		  "work_method",
-		  "work_artifact"
-		];
 		var DELETE_LIMIT = 200;
 		function RecordsTab(props) {
 		  const rpc = props.rpc;
@@ -3854,6 +3968,7 @@ var __defProp = Object.defineProperty;
 		        setTruncated(!!v.truncated);
 		        if (v.scenes) setSceneOptions(v.scenes);
 		        if (v.wingCatalog) setHallCatalog(v.wingCatalog);
+		        if (v.typeCatalog) registerTypeCatalog(v.typeCatalog);
 		      }).catch((e) => {
 		        if (token !== seqRef.current) return;
 		        setLoading(false);
@@ -4007,8 +4122,8 @@ var __defProp = Object.defineProperty;
 		        {
 		          style: { maxWidth: 200 },
 		          options: [{ id: "", label: "全部类型" }].concat(
-		            TYPE_CHOICES.map((t) => {
-		              return { id: t, label: TYPE_LABELS[t] || t };
+		            (typeCatalogIds().length > 0 ? typeCatalogIds() : [...new Set(items.map((m) => m.type))]).map((t) => {
+		              return { id: t, label: typeLabel(t) };
 		            })
 		          ),
 		          value: typeFilter,
@@ -4216,7 +4331,7 @@ var __defProp = Object.defineProperty;
 		                  }
 		                }
 		              ),
-		              /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("span", { className: "dsh-mem-tag dsh-mem-tag-" + m.type, children: TYPE_LABELS[m.type] || m.type }),
+		              /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("span", { className: tagClass(m.type), children: typeLabel(m.type) }),
 		              m.hall ? /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("span", { className: "dsh-mem-tag dsh-mem-tag-work-fact", children: "Wing · " + (wingCatalog?.find((h) => h.id === m.hall)?.label || m.hall) }) : null,
 		              m.retired ? /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
 		                "span",
@@ -4608,7 +4723,10 @@ var __defProp = Object.defineProperty;
 		      loadAll();
 		      if (expandedRooms.has(slug)) {
 		        const rr = await rpc("dsh-memory/list-records", { tag: slug, limit: 10, retired: false });
-		        if (rr && rr.ok) setRoomRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+		        if (rr && rr.ok) {
+		          registerTypeCatalog(rr.value.typeCatalog);
+		          setRoomRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+		        }
 		      }
 		    } else setError(r && r.error ? r.error.message : "操作失败");
 		  });
@@ -4630,6 +4748,7 @@ var __defProp = Object.defineProperty;
 		    }
 		    const r = await rpc("dsh-memory/list-records", { tag: slug, limit: 10, retired: false });
 		    if (r && r.ok) {
+		      registerTypeCatalog(r.value.typeCatalog);
 		      const next = new Set(expandedRooms);
 		      next.add(slug);
 		      setExpandedRooms(next);
@@ -5034,7 +5153,7 @@ var __defProp = Object.defineProperty;
 		            ] }),
 		            expandedRooms.has(e.slug) ? /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("div", { style: { margin: "4px 0 2px", padding: "4px 8px", border: "1px dashed var(--dsh-mem-border)", borderRadius: 6 }, children: [
 		              (roomRecords[e.slug]?.items ?? []).map((it) => /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)("div", { style: { fontSize: 11, padding: "3px 0", borderBottom: "1px solid var(--dsh-mem-border)" }, children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: "dsh-mem-tag dsh-mem-tag-" + it.type, children: TYPE_LABELS[it.type] || it.type }),
+		                /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { className: tagClass(it.type), children: typeLabel(it.type) }),
 		                " ",
 		                /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("span", { style: S.muted, children: it.updatedAt ? fmtTime(it.updatedAt) : "" }),
 		                /* @__PURE__ */ (0, import_jsx_runtime19.jsx)("div", { style: { marginTop: 2, wordBreak: "break-all", color: "var(--dsh-mem-text-2)" }, children: it.content.length > 120 ? it.content.slice(0, 120) + "…" : it.content })
@@ -5235,7 +5354,10 @@ var __defProp = Object.defineProperty;
 		      loadAll();
 		      if (expanded.has(slug)) {
 		        const rr = await rpc("dsh-memory/list-records", { tag: slug, limit: 10, retired: false });
-		        if (rr && rr.ok) setRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+		        if (rr && rr.ok) {
+		          registerTypeCatalog(rr.value.typeCatalog);
+		          setRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+		        }
 		      }
 		    } else setError(r && r.error ? r.error.message : "操作失败");
 		  });
@@ -5264,6 +5386,7 @@ var __defProp = Object.defineProperty;
 		    }
 		    const r = await rpc("dsh-memory/list-records", { tag: slug, limit: 10, retired: false });
 		    if (r && r.ok) {
+		      registerTypeCatalog(r.value.typeCatalog);
 		      const next = new Set(expanded);
 		      next.add(slug);
 		      setExpanded(next);
@@ -5440,7 +5563,7 @@ var __defProp = Object.defineProperty;
 		        ] }),
 		        expanded.has(row2.slug) ? /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { style: { margin: "0 10px 6px", padding: "4px 8px", border: "1px dashed var(--dsh-mem-border)", borderRadius: 6 }, children: [
 		          (records[row2.slug]?.items ?? []).map((it) => /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { style: { fontSize: 11, padding: "3px 0", borderBottom: "1px solid var(--dsh-mem-border)" }, children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { className: "dsh-mem-tag dsh-mem-tag-" + it.type, children: TYPE_LABELS[it.type] || it.type }),
+		            /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { className: tagClass(it.type), children: typeLabel(it.type) }),
 		            " ",
 		            it.retired ? /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { style: { ...S.muted, color: "var(--dsh-mem-danger)" }, children: "[已退场]" }) : null,
 		            " ",
@@ -6051,7 +6174,10 @@ var __defProp = Object.defineProperty;
 		      const token = ++seq;
 		      rpc("dsh-memory/session-recalled", { sessionId }).then((r) => {
 		        if (!alive || token !== seq) return;
-		        if (r && r.ok && r.value) setRecords(r.value.records);
+		        if (r && r.ok && r.value) {
+		          registerTypeCatalog(r.value.typeCatalog);
+		          setRecords(r.value.records);
+		        }
 		      }).catch(() => {
 		      }).then(() => {
 		        if (alive) timer = setTimeout(tick, POLL_MS2);
@@ -6081,9 +6207,9 @@ var __defProp = Object.defineProperty;
 		        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		          "span",
 		          {
-		            className: "dsh-mem-tag dsh-mem-tag-" + r.type,
+		            className: tagClass(r.type),
 		            style: { flexShrink: 0, whiteSpace: "nowrap" },
-		            children: TYPE_LABELS[r.type] || r.type
+		            children: typeLabel(r.type)
 		          }
 		        ),
 		        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "dsh-mem-sinfo-val", style: r.retired === true ? STALE_TEXT_STYLE : textStyle, children: r.content }),
@@ -6112,7 +6238,7 @@ var __defProp = Object.defineProperty;
 		};
 		var STALE_TEXT_STYLE = { ...textStyle, textDecoration: "line-through" };
 		function rowTitle(r) {
-		  const head = "[" + (TYPE_LABELS[r.type] || r.type) + "] " + r.content;
+		  const head = "[" + typeLabel(r.type) + "] " + r.content;
 		  const sc = r.usageScenario && r.usageScenario.length > 0 ? "\n使用场景：" + r.usageScenario.join("；") : "";
 		  return head + sc;
 		}

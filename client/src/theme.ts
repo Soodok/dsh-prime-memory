@@ -14,6 +14,7 @@
  *     `html[data-dsh-mem-skin]` 属性（未传 skin 时回落到 skin.ts 的持久化偏好）。
  */
 import { effectiveSkin, getSkin } from './skin.js';
+import { HOST_MEMORY_TYPES, slugOf, UNCLASSIFIED_DIR } from '../../src/memory-types.js';
 
 export const THEME_STYLE_ID = 'dsh-mem-theme-style';
 
@@ -104,7 +105,26 @@ const DARK_TOK: string[] = [
 ];
 
 // ── 组件样式表（与皮肤无关，只引用 var()） ──
-const COMPONENT_CSS: string[] = [
+/**
+ * 扩展类别标签配色（pm-name-distill task_1.8）：类名由词表单一真源派生（`slugOf`），
+ * 颜色按 8 色相轮换——不再手抄一份类型→类的清单；新类型进词表即自动有 CSS 类，
+ * 不会出现“标签有字无色”。主线七类的既有配色不动。
+ */
+const EXT_LIGHT = ['#8a5a00', '#0757b4', '#116629', '#6f42c1', '#b43a6f', '#076f6b', '#7a5c00', '#4a6fa5'];
+const EXT_DARK = ['#e3b341', '#6cb2ff', '#6fca74', '#c297ff', '#f077b6', '#56d4c8', '#d9b64a', '#9db8e8'];
+const EXT_TAG_RULES: string[] = HOST_MEMORY_TYPES.map((t, i) =>
+  `.dsh-mem-tag-${slugOf(t)} { --dsh-mem-tag-c: ${EXT_LIGHT[i % EXT_LIGHT.length]}; }`,
+).concat(
+  HOST_MEMORY_TYPES.map((t, i) =>
+    `body[data-ds-dark-theme] .dsh-mem-tag-${slugOf(t)} { --dsh-mem-tag-c: ${EXT_DARK[i % EXT_DARK.length]}; }`,
+  ),
+  // 兜底桶固定中性灰：它代表“没归类”，不该带族色暗示。
+  `.dsh-mem-tag-${UNCLASSIFIED_DIR} { --dsh-mem-tag-c: #8a93a1; }`,
+  `body[data-ds-dark-theme] .dsh-mem-tag-${UNCLASSIFIED_DIR} { --dsh-mem-tag-c: #9aa4b2; }`,
+);
+
+/** 导出仅供用例（词表→CSS 类覆盖断言）；运行侧只用 `ensureThemeStyle`。 */
+export const COMPONENT_CSS: string[] = [
   // conic 角度要 @property 注册才能插值动画；不支持 @property 的浏览器里
   // var(--dsh-mem-angle) 无定义 → conic 层失效 → background 整条退化为无背景
   //（光带边框与内底一起消失，只剩文字色）。2026 常青浏览器均已支持，仅作记录。
@@ -210,6 +230,8 @@ const COMPONENT_CSS: string[] = [
   'body[data-ds-dark-theme] .dsh-mem-tag-work-fact { --dsh-mem-tag-c: #6cb2ff; }',
   'body[data-ds-dark-theme] .dsh-mem-tag-work-task { --dsh-mem-tag-c: #6fca74; }',
   'body[data-ds-dark-theme] .dsh-mem-tag-work-method { --dsh-mem-tag-c: #c297ff; }',
+  // —— 扩展类别（宿主 29 类 + 兜底桶）：类名从真源派生，缺一个类就是“标签无色” ——
+  ...EXT_TAG_RULES,
   // ── pill 边缘流光（品牌蓝族，chat/work/auto 三档共用；off 无）：border 区画旋转
   // conic 光带；内部必须用【不透明】底色盖住光带——半透明内层会让 conic 透进按钮
   // 内部干扰文字（实测事故）。不透明底 = 主题底混 3% 档位色（--dsh-mem-pill-tint

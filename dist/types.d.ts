@@ -1,9 +1,3 @@
-/**
- * 领域类型与词汇表(净室重写)。
- *
- * 覆盖:记忆族/档位、Hall 目录、L0/L1 记录形状、抽取产出与族判定三级兜底、
- * L2 场景摘要与 L1 检索命中。字段名与取值是磁盘/管线两侧的既定契约,不可更名。
- */
 /** 蒸馏 Prompt 家族:chat = 个人记忆(persona/episodic/instruction + 用户画像),work = 工作记忆(work_fact/work_task/work_method/work_artifact + Team Operating Doctrine)。 */
 export type MemoryFamily = 'chat' | 'work';
 /** 会话记忆档位:auto = 双族自动判定 | chat/work = 单族 | off = 本会话对记忆系统隐身。 */
@@ -46,7 +40,14 @@ export interface RoomCount {
     /** 人类可读名(注册表条目才有;面板 chip 可用 label 展示)。 */
     label?: string;
 }
-/** 记录族标签推断:work_* 前缀 → work,其余(含 auto 档兜底)→ chat。 */
+/**
+ * 记录族标签推断（pm-name-distill task_1.2）：查 `TYPE_FAMILY_MAP`（词表单一真源）。
+ *
+ * 旧实现是 `type.startsWith('work')` 前缀猜族——新词表里 `project_*`/`development_*`/
+ * `*_experience` 都是 work 族却不带 work 前缀，前缀判定会把它们静默归进 chat，
+ * 而 family 决定召回/浏览/去重的共享面。未知值仍回落旧前缀规则并 warn 一次（可观测，
+ * 不静默）。
+ */
 export declare function familyForType(type: string): MemoryFamily;
 /**
  * 记忆的持续性(时间轴第三维,与 createdAt/updatedAt 正交):

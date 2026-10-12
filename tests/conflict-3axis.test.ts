@@ -26,13 +26,14 @@ const sha1 = (s: string) => createHash('sha1').update(s, 'utf8').digest('hex');
 /**
  * golden 锚(task_a.7):关闭态**系统** prompt 的 sha1 常量。
  * 基线沿革:升级前 `445c89f` 实跑 → §B 防注入声明(memorax-absorb Wave 2)加入后重锚
- * (2026-09-28 实跑,长度: `auto` 2858 / `chat` 2132 / `work` 2495)。
+ * (2026-09-28 实跑) → pm-name-distill task_1.6 把 dedup 枚举串改为词表单一真源渲染
+ * （计划内变更）后重锚(2026-10-13 实跑,长度: `auto` 4926 / `chat` 3530 / `work` 3777)。
  * 三个 mode 各一条,替代原先的负式子串断言。
  */
 const SYSTEM_CLOSED_SHA1: Record<ExtractMode, string> = {
-  auto: '252b21238f437c875389098927db27d44807de49',
-  chat: 'ffd77753eac63dc98964e8629cb0268b7b1fb3cb',
-  work: 'bfdfedf6eb94c7fc07dd57ba43cb4af045395924',
+  auto: '7c49af36db6d2251386447064977995a0dfbe66e',
+  chat: '4ab4e11f7eba1f9a7fd579423049f506c37d3263',
+  work: '1c2a4c2f145294a7a1c3bfdac5513d9ecae5f67b',
 };
 
 function rec(

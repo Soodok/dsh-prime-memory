@@ -38,6 +38,39 @@ TYPE_CODES = {
     "wt": "work_task",
     "wm": "work_method",
     "wa": "work_artifact",
+    # —— 宿主分类·个人轴（pm-name-distill task_1.7，与 format.ts TYPE_CODES 一字不差）——
+    "ui": "user_info",
+    "uh": "user_hobby",
+    "uc": "user_communication",
+    "ub": "user_behavior",
+    # —— 宿主分类·项目轴 ——
+    "pi": "project_introduction",
+    "pt": "project_tech_stack",
+    "pg": "project_architecture",
+    "pb": "project_build_configuration",
+    "pq": "project_dependency_configuration",
+    "po": "project_ide_configuration",
+    "ps": "project_scm_configuration",
+    "pw": "project_environment_configuration",
+    "pl": "project_rule",
+    # —— 宿主分类·规范轴 ——
+    "ds": "development_code_specification",
+    "dp": "development_practice_specification",
+    "dv": "development_test_specification",
+    "dn": "development_comment_specification",
+    # —— 宿主分类·经验轴 ——
+    "tm": "task_summary_experience",
+    "dk": "task_breakdown_experience",
+    "df": "task_flow_experience",
+    "td": "task_experience",
+    "tl": "tool_experience",
+    "mp": "mcp_experience",
+    "sl": "skill_experience",
+    "lk": "learned_skill_experience",
+    "ek": "expert_experience",
+    "im": "important_decision_experience",
+    "cp": "common_pitfalls_experience",
+    "hf": "history_task_reference_files",
 }
 TYPE_FULL = {v: k for k, v in TYPE_CODES.items()}
 # 持续性:point 时点 / span 已结束区间 / open 仍在持续 / timeless 无时间性 / ? 未判定
@@ -266,7 +299,8 @@ def _validate_record_type_flags(b: Bundle, p: str, rec: dict) -> None:
         if rec["type"] in ("", "?"):
             b.warnings.append(f"{p}: 类型缺失,导入时将回落 episodic")
         else:
-            b.warnings.append(f"{p}: 非标准类型码 {rec['type']!r},将按原样透传")
+            # 口径与写侧 memory_add 一致（旧文案承诺"按原样透传"，写侧却静默抹平）
+            b.warnings.append(f"{p}: 非词表类型 {rec['type']!r},导入时将降级为 episodic(服务端记 warn)")
     for fld, val in (("cf", rec["cf"]), ("rw", rec["rw"])):
         if val not in ("0", "1", "?"):
             b.errors.append(f"{p}: {fld} 取值非法 {val!r}(仅 0/1/?)")

@@ -17,15 +17,19 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { isAbsolute, normalize, resolve, sep } from 'node:path';
 import { normText } from '../memport/format.js';
+import { memoryTypeDirs, UNCLASSIFIED_DIR } from '../memory-types.js';
 import { deriveName } from '../util/md-name.js';
 import { normalizeContentMd } from '../util/md-normalize.js';
 import { sanitizeFilename } from './scenes.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 
-/** 允许当目录名的 type 值（与面板 `TYPE_LABELS` 同集合；P4 换类别树时一并改）。 */
-export const MEMORY_TYPE_DIRS: ReadonlySet<string> = new Set([
-  'persona', 'episodic', 'instruction', 'work_fact', 'work_task', 'work_method', 'work_artifact',
-]);
+/**
+ * 允许当目录名的 type 值（pm-name-distill task_1.3：由词表单一真源派生，不再手抄）。
+ *
+ * 手抄的危害很具体：换词表不改这一处，新词表里的十余类会**静默落进兜底桶**——
+ * 不报错、不同步失败，只少目录树。
+ */
+export const MEMORY_TYPE_DIRS: ReadonlySet<string> = memoryTypeDirs();
 
 /**
  * 不在词表的 type 落到这个目录（P4.1 的**默认类**）。
@@ -34,7 +38,7 @@ export const MEMORY_TYPE_DIRS: ReadonlySet<string> = new Set([
  * 也绝不回填到 `rowToRecord`/upsert/metadata（F5 红线）。之所以不直接归进某个 `work_*`：
  * 那会把这批无类记录的 `family` 挑到 work 侧，而 family 决定共享面——等于静默改了可见性。
  */
-export const UNSORTED_DIR = 'unclassified';
+export const UNSORTED_DIR = UNCLASSIFIED_DIR;
 
 /** frontmatter 允许出现的键（用例断言键集**恰等于**它，防检索轴泄漏进文件）。 */
 export const FRONTMATTER_KEYS: readonly string[] = [

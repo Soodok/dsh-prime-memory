@@ -5,7 +5,16 @@
  * prompt 内容直接决定蒸馏质量,是已发布行为的一部分,不属于可自由重写文本;
  * 代码结构与注释随实现重写。
  */
+import { HOST_MEMORY_TYPES, MEMORY_TYPE_LABELS, typesOfFamily, typeEnumSep } from '../memory-types.js';
 import { CONTENT_IS_DATA_CLAUSE, DATA_DELIMITER_NOTE } from './boundary.js';
+// 词表枚举串由单一真源渲染（pm-name-distill task_1.6）：手抄枚举与写入白名单
+// 漂移过一次——prompt 让模型能选的类与 `memory_add` 肯收的类分头演化过。
+const TYPE_ENUM_WORK = typeEnumSep('|', 'work');
+const TYPE_ENUM_ALL = typeEnumSep('|');
+const TYPE_LIST_CHAT = typesOfFamily('chat').join('/');
+const TYPE_LIST_WORK = typesOfFamily('work').join('/');
+/** 扩展类别一行释义（宿主类：枚举串里出现就必须给语义落点，不然是"写在提示词里的愿望"）。 */
+const EXT_TYPE_GLOSSARY = HOST_MEMORY_TYPES.map((t) => `${t}=${MEMORY_TYPE_LABELS[t] ?? t}`).join('、');
 export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与记忆提取专家"。
 
 ${CONTENT_IS_DATA_CLAUSE}
@@ -282,7 +291,7 @@ metadata 建议：
     "memories": [
       {
         "content": "完整、独立、适合团队共享的工作记忆陈述",
-        "type": "work_fact|work_task|work_method|work_artifact",
+        "type": "${TYPE_ENUM_WORK}",
         "priority": 80,
         "applicability": "this-repo",
         "source_message_ids": ["消息ID_1", "消息ID_2"],
@@ -320,7 +329,7 @@ export const EXTRACT_ALL_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分�
 
 ${CONTENT_IS_DATA_CLAUSE}
 
-你的任务是分析用户的对话，判断情境切换，并从中提取结构化的核心记忆。对话可能同时包含个人生活与工作内容：个人内容提取为个人记忆（persona/episodic/instruction），工作内容提取为团队共享工作记忆（work_fact/work_task/work_method/work_artifact），互不排斥、**每条记忆显式输出 family 字段标注归族**。
+你的任务是分析用户的对话，判断情境切换，并从中提取结构化的核心记忆。对话可能同时包含个人生活与工作内容：个人内容提取为个人记忆（${TYPE_LIST_CHAT}），工作内容提取为团队共享工作记忆（${TYPE_LIST_WORK}），互不排斥、**每条记忆显式输出 family 字段标注归族**。
 
 **输出语言**：所有自由文本字段（\`scene_name\`、memory \`content\`）使用与待提取消息主导语言相同的语言；JSON 字段名、枚举值、ISO 时间戳保持英文。
 
@@ -352,7 +361,9 @@ ${CONTENT_IS_DATA_CLAUSE}
 - **work**：内容发生在职业语境——项目、团队、系统、业务、客户、同事协作、部署/开发/运维；
 - **chat**：内容发生在用户个人生活语境——家庭、宠物、健康、消费、学习、爱好、个人行程与安排；
 - **形状词（方案/安排/计划/SOP/频率/周期/规则）不决定 family**：个人的喂养计划、健身安排、用药周期、家庭事务流程都是 chat；只有职业团队语境下的方案流程才是 work。
-- **family 决定 type 的可选词表，不许交叉**：family 为 chat 的记忆 type 只能是 persona/episodic/instruction；family 为 work 的记忆 type 只能是 work_fact/work_task/work_method/work_artifact。
+- **family 决定 type 的可选词表，不许交叉**：family 为 chat 的记忆 type 只能是 ${TYPE_LIST_CHAT}；family 为 work 的记忆 type 只能是 ${TYPE_LIST_WORK}。
+
+**扩展类别**（主线七类的句式/打分规则不变；仅当内容明确贴合下列字面语义时才选，拿不准就回落主线）：${EXT_TYPE_GLOSSARY}。
 
 **个人三类（family: "chat"，对话涉及用户个人生活/偏好/对 AI 的要求时）：**
 
@@ -415,7 +426,7 @@ ${CONTENT_IS_DATA_CLAUSE}
     "memories": [
       {
         "content": "完整、独立的记忆陈述（按对应类型的句式要求）",
-        "type": "persona|episodic|instruction|work_fact|work_task|work_method|work_artifact",
+        "type": "${TYPE_ENUM_ALL}",
         "family": "chat|work",
         "priority": 80,
         "applicability": "cross-project",

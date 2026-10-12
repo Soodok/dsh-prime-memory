@@ -2,7 +2,7 @@
  *  room 下的记忆条目(▸ 展开浏览,默认收起)。归类到 hall 的拖拽/点选在「Hall」页。 */
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import type { UiRecord } from '../../../src/contract.js';
-import { fmtTime, TYPE_LABELS } from '../format.js';
+import { fmtTime, registerTypeCatalog, tagClass, typeLabel } from '../format.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 
@@ -170,7 +170,10 @@ export function RoomTab(props: { rpc: RpcFn }) {
         // 退场效果立现:该 room 正展开时刷新其活跃条目(退场后即"暂无记忆条目")
         if (expanded.has(slug)) {
           const rr = await rpc('dsh-memory/list-records', { tag: slug, limit: 10, retired: false });
-          if (rr && rr.ok) setRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+          if (rr && rr.ok) {
+            registerTypeCatalog(rr.value.typeCatalog);
+            setRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+          }
         }
       } else setError(r && r.error ? r.error.message : '操作失败');
     });
@@ -200,6 +203,7 @@ export function RoomTab(props: { rpc: RpcFn }) {
       }
       const r = await rpc('dsh-memory/list-records', { tag: slug, limit: 10, retired: false });
       if (r && r.ok) {
+        registerTypeCatalog(r.value.typeCatalog);
         const next = new Set(expanded);
         next.add(slug);
         setExpanded(next);
@@ -370,7 +374,7 @@ export function RoomTab(props: { rpc: RpcFn }) {
                 <div style={{ margin: '0 10px 6px', padding: '4px 8px', border: '1px dashed var(--dsh-mem-border)', borderRadius: 6 }}>
                   {(records[row.slug]?.items ?? []).map((it) => (
                     <div key={it.id} style={{ fontSize: 11, padding: '3px 0', borderBottom: '1px solid var(--dsh-mem-border)' }}>
-                      <span className={'dsh-mem-tag dsh-mem-tag-' + it.type}>{TYPE_LABELS[it.type] || it.type}</span>{' '}
+                      <span className={tagClass(it.type)}>{typeLabel(it.type)}</span>{' '}
                       {it.retired ? <span style={{ ...S.muted, color: 'var(--dsh-mem-danger)' }}>[已退场]</span> : null}{' '}
                       <span style={S.muted}>{it.updatedAt ? fmtTime(it.updatedAt) : ''}</span>
                       <div style={{ marginTop: 2, wordBreak: 'break-all', color: 'var(--dsh-mem-text-2)', opacity: it.retired ? 0.55 : 1 }}>

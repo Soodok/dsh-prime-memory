@@ -821,6 +821,11 @@ export interface ListRecordsResponse {
    * 降级为从已加载记录的 wing 值派生选项。
    */
   wingCatalog?: Array<{ id: string; label: string }>;
+  /**
+   * 类型词表目录（pm-name-distill task_1.5：词表单一真源随首屏下发，client 不再手抄
+   * `TYPE_LABELS`；仅 offset===0 时附带）。缺省（旧服务端）时 client 降级显示 type 原值。
+   */
+  typeCatalog?: Array<{ id: string; label: string }>;
 }
 
 /** dsh-memory/records-delete(面板高权限退场指定记忆;须 memoryMutate 开启)。 */
@@ -1466,6 +1471,8 @@ export interface SessionRecalledResponse {
   sessionId: string;
   /** 按召回插入序（旧→新）；复用 UiRecord（含 maturity/usageScenario）。 */
   records: UiRecord[];
+  /** 词表目录（pill 与面板同源取标签；见 `ListRecordsResponse.typeCatalog`）。 */
+  typeCatalog?: Array<{ id: string; label: string }>;
 }
 
 /**

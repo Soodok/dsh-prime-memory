@@ -13,7 +13,7 @@
  */
 import { useEffect, useState, type CSSProperties } from 'react';
 import type { UiRecord } from '../../../src/contract.js';
-import { TYPE_LABELS } from '../format.js';
+import { registerTypeCatalog, tagClass, typeLabel } from '../format.js';
 import type { RpcFn } from '../rpc.js';
 
 /** 最多展示条数：浮层只有 196px 宽，再多读不动（折叠为「+N 条更早」）。 */
@@ -39,7 +39,11 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
       rpc('dsh-memory/session-recalled', { sessionId })
         .then((r) => {
           if (!alive || token !== seq) return;
-          if (r && r.ok && r.value) setRecords(r.value.records);
+          if (r && r.ok && r.value) {
+            // 词表目录随响应下发（task_1.5）：pill 与面板同源取标签，不手抄。
+            registerTypeCatalog(r.value.typeCatalog);
+            setRecords(r.value.records);
+          }
         })
         .catch(() => {
           /* 瞬时失败：保留上一帧，不闪没 */
@@ -79,10 +83,10 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
           {shown.map((r) => (
             <div key={r.id} style={rowStyle} title={rowTitle(r)}>
               <span
-                className={'dsh-mem-tag dsh-mem-tag-' + r.type}
+                className={tagClass(r.type)}
                 style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
               >
-                {TYPE_LABELS[r.type] || r.type}
+                {typeLabel(r.type)}
               </span>
               <span className="dsh-mem-sinfo-val" style={r.retired === true ? STALE_TEXT_STYLE : textStyle}>
                 {r.content}
@@ -134,7 +138,7 @@ const STALE_TEXT_STYLE = { ...textStyle, textDecoration: 'line-through' } as CSS
 
 /** 悬停给全文与使用场景（正文行内被钳制，别让人只看到半句）。 */
 function rowTitle(r: UiRecord): string {
-  const head = '[' + (TYPE_LABELS[r.type] || r.type) + '] ' + r.content;
+  const head = '[' + typeLabel(r.type) + '] ' + r.content;
   const sc = r.usageScenario && r.usageScenario.length > 0 ? '\n使用场景：' + r.usageScenario.join('；') : '';
   return head + sc;
 }

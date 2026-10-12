@@ -1,5 +1,10 @@
 import type { MemoryLogger, MemoryRecord } from '../types.js';
-/** 允许当目录名的 type 值（与面板 `TYPE_LABELS` 同集合；P4 换类别树时一并改）。 */
+/**
+ * 允许当目录名的 type 值（pm-name-distill task_1.3：由词表单一真源派生，不再手抄）。
+ *
+ * 手抄的危害很具体：换词表不改这一处，新词表里的十余类会**静默落进兜底桶**——
+ * 不报错、不同步失败，只少目录树。
+ */
 export declare const MEMORY_TYPE_DIRS: ReadonlySet<string>;
 /**
  * 不在词表的 type 落到这个目录（P4.1 的**默认类**）。

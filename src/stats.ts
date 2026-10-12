@@ -20,6 +20,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-llm';
 import type {} from '@deepseek-ai/dsh-agent-default-model';
 import { EFFORT_CHOICES, resolveDataDir, type MemoryConfig } from './config.js';
+import { typeCatalogEntries } from './memory-types.js';
 import { effectiveCfg } from './pipeline/runner.js';
 import { emptyRecallStats, type RecallSessionStats } from './hooks/recall.js';
 import { buildRouteChain, decideSendableEffort, LAYER_DEFAULT_BUDGETS, layerChainOrNull, resolveModelContextWindow, resolveModelEfforts, resolveModelRoute } from './llm.js';
@@ -642,7 +643,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const p = (payload ?? {}) as { sessionId?: string };
       const sessionId = expectSessionId(p.sessionId);
       const ids = stores.recalled?.list(sessionId) ?? [];
-      if (ids.length === 0) return { sessionId, records: [] };
+      if (ids.length === 0) return { sessionId, records: [], typeCatalog: typeCatalogEntries() };
       const halfLife = effectiveCfg(cfg, live).recall?.decayHalfLifeDays ?? 0;
       const byId = new Map(stores.l1.getByIds(ids).map((r) => [r.id, r] as const));
       const records = ids
@@ -654,7 +655,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           userRelevance: stores.feedback?.meanOf(r.id) ?? null,
           userMark: stores.feedback?.lastOf(r.id) ?? null,
         }));
-      return { sessionId, records };
+      return { sessionId, records, typeCatalog: typeCatalogEntries() };
     }
 
     case 'dsh-memory/recall-feedback': {
@@ -1585,6 +1586,8 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         offset === 0
           ? [...WING_CATALOG.map((h) => ({ id: h.id, label: h.label })), { id: WING_FALLBACK, label: '跨域' }]
           : undefined;
+      // 类型词表目录随首屏下发（task_1.5：单一真源在 `memory-types.ts`，client 不手抄）。
+      const typeCatalog = offset === 0 ? typeCatalogEntries() : undefined;
       // 关键词路径:复用检索唯一缝(与召回同源),取回后做场景/Wing 过滤 + 手工分页。
       // 检索侧单次上限 200:分页窗口触达上限时显式标记 truncated(结果可能不完整)。
       if (p.query && p.query.trim()) {
@@ -1638,6 +1641,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           truncated: wanted > SEARCH_CAP,
           scenes: offset === 0 ? stores.l1.distinctScenes() : undefined,
           wingCatalog,
+          typeCatalog,
           usageSummary: stores.usage?.summary() ?? null,
         };
         return resp;
@@ -1662,6 +1666,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         truncated: false,
         scenes: offset === 0 ? stores.l1.distinctScenes() : undefined,
         wingCatalog,
+        typeCatalog,
         usageSummary: stores.usage?.summary() ?? null,
       };
       return resp;

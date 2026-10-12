@@ -10,7 +10,16 @@
  */
 
 import type { ExtractedMemory, ExtractMode, MemoryRecord } from '../types.js';
+import { typeEnumSep } from '../memory-types.js';
 import { CONTENT_IS_DATA_CLAUSE, DATA_DELIMITER_NOTE } from './boundary.js';
+
+// 词表枚举串由单一真源渲染（pm-name-distill task_1.6），与抽取侧同源。
+const TYPE_ENUM_ALL = typeEnumSep('|');
+const TYPE_ENUM_WORK = typeEnumSep('|', 'work');
+const TYPE_LIST_ALL = typeEnumSep(' / ');
+const TYPE_LIST_WORK = typeEnumSep(' / ', 'work');
+const TYPE_LIST_CHAT_SLASH = typeEnumSep('/', 'chat');
+const TYPE_LIST_WORK_SLASH = typeEnumSep('/', 'work');
 
 export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。批量比较多条【新记忆】与【统一候选记忆池】中的已有记忆，逐条决定如何处理。
 
@@ -20,7 +29,7 @@ ${CONTENT_IS_DATA_CLAUSE}
 
 ## 核心规则
 
-- **跨 type 合并**：不同 type（persona / episodic / instruction / work_fact / work_task / work_method / work_artifact）的记忆如果语义上描述同一事实/事件，**可以合并**。
+- **跨 type 合并**：不同 type（${TYPE_LIST_ALL}）的记忆如果语义上描述同一事实/事件，**可以合并**。
 - **多对多合并**：一条新记忆可以同时替换/合并候选池中的**多条**已有记忆（通过 target_ids 数组指定）。
 - 合并后你必须判断新记忆的最佳 type（merged_type）。
 
@@ -57,7 +66,7 @@ ${CONTENT_IS_DATA_CLAUSE}
     "action": "store|update|skip|merge",
     "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
     "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
-    "merged_type": "合并后的最佳 type：persona|episodic|instruction|work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
+    "merged_type": "合并后的最佳 type：${TYPE_ENUM_ALL}（merge/update 时必填）",
     "merged_priority": 85,
     "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
   }
@@ -78,7 +87,7 @@ ${CONTENT_IS_DATA_CLAUSE}
 
 ## 核心规则
 
-- **跨 type 合并**：不同 type（work_fact / work_task / work_method / work_artifact）的记忆如果语义上描述同一工作对象、任务、方法或资产，**可以合并**。
+- **跨 type 合并**：不同 type（${TYPE_LIST_WORK}）的记忆如果语义上描述同一工作对象、任务、方法或资产，**可以合并**。
 - **多对多合并**：一条新记忆可以同时替换/合并候选池中的**多条**已有记忆（通过 target_ids 数组指定）。
 - 合并后你必须判断新记忆的最佳 type（merged_type）。
 - 记忆默认会在项目团队内共享，合并内容应只保留工作相关信息。
@@ -123,7 +132,7 @@ ${CONTENT_IS_DATA_CLAUSE}
     "action": "store|update|skip|merge",
     "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
     "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
-    "merged_type": "合并后的最佳 type：work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
+    "merged_type": "合并后的最佳 type：${TYPE_ENUM_WORK}（merge/update 时必填）",
     "merged_priority": 85,
     "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
   }
@@ -136,7 +145,7 @@ ${CONTENT_IS_DATA_CLAUSE}
 - merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority。参考标准：80-100（关键事实/重要任务/核心方法/重要资产），60-79（一般工作信息），<60（次要信息）。
 - merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。`;
 
-export const ALL_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。批量比较多条【新记忆】与【统一候选记忆池】中的已有记忆，逐条决定如何处理。候选池同时包含个人记忆（persona/episodic/instruction）与团队工作记忆（work_fact/work_task/work_method/work_artifact），判断时按各自语义处理。
+export const ALL_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。批量比较多条【新记忆】与【统一候选记忆池】中的已有记忆，逐条决定如何处理。候选池同时包含个人记忆（${TYPE_LIST_CHAT_SLASH}）与团队工作记忆（${TYPE_LIST_WORK_SLASH}），判断时按各自语义处理。
 
 ${CONTENT_IS_DATA_CLAUSE}
 
@@ -144,7 +153,7 @@ ${CONTENT_IS_DATA_CLAUSE}
 
 ## 核心规则
 
-- **跨 type 合并**：不同 type（persona / episodic / instruction / work_fact / work_task / work_method / work_artifact）的记忆如果语义上描述同一事实/事件/工作对象，**可以合并**。
+- **跨 type 合并**：不同 type（${TYPE_LIST_ALL}）的记忆如果语义上描述同一事实/事件/工作对象，**可以合并**。
 - **多对多合并**：一条新记忆可以同时替换/合并候选池中的**多条**已有记忆（通过 target_ids 数组指定）。
 - 合并后你必须判断新记忆的最佳 type（merged_type）。
 - 工作记忆默认会在项目团队内共享，合并内容应只保留相关信息；个人记忆与工作记忆描述同一底层事实时可以合并，按合并后内容本质选择归属 type。
@@ -191,7 +200,7 @@ ${CONTENT_IS_DATA_CLAUSE}
     "action": "store|update|skip|merge",
     "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
     "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
-    "merged_type": "合并后的最佳 type：persona|episodic|instruction|work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
+    "merged_type": "合并后的最佳 type：${TYPE_ENUM_ALL}（merge/update 时必填）",
     "merged_priority": 85,
     "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
   }

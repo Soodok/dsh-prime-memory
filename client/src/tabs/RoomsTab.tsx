@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import type { RpcFn } from '../rpc.js';
 import type { UiRecord } from '../../../src/contract.js';
-import { fmtTime, TYPE_LABELS } from '../format.js';
+import { fmtTime, registerTypeCatalog, tagClass, typeLabel } from '../format.js';
 import { S } from '../styles.js';
 
 /** 大类归属(slug 首段;与 src/store/rooms-registry.ts majorOf 同义,客户端本地复刻
@@ -259,7 +259,10 @@ export function RoomsTab(props: { rpc: RpcFn }) {
         // 退场效果立现:该 room 正展开时刷新其活跃条目
         if (expandedRooms.has(slug)) {
           const rr = await rpc('dsh-memory/list-records', { tag: slug, limit: 10, retired: false });
-          if (rr && rr.ok) setRoomRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+          if (rr && rr.ok) {
+            registerTypeCatalog(rr.value.typeCatalog);
+            setRoomRecords((m) => ({ ...m, [slug]: { items: rr.value.items, total: rr.value.total ?? null } }));
+          }
         }
       } else setError(r && r.error ? r.error.message : '操作失败');
     });
@@ -286,6 +289,7 @@ export function RoomsTab(props: { rpc: RpcFn }) {
       }
       const r = await rpc('dsh-memory/list-records', { tag: slug, limit: 10, retired: false });
       if (r && r.ok) {
+        registerTypeCatalog(r.value.typeCatalog);
         const next = new Set(expandedRooms);
         next.add(slug);
         setExpandedRooms(next);
@@ -643,7 +647,7 @@ export function RoomsTab(props: { rpc: RpcFn }) {
                     <div style={{ margin: '4px 0 2px', padding: '4px 8px', border: '1px dashed var(--dsh-mem-border)', borderRadius: 6 }}>
                       {(roomRecords[e.slug]?.items ?? []).map((it) => (
                         <div key={it.id} style={{ fontSize: 11, padding: '3px 0', borderBottom: '1px solid var(--dsh-mem-border)' }}>
-                          <span className={'dsh-mem-tag dsh-mem-tag-' + it.type}>{TYPE_LABELS[it.type] || it.type}</span>{' '}
+                          <span className={tagClass(it.type)}>{typeLabel(it.type)}</span>{' '}
                           <span style={S.muted}>{it.updatedAt ? fmtTime(it.updatedAt) : ''}</span>
                           <div style={{ marginTop: 2, wordBreak: 'break-all', color: 'var(--dsh-mem-text-2)' }}>
                             {it.content.length > 120 ? it.content.slice(0, 120) + '…' : it.content}

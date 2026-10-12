@@ -1,7 +1,7 @@
 /** Tab：L1 记忆浏览器（搜索/筛选/分页 + 展开详情 + 高权限**退场(软删)** + 已退场区恢复）。 */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { ListRecordsRequest, RetiredRecordView, UiRecord } from '../../../src/contract.js';
-import { TYPE_LABELS, fmtTime } from '../format.js';
+import { fmtTime, registerTypeCatalog, tagClass, typeCatalogIds, typeLabel } from '../format.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NSel, type NSelOption } from '../ui/NSel.js';
@@ -27,16 +27,8 @@ function retiredSelOf(r: '' | 'active' | 'retired'): boolean | undefined {
   return undefined;
 }
 
-// 两族混合视图：筛选器提供全部 7 种类型
-const TYPE_CHOICES = [
-  'persona',
-  'episodic',
-  'instruction',
-  'work_fact',
-  'work_task',
-  'work_method',
-  'work_artifact',
-];
+// 两族混合视图：筛选器选项来自服务端下发的词表目录（task_1.5，不再手抄类型串；
+// 首屏未到/旧服务端时从已加载记录的 type 派生，照 wingCatalog 的既有降级范式）。
 
 // Hall 属性通道筛选项(R8 单一事实源):随 list-records 首屏由服务端下发(8 角 + general 跨域),
 // client 不再手抄词表。下发缺失(旧服务端)时降级为从已加载记录的 wing 值派生选项(只显示已有标签)。
@@ -114,6 +106,7 @@ export function RecordsTab(props: { rpc: RpcFn }) {
           setTruncated(!!v.truncated);
           if (v.scenes) setSceneOptions(v.scenes);
           if (v.wingCatalog) setHallCatalog(v.wingCatalog);
+          if (v.typeCatalog) registerTypeCatalog(v.typeCatalog);
         })
         .catch((e: unknown) => {
           if (token !== seqRef.current) return;
@@ -305,8 +298,8 @@ export function RecordsTab(props: { rpc: RpcFn }) {
         <NSel
           style={{ maxWidth: 200 }}
           options={([{ id: '', label: '全部类型' }] as NSelOption[]).concat(
-            TYPE_CHOICES.map((t) => {
-              return { id: t, label: TYPE_LABELS[t] || t };
+            (typeCatalogIds().length > 0 ? typeCatalogIds() : [...new Set(items.map((m) => m.type))]).map((t) => {
+              return { id: t, label: typeLabel(t) };
             }),
           )}
           value={typeFilter}
@@ -508,7 +501,7 @@ export function RecordsTab(props: { rpc: RpcFn }) {
                     toggleSel(m.id);
                   }}
                 />
-                <span className={'dsh-mem-tag dsh-mem-tag-' + m.type}>{TYPE_LABELS[m.type] || m.type}</span>
+                <span className={tagClass(m.type)}>{typeLabel(m.type)}</span>
                 {m.hall ? (
                   <span className="dsh-mem-tag dsh-mem-tag-work-fact">
                     {"Wing · " + (wingCatalog?.find((h) => h.id === m.hall)?.label || m.hall)}

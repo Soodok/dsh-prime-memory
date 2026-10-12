@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import type { Context } from '@deepseek-ai/cordis';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { MemoryConfig } from '../config.js';
+import { DOWNGRADE_TARGET, familyOf, isKnownType, typeEnumSep } from '../memory-types.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { RuminateController } from '../pipeline/ruminate.js';
 import type { GraphStore } from '../store/graph-store.js';
@@ -229,7 +230,7 @@ export function registerMemoryTools(
       parameters: {
         query: { type: 'string', required: true, description: '搜索查询文本(自然语言)' },
         limit: { type: 'number', description: '最大返回条数(默认 5)' },
-        type: { type: 'string', description: '按记忆类型过滤(如 persona/episodic/instruction/work_fact/work_task/work_method/work_artifact)' },
+        type: { type: 'string', description: `按记忆类型过滤(词表 ${typeEnumSep('/')})` },
       },
       output: {
         schema: {
@@ -528,7 +529,12 @@ export function registerMemoryTools(
 
   // ── 写删工具(高权限门控):memory_add / memory_delete ──
   const MUTATE_OFF_NOTICE = '记忆写删未开放:请在记忆库面板开启「高权限模式」后,模型才能写入/删除记忆。';
-  const ADD_TYPES = ['persona', 'episodic', 'instruction', 'work_fact', 'work_task', 'work_method', 'work_artifact'];
+  /**
+   * 非词表 type 的降级台账（pm-name-distill task_1.4）。旧实现把外部分类**静默改写**成
+   * `episodic`，而 memport 文案却承诺“按原样透传”——两套口径对同一件事相反。
+   * 现在降级仍发生（写入面需要一个合法值），但**可观测**：每个不同值 warn 一次并计数。
+   */
+  const addTypeDowngrades = new Set<string>();
   const newMemId = () => 'mem-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 
   // ── 工具刷写的公共装配(时间轴 + 溯源 + 冲突标记) ──
@@ -590,8 +596,19 @@ export function registerMemoryTools(
     sourceId?: string,
   ): MemoryRecord {
     const content = String(item.content ?? '').trim();
-    const type = ADD_TYPES.includes(String(item.type ?? '')) ? String(item.type) : 'episodic';
-    const family: MemoryFamily = type.startsWith('work') ? 'work' : 'chat';
+    const rawType = String(item.type ?? '').trim();
+    // 白名单判据来自词表单一真源；非词表值降级为 DOWNGRADE_TARGET 并留痕（不静默）。
+    let type = rawType;
+    if (!isKnownType(rawType)) {
+      type = DOWNGRADE_TARGET;
+      if (rawType.length > 0 && !addTypeDowngrades.has(rawType)) {
+        addTypeDowngrades.add(rawType);
+        logger.warn(`[memory] memory_add/import type '${rawType}' 不在词表,已降级为 '${DOWNGRADE_TARGET}'(同值不再重复提醒)`);
+      }
+    }
+    // 族判定不再 `startsWith('work')` 内联猜——`project_*`/`development_*`/`*_experience`
+    // 都是 work 族却不带 work 前缀，猜错的族会静默改这批记录的共享面。
+    const family: MemoryFamily = familyOf(type);
     const validFrom = parseTime(item.valid_from);
     const validTo = parseTime(item.valid_to);
     const persistence: Persistence | undefined = normPersistence(item.persistence);
@@ -638,7 +655,7 @@ export function registerMemoryTools(
     type: {
       type: 'string',
       description:
-        '记忆类型(persona/episodic/instruction/work_fact/work_task/work_method/work_artifact;缺省 episodic)',
+        `记忆类型(${typeEnumSep('/')};缺省 ${DOWNGRADE_TARGET})`,
     },
     hall: {
       type: 'string',
