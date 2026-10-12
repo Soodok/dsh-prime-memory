@@ -3,7 +3,7 @@ import type { GraphNodeSearchResult } from '../graph/types.js';
 import type { L1Receipt, ReceiptQuery } from './receipts.js';
 import type { ConflictClaimGroup, ConflictPair, ConflictRejected, ConflictResolution, ConflictType } from './conflicts.js';
 import { type SupersedeInfo } from './supersede.js';
-import { type ExportThenPurgeResult, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
+import { type ExportThenPurgeResult, type PurgeOptions, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
 import { type EmbeddingService } from './embedding.js';
 import { type L1MetaLite, type MemoryDb } from './sqlite.js';
 export type RecallStrategy = 'keyword' | 'embedding' | 'hybrid';
@@ -275,7 +275,7 @@ export declare class L1Store {
      * 门禁本体在 `l1-snapshot.exportThenPurge`(与"重建前必快照"同一套设施);
      * 这里只把 L1Store 已知的 dataDir 与 logger 接上去,避免端点层自己去推路径。
      */
-    purgeRetired(ids: string[], reason: string): Promise<ExportThenPurgeResult>;
+    purgeRetired(ids: string[], reason: string, opts?: PurgeOptions): Promise<ExportThenPurgeResult>;
     /** 可用快照列表(按时间倒序;面板/工具据此选一份来恢复)。 */
     listSnapshots(opts?: {
         limit?: number;

@@ -61,6 +61,7 @@ import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
 import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
 import { disableProjectionFile } from './store/memory-md-disable.js';
+import { collectProjectionFiles } from './store/memory-md-archive.js';
 import { syncFromFiles } from './pipeline/md-sync.js';
 
 const require = createRequire(import.meta.url);
@@ -1788,6 +1789,14 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         }
       }
       if (dryRun) {
+        // 待删清单要给人看：`targets` 只是计数，人无法从计数判断“这批是不是该删的那批”。
+        // 取前 50 条预览（全量列表会把面板撑爆，而判据只需抽看）。
+        const preview = stores.l1.getByIds(targets.slice(0, 50)).map((r) => ({
+          id: r.id,
+          name: r.name ?? '',
+          type: r.type,
+          retiredAt: r.validTo === undefined ? '' : new Date(r.validTo).toISOString(),
+        }));
         const resp: CleanupRetiredResponse = {
           dryRun: true,
           targets: targets.length,
@@ -1796,6 +1805,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           dir: '',
           name: '',
           diffs: [],
+          items: preview,
         };
         return resp;
       }
@@ -1803,7 +1813,14 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         const resp: CleanupRetiredResponse = { dryRun: false, targets: 0, purged: 0, aborted: false, dir: '', name: '', diffs: [] };
         return resp;
       }
-      const r = await stores.l1.purgeRetired(targets, 'cleanup-retired');
+      // 删前先把该批记录抓在手里：删完再读就什么都读不到了（归档正文与预览清单都要用它们）。
+      const purgeRecords = stores.l1.getByIds(targets);
+      // N12：投射面开着时把该批的投射文件（含 `.disable`）一并收进快照目录。
+      // 关着时 `files` 为 undefined ⇒ `exportThenPurge` 行为与改动前逐字一致。
+      const files = cfg.memExport?.enabled === true
+        ? await collectProjectionFiles(purgeRecords, cfg.memExport.root, deps.dataDir, deps.logger)
+        : undefined;
+      const r = await stores.l1.purgeRetired(targets, 'cleanup-retired', { files });
       const resp: CleanupRetiredResponse = {
         dryRun: false,
         targets: targets.length,
@@ -1812,6 +1829,15 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         dir: r.dir,
         name: r.name,
         diffs: r.diffs,
+        otherChanged: r.otherChanged,
+        archiveMd: r.archiveMd,
+        files: r.files,
+        items: purgeRecords.slice(0, 50).map((x) => ({
+          id: x.id,
+          name: x.name ?? '',
+          type: x.type,
+          retiredAt: x.validTo === undefined ? '' : new Date(x.validTo).toISOString(),
+        })),
       };
       return resp;
     }

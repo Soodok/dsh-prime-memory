@@ -33,6 +33,7 @@
  * 等于把证据链悄悄拆了。这条有专门用例。
  */
 import { createHash } from 'node:crypto';
+import { moveProjectionFiles, writeArchiveMarkdown, type ArchiveFileOutcome, type FilesByRecord } from './memory-md-archive.js';
 import { readdir } from 'node:fs/promises';
 import { atomicWriteJson, readJsonStrict } from '../util/io.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
@@ -515,6 +516,31 @@ export interface ExportThenPurgeResult {
   purged: number
   /** 校验差异(仅 aborted 时非空)。 */
   diffs: string[]
+  /**
+   * 本批之外发生漂移的记录数(仅计数、**不中止**)。
+   *
+   * 旧实现拿整库哈希当门禁：并发蒸馏/另一处写入改过任何一条与本批无关的记录，
+   * 本次清理就会永远中止（而它要删的那批逐字未动、完全可恢复）。漂移信息仍要报，
+   * 但它不是删除本批的安全障碍。
+   */
+  otherChanged: number
+  /** 归档正文路径（未写 = 空串）。 */
+  archiveMd: string
+  /** 投射文件搬运计数（N12）。 */
+  files: ArchiveFileOutcome
+}
+
+/** 清理时的可选动作（P3）。 */
+export interface PurgeOptions {
+  /**
+   * 投射文件映射（由 `collectProjectionFiles` 产出）。
+   *
+   * **不传 = 只删库，行为与改动前逐字一致**——投射面默认关，归档搬运不能变成它的前置条
+   * 件。传了就在全部门禁通过后把文件搬进快照目录，失败只 warn。
+   */
+  files?: FilesByRecord
+  /** 是否写 `retired.md` 归档正文（默认 true）。 */
+  archiveMd?: boolean
 }
 
 /**
@@ -537,8 +563,10 @@ export async function exportThenPurge(
   reason: string,
   logger?: { info: (m: string) => void; warn: (m: string) => void },
   now: Date = new Date(),
+  opts: PurgeOptions = {},
 ): Promise<ExportThenPurgeResult> {
-  if (ids.length === 0) return { ok: true, aborted: false, dir: '', name: '', purged: 0, diffs: [] };
+  const empty: ArchiveFileOutcome = { moved: 0, failed: 0, absent: 0 };
+  if (ids.length === 0) return { ok: true, aborted: false, dir: '', name: '', purged: 0, diffs: [], otherChanged: 0, archiveMd: '', files: empty };
 
   let dir = '';
   let name = '';
@@ -549,16 +577,55 @@ export async function exportThenPurge(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.warn(`[memory] 清理中止:快照写入失败(${msg})——未删除任何记录`);
-    return { ok: false, aborted: true, dir, name, purged: 0, diffs: [`快照写入失败:${msg}`] };
+    return { ok: false, aborted: true, dir, name, purged: 0, diffs: [`快照写入失败:${msg}`], otherChanged: 0, archiveMd: '', files: empty };
   }
 
-  const verdict = await verifySnapshot(db, dir);
-  if (!verdict.ok) {
-    logger?.warn(`[memory] 清理中止:快照校验未通过(${verdict.diffs.join(';')})——未删除任何记录`);
-    return { ok: false, aborted: true, dir, name, purged: 0, diffs: verdict.diffs };
+  // 门禁第二半——**批次级投影**。不再拿整库哈希当门禁：那会把“本批逐字未动、但库里有
+  // 别的东西被并发改过”误判成不安全，而事实恰好相反——要删的那批在快照里完整可信，
+  // 删错了能原样回灌。整库漂移仍计数（它是要给人看的信息），但它不拦住删除。
+  let subset: MemoryRecord[] = [];
+  let otherChanged = 0;
+  try {
+    const want = new Set(ids);
+    const snapAll = await readSnapshotRecords(dir);
+    subset = snapAll.filter((r) => want.has(r.id));
+    const current = listAllL1(db);
+    const curSubset = current.filter((r) => want.has(r.id));
+    const snapRest = snapAll.filter((r) => !want.has(r.id));
+    const curRest = current.filter((r) => !want.has(r.id));
+    otherChanged = hashRecords(snapRest) === hashRecords(curRest) ? 0 : curRest.length;
+    const diffs: string[] = [];
+    if (subset.length !== want.size) diffs.push(`快照里本批只有 ${subset.length}/${want.size} 条`);
+    if (hashRecords(subset) !== hashRecords(curSubset)) diffs.push('本批内容与快照不一致(快照后这批被改过)');
+    if (diffs.length > 0) {
+      logger?.warn(`[memory] 清理中止:批次校验未通过(${diffs.join(';')})——未删除任何记录`);
+      return { ok: false, aborted: true, dir, name, purged: 0, diffs, otherChanged, archiveMd: '', files: empty };
+    }
+    if (otherChanged > 0) logger?.warn(`[memory] 清理放行:本批之外有 ${otherChanged} 条处于差异状态(不影响本批可恢复性)`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.warn(`[memory] 清理中止:快照读回失败(${msg})——未删除任何记录`);
+    return { ok: false, aborted: true, dir, name, purged: 0, diffs: [`快照读回失败:${msg}`], otherChanged, files: empty, archiveMd: '' };
   }
 
   const purged = db.deleteL1Batch([...ids]);
   logger?.info(`[memory] 已物理清理 ${purged} 条已退场记录(快照:${dir})`);
-  return { ok: true, aborted: false, dir, name, purged, diffs: [] };
+
+  // 归档两面：先写给人读的正文，再搬投射文件。两者失败都**不回滚已完成的删除**
+  // （不对称的方向特别重要：文件可重生成，库删了不可逆，而快照已经先落盘了）。
+  let archiveMd = '';
+  if (opts.archiveMd !== false) {
+    try {
+      archiveMd = await writeArchiveMarkdown(dir, subset, { reason, at: now });
+    } catch (err) {
+      logger?.warn(`[memory] 归档正文写入失败(记录已删，快照仍在): ${dir} - ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const files = opts.files === undefined
+    ? empty
+    : await moveProjectionFiles(dir, subset, opts.files, logger).catch((err: unknown) => {
+        logger?.warn(`[memory] 归档搬运异常(文件留在原地): ${err instanceof Error ? err.message : String(err)}`);
+        return empty;
+      });
+  return { ok: true, aborted: false, dir, name, purged, diffs: [], otherChanged, archiveMd, files };
 }

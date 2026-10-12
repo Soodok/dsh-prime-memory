@@ -888,6 +888,19 @@ export interface CleanupRetiredRequest {
 }
 export interface CleanupRetiredResponse {
   dryRun: boolean;
+  /**
+   * 待删/已删清单预览（最多 50 条）。
+   *
+   * `targets` 只是一个计数，人无法从计数判断“这批是不是该删的那批”——物理删除不可逆，
+   * 干跑报告必须能抽看内容。取前 50 条而不是全量：全量会把面板撑爆，而判据只需抽看。
+   */
+  items?: Array<{ id: string; name: string; type: string; retiredAt: string }>;
+  /** 本批之外发生漂移的记录数（只计数、**不中止**）。 */
+  otherChanged?: number;
+  /** 归档正文 `retired.md` 路径（未写 = 空串）。 */
+  archiveMd?: string;
+  /** 投射文件搬运计数（N12；投射面关着时全 0）。 */
+  files?: { moved: number; failed: number; absent: number };
   /** 本次涉及(干跑)或实际处理(真跑)的条数。 */
   targets: number;
   /** 真正物理删除的条数(干跑恒为 0;中止恒为 0)。 */
