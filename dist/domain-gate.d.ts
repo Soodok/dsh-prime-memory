@@ -55,3 +55,14 @@ export declare function sortByDomainWeight<T extends {
 export declare function sortByUsageScenario<T extends {
     id: string;
 }>(hits: readonly T[], scenariosOf: (id: string) => readonly string[], query: string): T[];
+/**
+ * 人工打分参与排序（纯重排、**score 不改写**）：4/5 上浮、0/1/2 下沉。
+ *
+ * 三条约束：
+ * - 同档内保持进入顺序（稳定排序），所以不会推翻 scopeFence / 场景细排的结果；
+ * - **未打分与 3 分同为中性**（fail-open），全部未打分时输出与输入逐字同序；
+ * - 判据是**最近一笔**而非均值——用户改主意的路径必须存在（先 5 后 0 应当下沉）。
+ */
+export declare function sortByHumanMark<T extends {
+    id: string;
+}>(hits: readonly T[], markOf: (id: string) => number | undefined): T[];

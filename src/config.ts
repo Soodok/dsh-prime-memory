@@ -148,6 +148,16 @@ export interface MemoryConfig {
     enabled: boolean;
     /** -1 之后下一轮向模型声明“这条已退场”(一次性注入，取走即离队)。 */
     announce: boolean;
+    /**
+     * 打分参与召回排序：4/5 上浮、0/1/2 下沉（纯重排，**score 不改写**，未打分保持原序）。
+     * 这是 0/1/2 的常规出口：不相关就排到注不上，而不是从库里消失。
+     */
+    affectRank: boolean;
+    /**
+     * 硬门：最近一笔是 0 的记录**不再被注入**（不退场，再点 1..5 即回来）。
+     * 默认关——低分已由上面的沉底表达；要“误点不致命”的口径就别开。
+     */
+    excludeZero: boolean;
   };
   recall: {
     enabled: boolean;
@@ -429,6 +439,9 @@ export const memorySchema = Schema.object({
   recallFeedback: Schema.object({
     enabled: Schema.boolean().default(true),
     announce: Schema.boolean().default(true),
+    // 低分沉底/高分上浮默认开（这是打分的常规出口）；0 分硬剔除默认关。
+    affectRank: Schema.boolean().default(true),
+    excludeZero: Schema.boolean().default(false),
   }),
   recall: Schema.object({
     enabled: Schema.boolean().default(true),

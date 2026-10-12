@@ -9,6 +9,7 @@
  * 可解释性:每次召回把 8 个域权重写进日志(可读出),权重计算是纯函数、可回归。
  */
 import { WING_FALLBACK } from './types.js';
+import { markSignal } from './util/maturity.js';
 
 /** 8 条域锚文本(单一事实源):一段描述该域典型内容的短文本,供向量化。
  *  keywords 是嵌入关闭时的关键词降级匹配词表(命中任一 = 该域相关)。 */
@@ -208,5 +209,23 @@ export function sortByUsageScenario<T extends { id: string }>(
   return hits
     .map((h, i) => ({ h, i, m: matchOf(h.id) }))
     .sort((a, b) => b.m - a.m || a.i - b.i)
+    .map((x) => x.h);
+}
+
+/**
+ * 人工打分参与排序（纯重排、**score 不改写**）：4/5 上浮、0/1/2 下沉。
+ *
+ * 三条约束：
+ * - 同档内保持进入顺序（稳定排序），所以不会推翻 scopeFence / 场景细排的结果；
+ * - **未打分与 3 分同为中性**（fail-open），全部未打分时输出与输入逐字同序；
+ * - 判据是**最近一笔**而非均值——用户改主意的路径必须存在（先 5 后 0 应当下沉）。
+ */
+export function sortByHumanMark<T extends { id: string }>(
+  hits: readonly T[],
+  markOf: (id: string) => number | undefined,
+): T[] {
+  return hits
+    .map((h, i) => ({ h, i, s: markSignal(markOf(h.id)) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
     .map((x) => x.h);
 }

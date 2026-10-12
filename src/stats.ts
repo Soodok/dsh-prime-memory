@@ -639,6 +639,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           agingWeight: agingWeightOf(r.updatedAt, halfLife),
           usage: stores.usage?.get(r.id) ?? null,
           userRelevance: stores.feedback?.meanOf(r.id) ?? null,
+          userMark: stores.feedback?.lastOf(r.id) ?? null,
         }));
       return { sessionId, records };
     }
@@ -1485,6 +1486,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
                 agingWeight: agingWeightOf(updatedById.get(h.id), stores.l1.decayHalfLife),
                 usage: stores.usage?.get(h.id) ?? null,
                 userRelevance: stores.feedback?.meanOf(h.id) ?? null,
+                userMark: stores.feedback?.lastOf(h.id) ?? null,
               },
             ),
           ),
@@ -1508,6 +1510,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
               agingWeight: agingWeightOf(r.updatedAt, stores.l1.decayHalfLife),
               usage: stores.usage?.get(r.id) ?? null,
               userRelevance: stores.feedback?.meanOf(r.id) ?? null,
+              userMark: stores.feedback?.lastOf(r.id) ?? null,
             },
           ),
         ),
@@ -1553,7 +1556,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       // cfg.conflictFreeze.enabled —— 面板开关写的是 live,而部署静态值恒 false,
       // 于是开关已开、settings.yaml 已落 true,本页仍报"矛盾冻结未开启"。
       return listConflictPairs(
-        { l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true, usage: stores.usage, decayHalfLifeDays: effectiveCfg(cfg, live).recall?.decayHalfLifeDays },
+        { l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true, usage: stores.usage, decayHalfLifeDays: effectiveCfg(cfg, live).recall?.decayHalfLifeDays, feedback: stores.feedback },
         { limit: Number(p.limit) || undefined },
       );
     }
@@ -2157,6 +2160,8 @@ export function hitToUiRecord(
   usage?: { attempts: number; used: number; lastAttemptAt: number | null; lastUsedAt: number | null } | null;
   /** 人给的相关度均值(0..5);未打分 = 不传(字段缺席,不是 0)。 */
   userRelevance?: number | null;
+  /** 人给的**最近一笔**打分(-1..5);成熟度只吃这一笔,不吃均值。 */
+  userMark?: number | null;
 }): UiRecord {
   const retired = r.validTo !== undefined;
   const mark = retired ? readSupersedeMarker(r.metadata) : undefined;
@@ -2185,8 +2190,13 @@ export function hitToUiRecord(
     retiredReason: retired ? (mark?.reason ?? 'unknown') : null,
     agingWeight: extra?.agingWeight ?? null,
     usage: extra?.usage ?? null,
-    // G3 成熟度：读时派生（priority + used + 老化），无额外端点/存储。
-    maturity: computeMaturity({ priority: r.priority ?? 60, usage: extra?.usage ?? null, agingWeight: extra?.agingWeight ?? null }),
+    // G3 成熟度：读时派生（priority + used + 老化 + 人工最近一笔），无额外端点/存储。
+    maturity: computeMaturity({
+      priority: r.priority ?? 60,
+      usage: extra?.usage ?? null,
+      agingWeight: extra?.agingWeight ?? null,
+      mark: extra?.userMark ?? null,
+    }),
     // G1 使用场景：从命名空间保留键读出（功能关/无键 → undefined）。
     usageScenario: Array.isArray(r.metadata?.dsh_usage_scenario) ? (r.metadata?.dsh_usage_scenario as string[]) : undefined,
     // 人给相关度均值：读时从 sidecar 派生（不进存储/快照）；未打分 → 字段缺席。

@@ -420,6 +420,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 agingWeight: agingWeightOf(r.updatedAt, halfLife),
                 usage: stores.usage?.get(r.id) ?? null,
                 userRelevance: stores.feedback?.meanOf(r.id) ?? null,
+                userMark: stores.feedback?.lastOf(r.id) ?? null,
             }));
             return { sessionId, records };
         }
@@ -1278,6 +1279,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                         agingWeight: agingWeightOf(updatedById.get(h.id), stores.l1.decayHalfLife),
                         usage: stores.usage?.get(h.id) ?? null,
                         userRelevance: stores.feedback?.meanOf(h.id) ?? null,
+                        userMark: stores.feedback?.lastOf(h.id) ?? null,
                     })),
                     hasMore: filtered.length > offset + limit,
                     total: null,
@@ -1296,6 +1298,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     agingWeight: agingWeightOf(r.updatedAt, stores.l1.decayHalfLife),
                     usage: stores.usage?.get(r.id) ?? null,
                     userRelevance: stores.feedback?.meanOf(r.id) ?? null,
+                    userMark: stores.feedback?.lastOf(r.id) ?? null,
                 })),
                 hasMore: offset + items.length < total,
                 total,
@@ -1337,7 +1340,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
             // (live.conflictFreeze 覆盖静态 cfg.conflictFreeze.enabled)。此前这里直接读
             // cfg.conflictFreeze.enabled —— 面板开关写的是 live,而部署静态值恒 false,
             // 于是开关已开、settings.yaml 已落 true,本页仍报"矛盾冻结未开启"。
-            return listConflictPairs({ l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true, usage: stores.usage, decayHalfLifeDays: effectiveCfg(cfg, live).recall?.decayHalfLifeDays }, { limit: Number(p.limit) || undefined });
+            return listConflictPairs({ l1: stores.l1, conflictFreezeEnabled: effectiveCfg(cfg, live).conflictFreeze?.enabled === true, usage: stores.usage, decayHalfLifeDays: effectiveCfg(cfg, live).recall?.decayHalfLifeDays, feedback: stores.feedback }, { limit: Number(p.limit) || undefined });
         }
         // ── §C 矛盾冻结裁决(task_25):与 memory_resolve_conflict 工具共用同一形状 ──
         // 端点层同样不给"提示文案"出口的例外只有一条:**队列未开启**不是调用错误而是
@@ -1944,8 +1947,13 @@ export function hitToUiRecord(r, extra) {
         retiredReason: retired ? (mark?.reason ?? 'unknown') : null,
         agingWeight: extra?.agingWeight ?? null,
         usage: extra?.usage ?? null,
-        // G3 成熟度：读时派生（priority + used + 老化），无额外端点/存储。
-        maturity: computeMaturity({ priority: r.priority ?? 60, usage: extra?.usage ?? null, agingWeight: extra?.agingWeight ?? null }),
+        // G3 成熟度：读时派生（priority + used + 老化 + 人工最近一笔），无额外端点/存储。
+        maturity: computeMaturity({
+            priority: r.priority ?? 60,
+            usage: extra?.usage ?? null,
+            agingWeight: extra?.agingWeight ?? null,
+            mark: extra?.userMark ?? null,
+        }),
         // G1 使用场景：从命名空间保留键读出（功能关/无键 → undefined）。
         usageScenario: Array.isArray(r.metadata?.dsh_usage_scenario) ? r.metadata?.dsh_usage_scenario : undefined,
         // 人给相关度均值：读时从 sidecar 派生（不进存储/快照）；未打分 → 字段缺席。

@@ -186,6 +186,8 @@ export interface ConflictListDeps {
   usage?: { get(id: string): { used: number } | null | undefined };
   /** 时效半衰期（天）；≤0 = 衰减关 → aging 视为 null。 */
   decayHalfLifeDays?: number;
+  /** 人工打分面（可选）：成熟度旁注要吃“最近一笔”，与面板/召回同一口径。 */
+  feedback?: { lastOf(id: string): number | undefined };
 }
 
 /**
@@ -241,7 +243,12 @@ export function listConflictPairs(deps: ConflictListDeps, opts: { limit?: number
     const aging = halfLife > 0
       ? Math.max(0.5, Math.pow(0.5, Math.max(0, (Date.now() - (updatedAtById.get(id) ?? 0)) / 86_400_000) / halfLife))
       : null;
-    return computeMaturity({ priority: priorityById.get(id) ?? 60, usage: deps.usage?.get(id) ?? null, agingWeight: aging });
+    return computeMaturity({
+      priority: priorityById.get(id) ?? 60,
+      usage: deps.usage?.get(id) ?? null,
+      agingWeight: aging,
+      mark: deps.feedback?.lastOf(id) ?? null,
+    });
   };
 
   const items: ConflictPairView[] = pending.map((p) => {

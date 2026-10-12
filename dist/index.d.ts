@@ -132,9 +132,13 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
     recallFeedback: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        affectRank: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        excludeZero: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        affectRank: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        excludeZero: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
@@ -702,9 +706,13 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
     recallFeedback: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        affectRank: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        excludeZero: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        affectRank: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        excludeZero: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;

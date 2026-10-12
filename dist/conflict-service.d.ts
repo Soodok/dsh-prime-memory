@@ -47,6 +47,10 @@ export interface ConflictListDeps {
     };
     /** 时效半衰期（天）；≤0 = 衰减关 → aging 视为 null。 */
     decayHalfLifeDays?: number;
+    /** 人工打分面（可选）：成熟度旁注要吃“最近一笔”，与面板/召回同一口径。 */
+    feedback?: {
+        lastOf(id: string): number | undefined;
+    };
 }
 /**
  * 列出待裁决对。

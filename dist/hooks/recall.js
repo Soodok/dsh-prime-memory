@@ -11,7 +11,7 @@ import { applyRecallBudget, raceRecallTimeout, RECALL_EMBED_CAP_MS } from '../ut
 import { clearProfileShare, emptyOccupancyLedger, estimateInjectedMessageTokens, estimateStableSectionTokens, recordProfileShare, recordRecallInjection, resetForCompaction, } from '../util/context-occupancy.js';
 import { errDetail } from '../util/filelog.js';
 import { blocksToText } from '../util/text.js';
-import { domainGate, formatWeights, hardFilterByWingLock, sortByDomainWeight, sortByUsageScenario, WING_ANCHORS } from '../domain-gate.js';
+import { domainGate, formatWeights, hardFilterByWingLock, sortByDomainWeight, sortByHumanMark, sortByUsageScenario, WING_ANCHORS } from '../domain-gate.js';
 const PROFILE_TTL = 60_000;
 /** 存储回填缓存上限(超过即按插入序淘汰最旧;查看会话数为百级,500 足够)。 */
 const STORED_ESTIMATE_CACHE_CAP = 500;
@@ -386,6 +386,33 @@ usage) {
                     scoped = sortByUsageScenario(scoped, (id) => scenarioById.get(id) ?? [], query);
                     if (scoped.map((h) => h.id).join(',') !== before) {
                         logger.info(`[memory] 使用场景细排生效:agent=${payload.agent.id}`);
+                    }
+                }
+                // ── 人工打分参与排序（默认开）：4/5 上浮、0/1/2 下沉。纯重排、**score 不改写**、
+                // 同档内保持进入顺序（不推翻上面的围栏/场景细排）。这就是 0/1/2 的常规出口：
+                // 不相关就排到注不上，而不是从记忆里消失。未装配反馈面 / 全未打分 → 逐字同序。
+                if (cfg.recallFeedback?.enabled === true
+                    && cfg.recallFeedback.affectRank !== false
+                    && stores.feedback !== undefined
+                    && scoped.length > 1) {
+                    const fb = stores.feedback;
+                    const before = scoped.map((h) => h.id).join(',');
+                    scoped = sortByHumanMark(scoped, (id) => fb.lastOf(id));
+                    if (scoped.map((h) => h.id).join(',') !== before) {
+                        logger.info(`[memory] 人工打分排序生效(agent=${payload.agent.id})`);
+                    }
+                }
+                // ── 可选硬门 excludeZero（**默认关**）：最近一笔是 0 → 本轮不注入（不退场，
+                // 再点 1..5 即回来）。开着它=“误点一次就完全不再浮现”，所以默认只靠上面的沉底。
+                if (cfg.recallFeedback?.enabled === true
+                    && cfg.recallFeedback.excludeZero === true
+                    && stores.feedback !== undefined
+                    && scoped.length > 0) {
+                    const fb = stores.feedback;
+                    const kept = scoped.filter((h) => fb.lastOf(h.id) !== 0);
+                    if (kept.length !== scoped.length) {
+                        logger.info(`[memory] 相关度 0 分剔除 ${scoped.length - kept.length} 条(agent=${payload.agent.id})`);
+                        scoped = kept;
                     }
                 }
                 // 召回去重:同会话已注入过的记录不再重复注入(模型上下文已持有,省 token)。

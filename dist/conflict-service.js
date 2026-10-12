@@ -171,7 +171,12 @@ export function listConflictPairs(deps, opts = {}) {
         const aging = halfLife > 0
             ? Math.max(0.5, Math.pow(0.5, Math.max(0, (Date.now() - (updatedAtById.get(id) ?? 0)) / 86_400_000) / halfLife))
             : null;
-        return computeMaturity({ priority: priorityById.get(id) ?? 60, usage: deps.usage?.get(id) ?? null, agingWeight: aging });
+        return computeMaturity({
+            priority: priorityById.get(id) ?? 60,
+            usage: deps.usage?.get(id) ?? null,
+            agingWeight: aging,
+            mark: deps.feedback?.lastOf(id) ?? null,
+        });
     };
     const items = pending.map((p) => {
         const w = axisOf(p.winnerId);

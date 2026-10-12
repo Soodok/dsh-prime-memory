@@ -166,6 +166,9 @@ export const memorySchema = Schema.object({
     recallFeedback: Schema.object({
         enabled: Schema.boolean().default(true),
         announce: Schema.boolean().default(true),
+        // 低分沉底/高分上浮默认开（这是打分的常规出口）；0 分硬剔除默认关。
+        affectRank: Schema.boolean().default(true),
+        excludeZero: Schema.boolean().default(false),
     }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),

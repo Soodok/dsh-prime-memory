@@ -187,4 +187,6 @@ export declare function hitToUiRecord(r: {
     } | null;
     /** 人给的相关度均值(0..5);未打分 = 不传(字段缺席,不是 0)。 */
     userRelevance?: number | null;
+    /** 人给的**最近一笔**打分(-1..5);成熟度只吃这一笔,不吃均值。 */
+    userMark?: number | null;
 }): UiRecord;

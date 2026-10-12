@@ -17,6 +17,10 @@ export declare function registerMemoryTools(ctx: Context, cfg: MemoryConfig, sto
     persona: Record<MemoryFamily, PersonaStore>;
     /** 图谱存储(可选:未装配时图谱工具返回未启用提示)。 */
     graph?: GraphStore;
+    /** 人工打分面(可选)：冲突视图的成熟度旁注与面板同一口径。 */
+    feedback?: {
+        lastOf(id: string): number | undefined;
+    };
 }, logger: MemoryLogger, modes: SessionModeStore, live: LiveSettingsHandle, 
 /** 反刍控制器(可选:未装配时 ruminate 工具返回未启用提示)。 */
 ruminate?: RuminateController, 
