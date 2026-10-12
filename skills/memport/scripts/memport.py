@@ -160,6 +160,27 @@ class Bundle:
         self.declared_sha: str | None = None
 
 
+def _apply_header_kv(b: Bundle, head: str, ln: int) -> None:
+    """头部键值行:`;` 分隔多个 k=v(不是整行当一个值),cols/count/sha256 归位入 b。"""
+    for part in head.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k == "cols":
+            b.cols = [c.strip() for c in v.split("|")]
+        elif k == "count":
+            try:
+                b.declared_count = int(v)
+            except ValueError:
+                b.errors.append(f"L{ln}: count 不是整数:{v}")
+        elif k == "sha256":
+            b.declared_sha = v
+        else:
+            b.header[k] = v
+
+
 def _parse_header(raw_lines: list[str], b: Bundle) -> list[str]:
     """解析头部键值行与列声明(原 parse_bundle 前段),就地填充 b,返回 body 行列表。"""
     body: list[str] = []
@@ -170,24 +191,7 @@ def _parse_header(raw_lines: list[str], b: Bundle) -> list[str]:
                 rest = head[len("memport"):].strip()
                 b.header["version"] = rest.split(";")[0].strip() or "1"
                 continue
-            # 头部键值行:`;` 分隔多个 k=v(不是整行当一个值)
-            for part in head.split(";"):
-                part = part.strip()
-                if not part or "=" not in part:
-                    continue
-                k, v = part.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if k == "cols":
-                    b.cols = [c.strip() for c in v.split("|")]
-                elif k == "count":
-                    try:
-                        b.declared_count = int(v)
-                    except ValueError:
-                        b.errors.append(f"L{ln}: count 不是整数:{v}")
-                elif k == "sha256":
-                    b.declared_sha = v
-                else:
-                    b.header[k] = v
+            _apply_header_kv(b, head, ln)
             continue
         if line.strip() == "":
             continue
@@ -244,8 +248,8 @@ def _parse_records(b: Bundle, body: list[str]) -> None:
         b.records.append(rec)
 
 
-def _validate_bundle(b: Bundle, body: list[str]) -> None:
-    """结构校验(原 parse_bundle 后段):版本/条数/校验和/逐条字段合法性,就地写 errors/warnings。"""
+def _validate_bundle_shape(b: Bundle, body: list[str]) -> None:
+    """包级结构校验:版本/条数/校验和(原 _validate_bundle 前段)。"""
     if b.header.get("version") not in (None, "1", "v1", "1.1", "v1.1"):
         b.errors.append(f"未知包版本:{b.header.get('version')}(本工具支持 1 / 1.1)")
     if b.declared_count is not None and b.declared_count != len(body):
@@ -254,37 +258,57 @@ def _validate_bundle(b: Bundle, body: list[str]) -> None:
         digest = hashlib.sha256("\n".join(body).encode("utf-8")).hexdigest()
         if not digest.startswith(b.declared_sha[:12]):
             b.errors.append(f"校验和不符:声明 {b.declared_sha[:12]},实算 {digest[:12]}")
+
+
+def _validate_record_type_flags(b: Bundle, p: str, rec: dict) -> None:
+    """单记录段 1/3:类型码与 cf/rw 取值(保持原追加顺序)。"""
+    if rec["type"] not in TYPE_CODES and rec["type"] not in TYPE_FULL:
+        if rec["type"] in ("", "?"):
+            b.warnings.append(f"{p}: 类型缺失,导入时将回落 episodic")
+        else:
+            b.warnings.append(f"{p}: 非标准类型码 {rec['type']!r},将按原样透传")
+    for fld, val in (("cf", rec["cf"]), ("rw", rec["rw"])):
+        if val not in ("0", "1", "?"):
+            b.errors.append(f"{p}: {fld} 取值非法 {val!r}(仅 0/1/?)")
+
+
+def _validate_record_time_window(b: Bundle, p: str, rec: dict) -> None:
+    """单记录段 2/3:st 取值与 vf/vt/created/updated 时间窗口(含就地纠偏)。"""
+    if rec["st"] not in PERSISTENCE:
+        b.errors.append(f"{p}: st 取值非法 {rec['st']!r}(仅 p/s/o/t/?)")
+    if rec["vf_ms"] and rec["vt_ms"] and rec["vt_ms"] < rec["vf_ms"]:
+        b.warnings.append(f"{p}: vt 早于 vf,已按 vf 处理")
+        rec["vt_ms"] = rec["vf_ms"]
+    if rec["st"] == "o" and rec["vt_ms"]:
+        b.warnings.append(f"{p}: st=o(仍在持续)却给了 vt;导入侧会视为已闭合区间,请确认")
+    if rec["st"] == "p" and not rec["vf_ms"]:
+        b.warnings.append(f"{p}: st=p(时点事件)缺 vf,时间定位将退化到 updated")
+
+
+def _validate_record_content_tail(b: Bundle, p: str, rec: dict, seen: dict[str, int]) -> None:
+    """单记录段 3/3:content 长度/updated 回正/包内去重。"""
+    if len(rec["content"]) < 4:
+        b.errors.append(f"{p}: content 过短,疑似空记录")
+    if len(rec["content"]) > 600:
+        b.warnings.append(f"{p}: content 超长({len(rec['content'])} 字符),违反节省规则(≤100 字)")
+    if rec["created_ms"] and rec["updated_ms"] and rec["updated_ms"] < rec["created_ms"]:
+        b.warnings.append(f"{p}: updated 早于 created,已按 created 视为 updated")
+        rec["updated_ms"] = rec["created_ms"]
+    if rec["hash"] in seen:
+        b.errors.append(f"{p}: 与本包第 {seen[rec['hash']]} 条内容重复(应先在包内去重)")
+    else:
+        seen[rec["hash"]] = rec["seq"]
+
+
+def _validate_bundle(b: Bundle, body: list[str]) -> None:
+    """结构校验编排:包级(shape) + 逐记录(三段,顺序不变),就地写 errors/warnings。"""
+    _validate_bundle_shape(b, body)
     seen: dict[str, int] = {}
     for rec in b.records:
         p = f"记录 {rec['seq']}"
-        if rec["type"] not in TYPE_CODES and rec["type"] not in TYPE_FULL:
-            if rec["type"] in ("", "?"):
-                b.warnings.append(f"{p}: 类型缺失,导入时将回落 episodic")
-            else:
-                b.warnings.append(f"{p}: 非标准类型码 {rec['type']!r},将按原样透传")
-        for fld, val in (("cf", rec["cf"]), ("rw", rec["rw"])):
-            if val not in ("0", "1", "?"):
-                b.errors.append(f"{p}: {fld} 取值非法 {val!r}(仅 0/1/?)")
-        if rec["st"] not in PERSISTENCE:
-            b.errors.append(f"{p}: st 取值非法 {rec['st']!r}(仅 p/s/o/t/?)")
-        if rec["vf_ms"] and rec["vt_ms"] and rec["vt_ms"] < rec["vf_ms"]:
-            b.warnings.append(f"{p}: vt 早于 vf,已按 vf 处理")
-            rec["vt_ms"] = rec["vf_ms"]
-        if rec["st"] == "o" and rec["vt_ms"]:
-            b.warnings.append(f"{p}: st=o(仍在持续)却给了 vt;导入侧会视为已闭合区间,请确认")
-        if rec["st"] == "p" and not rec["vf_ms"]:
-            b.warnings.append(f"{p}: st=p(时点事件)缺 vf,时间定位将退化到 updated")
-        if len(rec["content"]) < 4:
-            b.errors.append(f"{p}: content 过短,疑似空记录")
-        if len(rec["content"]) > 600:
-            b.warnings.append(f"{p}: content 超长({len(rec['content'])} 字符),违反节省规则(≤100 字)")
-        if rec["created_ms"] and rec["updated_ms"] and rec["updated_ms"] < rec["created_ms"]:
-            b.warnings.append(f"{p}: updated 早于 created,已按 created 视为 updated")
-            rec["updated_ms"] = rec["created_ms"]
-        if rec["hash"] in seen:
-            b.errors.append(f"{p}: 与本包第 {seen[rec['hash']]} 条内容重复(应先在包内去重)")
-        else:
-            seen[rec["hash"]] = rec["seq"]
+        _validate_record_type_flags(b, p, rec)
+        _validate_record_time_window(b, p, rec)
+        _validate_record_content_tail(b, p, rec, seen)
     if not b.records:
         b.errors.append("包内没有任何记录")
 
@@ -451,56 +475,115 @@ def _score_pair(g3, g2, h3, h2) -> float:
     return round(max(jaccard(g3, h3), dice(g2, h2)), 4)
 
 
+def _verdict_on_hash_hit(rec: dict, hit: dict) -> tuple[str, list, str, bool]:
+    """哈希全命中 → dup;时间列不同时附 tdiff 提示(原 _score_against_baseline hit 分支)。"""
+    verdict, reason = "dup", f"内容哈希与现存 {hit['id']} 完全一致"
+    matched = [{"id": hit["id"], "score": 1.0, "hash": hit["hash"], "content": hit["content"]}]
+    tdiff = False
+    # 内容一模一样但有效期/持续性不同 → 不是"跳过"而是"更新有效期"(默认仍按 dup 跳过,交 LLM 改判)
+    if hit.get("has_temporal_cols"):
+        diffs = temporal_diff(
+            temporal_sig(rec["vf_ms"], rec["vt_ms"], rec["st"]),
+            temporal_sig(hit.get("valid_from_ms"), hit.get("valid_to_ms"), hit.get("persistence")),
+        )
+        if diffs:
+            tdiff = True
+            reason += f";但 {'/'.join(diffs)} 不同,可能只需更新有效期(可改判 merge)"
+    return verdict, matched, reason, tdiff
+
+
+def _verdict_on_similarity(rec: dict, ex_grams: list, args: argparse.Namespace) -> tuple[str, list, str]:
+    """对基线 n-gram top3 相似度 → near-dup / conflict-candidate / new(无命中)。"""
+    c3, c2 = gram_set(rec["content"], 3), gram_set(rec["content"], 2)
+    scored = sorted(
+        ({"id": r["id"], "score": _score_pair(c3, c2, h3, h2),
+          "hash": r["hash"], "content": r["content"]}
+         for r, h3, h2 in ex_grams),
+        key=lambda x: x["score"], reverse=True,
+    )[:3]
+    best = scored[0] if scored else None
+    if best and best["score"] >= args.dup_threshold:
+        matched = [s for s in scored if s["score"] >= args.rel_threshold]
+        reason = f"与现存 {best['id']} 相似度 {best['score']:.2f},疑似同一事实的另一种表述"
+        return "near-dup", matched, reason
+    if best and best["score"] >= args.rel_threshold:
+        matched = [s for s in scored if s["score"] >= args.rel_threshold]
+        reason = f"与现存 {best['id']} 主题相关(相似度 {best['score']:.2f}),需判定互补还是矛盾"
+        return "conflict-candidate", matched, reason
+    return "new", [], "基线中无相关内容"
+
+
+def _bundle_internal_verdict(c3: set, c2: set, args: argparse.Namespace,
+                             bundle_grams: list) -> tuple[str, list, str]:
+    """包内近重复兜底拦截(导出侧应已合并,同包两条措辞不同的同一事实)。"""
+    ibest, iscore = None, 0.0
+    for prev, p3, p2 in bundle_grams:
+        sc = _score_pair(c3, c2, p3, p2)
+        if sc > iscore:
+            ibest, iscore = prev, sc
+    if ibest is not None and iscore >= args.rel_threshold:
+        near = iscore >= args.dup_threshold
+        matched = [{"id": f"bundle#{ibest['seq']}", "score": iscore,
+                    "hash": ibest["hash"], "content": ibest["content"]}]
+        reason = (f"与本包第 {ibest['seq']} 条相似度 {iscore:.2f}"
+                  + ("(包内近重复,导出侧应先合并)" if near else "(包内相关条目,需判定)"))
+        return ("near-dup" if near else "conflict-candidate"), matched, reason
+    return "new", [], "基线中无相关内容"
+
+
 def _score_against_baseline(rec: dict, by_hash: dict, ex_grams: list,
                             args: argparse.Namespace, bundle_grams: list) -> tuple[str, list, str, bool]:
-    """单条记录的预筛裁决(原 cmd_plan 循环体判定段) → (verdict, matched, reason, tdiff)。"""
+    """单条记录的预筛裁决编排(哈希命中 → 相似度 → 包内兜底) → (verdict, matched, reason, tdiff)。"""
     hit = by_hash.get(rec["hash"])
-    verdict, matched, reason = "new", [], "基线中无相关内容"
-    tdiff = False
     if hit:
-        verdict, reason = "dup", f"内容哈希与现存 {hit['id']} 完全一致"
-        matched = [{"id": hit["id"], "score": 1.0, "hash": hit["hash"], "content": hit["content"]}]
-        # 内容一模一样但有效期/持续性不同 → 不是"跳过"而是"更新有效期"(默认仍按 dup 跳过,交 LLM 改判)
-        if hit.get("has_temporal_cols"):
-            diffs = temporal_diff(
-                temporal_sig(rec["vf_ms"], rec["vt_ms"], rec["st"]),
-                temporal_sig(hit.get("valid_from_ms"), hit.get("valid_to_ms"), hit.get("persistence")),
-            )
-            if diffs:
-                tdiff = True
-                reason += f";但 {'/'.join(diffs)} 不同,可能只需更新有效期(可改判 merge)"
-    else:
+        return _verdict_on_hash_hit(rec, hit)
+    verdict, matched, reason = _verdict_on_similarity(rec, ex_grams, args)
+    if verdict == "new" and bundle_grams:
         c3, c2 = gram_set(rec["content"], 3), gram_set(rec["content"], 2)
-        scored = sorted(
-            ({"id": r["id"], "score": _score_pair(c3, c2, h3, h2),
-              "hash": r["hash"], "content": r["content"]}
-             for r, h3, h2 in ex_grams),
-            key=lambda x: x["score"], reverse=True,
-        )[:3]
-        best = scored[0] if scored else None
-        if best and best["score"] >= args.dup_threshold:
-            verdict = "near-dup"
-            matched = [s for s in scored if s["score"] >= args.rel_threshold]
-            reason = f"与现存 {best['id']} 相似度 {best['score']:.2f},疑似同一事实的另一种表述"
-        elif best and best["score"] >= args.rel_threshold:
-            verdict = "conflict-candidate"
-            matched = [s for s in scored if s["score"] >= args.rel_threshold]
-            reason = f"与现存 {best['id']} 主题相关(相似度 {best['score']:.2f}),需判定互补还是矛盾"
-        # 包内近重复:导出侧应已合并,这里兜底拦截(同包两条措辞不同的同一事实)
-        if verdict == "new" and bundle_grams:
-            ibest, iscore = None, 0.0
-            for prev, p3, p2 in bundle_grams:
-                sc = _score_pair(c3, c2, p3, p2)
-                if sc > iscore:
-                    ibest, iscore = prev, sc
-            if ibest is not None and iscore >= args.rel_threshold:
-                near = iscore >= args.dup_threshold
-                verdict = "near-dup" if near else "conflict-candidate"
-                matched = [{"id": f"bundle#{ibest['seq']}", "score": iscore,
-                            "hash": ibest["hash"], "content": ibest["content"]}]
-                reason = (f"与本包第 {ibest['seq']} 条相似度 {iscore:.2f}"
-                          + ("(包内近重复,导出侧应先合并)" if near else "(包内相关条目,需判定)"))
-    return verdict, matched, reason, tdiff
+        verdict, matched, reason = _bundle_internal_verdict(c3, c2, args, bundle_grams)
+    return verdict, matched, reason, False
+
+
+def _plan_row(rec: dict, rid: str, verdict: str, matched: list, reason: str,
+              tdiff: bool) -> dict:
+    """单条 plan 记录行装配(原 cmd_plan 循环体内联 dict)。"""
+    return {
+        "seq": rec["seq"], "id": rid, "type": rec["type_full"], "type_code": rec["type"],
+        "content": rec["content"], "hash": rec["hash"],
+        "created_ms": rec["created_ms"], "updated_ms": rec["updated_ms"] or rec["created_ms"],
+        "created_prec": rec["created_prec"], "updated_prec": rec["updated_prec"],
+        "vf_ms": rec["vf_ms"], "vt_ms": rec["vt_ms"], "st": rec["st"],
+        "vf_prec": rec["vf_prec"], "vt_prec": rec["vt_prec"],
+        "cf_hint": rec["cf"], "rw_hint": rec["rw"], "tags": rec["tags"],
+        "verdict": verdict, "matched": matched, "reason": reason,
+        "temporal_diff": tdiff,
+        "needs_llm": verdict in ("near-dup", "conflict-candidate") or tdiff,
+        "final_verdict": None, "cf": None, "rw": None,
+    }
+
+
+def _emit_plan_outputs(args: argparse.Namespace, b: Bundle, plans: list, pending: list,
+                       counts: dict, src_tag: str, existing: list) -> int:
+    """写出 plan/pending/report + 打印 summary(原 cmd_plan 尾部输出段)。"""
+    if args.out:
+        with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
+            for row in plans:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if args.pending_out:
+        with open(args.pending_out, "w", encoding="utf-8", newline="\n") as fh:
+            for row in pending:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if args.report:
+        write_report(args.report, b, plans, counts, src_tag)
+    summary = {
+        "bundle": os.path.basename(args.bundle), "src": src_tag,
+        "total": len(plans), "counts": counts,
+        "existing_baseline": len(existing), "needs_llm": len(pending),
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(f"[memport] 计划已写出:{args.out or '(未写)'};待裁决 {len(pending)} 条"
+          + (f" → {args.pending_out}" if args.pending_out else ""))
+    return EXIT_OK
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -526,42 +609,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
             rec, by_hash, ex_grams, args, bundle_grams)
         bundle_grams.append((rec, gram_set(rec["content"], 3), gram_set(rec["content"], 2)))
         counts[verdict] += 1
-        row = {
-            "seq": rec["seq"], "id": rid, "type": rec["type_full"], "type_code": rec["type"],
-            "content": rec["content"], "hash": rec["hash"],
-            "created_ms": rec["created_ms"], "updated_ms": rec["updated_ms"] or rec["created_ms"],
-            "created_prec": rec["created_prec"], "updated_prec": rec["updated_prec"],
-            "vf_ms": rec["vf_ms"], "vt_ms": rec["vt_ms"], "st": rec["st"],
-            "vf_prec": rec["vf_prec"], "vt_prec": rec["vt_prec"],
-            "cf_hint": rec["cf"], "rw_hint": rec["rw"], "tags": rec["tags"],
-            "verdict": verdict, "matched": matched, "reason": reason,
-            "temporal_diff": tdiff,
-            "needs_llm": verdict in ("near-dup", "conflict-candidate") or tdiff,
-            "final_verdict": None, "cf": None, "rw": None,
-        }
+        row = _plan_row(rec, rid, verdict, matched, reason, tdiff)
         plans.append(row)
         if row["needs_llm"]:
             pending.append(row)
 
-    if args.out:
-        with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
-            for row in plans:
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-    if args.pending_out:
-        with open(args.pending_out, "w", encoding="utf-8", newline="\n") as fh:
-            for row in pending:
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-    if args.report:
-        write_report(args.report, b, plans, counts, src_tag)
-    summary = {
-        "bundle": os.path.basename(args.bundle), "src": src_tag,
-        "total": len(plans), "counts": counts,
-        "existing_baseline": len(existing), "needs_llm": len(pending),
-    }
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print(f"[memport] 计划已写出:{args.out or '(未写)'};待裁决 {len(pending)} 条"
-          + (f" → {args.pending_out}" if args.pending_out else ""))
-    return EXIT_OK
+    return _emit_plan_outputs(args, b, plans, pending, counts, src_tag, existing)
 
 
 def write_report(path: str, b: Bundle, plans: list[dict], counts: dict, src_tag: str) -> None:
@@ -739,6 +792,36 @@ def _emit_legacy(rows: list[dict], src_tag: str, args: argparse.Namespace) -> in
     return EXIT_OK
 
 
+def _tool_item_core(row: dict) -> dict:
+    """tool 通道条目核心字段:content/type/hall/persistence/时间戳(原 _emit_tool 循环前段)。"""
+    item: dict = {"content": row["content"], "type": row["type"]}
+    if row["tags"].get("hall"):
+        item["hall"] = row["tags"]["hall"]
+    if row.get("st") in ("p", "s", "o", "t"):
+        item["persistence"] = row["st"]
+    if row.get("vf_ms"):
+        item["valid_from"] = iso(row["vf_ms"])
+    if row.get("vt_ms"):
+        item["valid_to"] = iso(row["vt_ms"])
+    if row.get("created_ms"):
+        item["created_at"] = iso(row["created_ms"])
+    if row.get("updated_ms"):
+        item["updated_at"] = iso(row["updated_ms"])
+    return item
+
+
+def _tool_item_flags(row: dict, item: dict) -> None:
+    """tool 通道条目标记字段:origin/conflict/rewritten/priority(就地补入 item)。"""
+    if row["tags"].get("src"):
+        item["origin"] = row["tags"]["src"]
+    if str(row.get("cf")) == "1" or resolve(row) == "conflict":
+        item["conflict"] = True
+    if str(row.get("rw")) == "1" or resolve(row) in ("merge", "supersede"):
+        item["rewritten"] = True
+    if str(row["tags"].get("prio", "")).isdigit():
+        item["priority"] = int(row["tags"]["prio"])
+
+
 def _emit_tool(rows: list[dict], src_tag: str, args: argparse.Namespace) -> int:
     """工具刷写通道(默认):生成 memory_import 批量调用清单(原 cmd_emit tool 分支)。"""
     # 该通道全字段保真(created_at/updated_at/valid_from/valid_to/persistence/origin/cf/rw),
@@ -751,27 +834,8 @@ def _emit_tool(rows: list[dict], src_tag: str, args: argparse.Namespace) -> int:
         counts[verdict] = counts.get(verdict, 0) + 1
         if verdict == "dup":
             continue
-        item: dict = {"content": row["content"], "type": row["type"]}
-        if row["tags"].get("hall"):
-            item["hall"] = row["tags"]["hall"]
-        if row.get("st") in ("p", "s", "o", "t"):
-            item["persistence"] = row["st"]
-        if row.get("vf_ms"):
-            item["valid_from"] = iso(row["vf_ms"])
-        if row.get("vt_ms"):
-            item["valid_to"] = iso(row["vt_ms"])
-        if row.get("created_ms"):
-            item["created_at"] = iso(row["created_ms"])
-        if row.get("updated_ms"):
-            item["updated_at"] = iso(row["updated_ms"])
-        if row["tags"].get("src"):
-            item["origin"] = row["tags"]["src"]
-        if str(row.get("cf")) == "1" or resolve(row) == "conflict":
-            item["conflict"] = True
-        if str(row.get("rw")) == "1" or resolve(row) in ("merge", "supersede"):
-            item["rewritten"] = True
-        if str(row["tags"].get("prio", "")).isdigit():
-            item["priority"] = int(row["tags"]["prio"])
+        item = _tool_item_core(row)
+        _tool_item_flags(row, item)
         current.append(item)
         if len(current) >= args.batch_size:
             batches.append(current)
