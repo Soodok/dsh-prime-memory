@@ -146,6 +146,17 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
     }>>, "plain">;
+    memExport: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        root: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        root: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, "plain">;
     usageScenario: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
@@ -744,6 +755,17 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
             anyOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
             noneOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
         }>>[], "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, "plain">;
+    memExport: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        root: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        root: import("@deepseek-ai/schemastery").default<string, string, "defined">;
         maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
     }>>, "plain">;

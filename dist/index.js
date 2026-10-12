@@ -45,6 +45,7 @@ import { registerSkillRecall } from './hooks/skill-recall.js';
 import { registerSkillTools } from './tools/skills.js';
 import { RecallUsageStore } from './store/recall-usage.js';
 import { RecallFeedbackStore } from './store/recall-feedback.js';
+import { MdLedgerStore } from './store/memory-md-ledger.js';
 import { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { registerSlotsProjection } from './projection/slots.js';
 import { registerRecallProjection } from './projection/recall.js';
@@ -189,6 +190,8 @@ export async function apply(ctx, config) {
         // 召回相关度反馈与过时播报队列（装配于下方，需 await init）。
         feedback: undefined,
         notices: undefined,
+        // md 投射指纹账本（N9；装配于下方，需 await init）。
+        mdLedger: undefined,
         // 激活槽位(active slot):独立 slots.json,高频小改不拖累 checkpoint 原子写
         slots: new SlotStore(SlotStore.pathFor(dataDir), logger, {
             maxSlots: config.slots.maxSlots,
@@ -395,6 +398,11 @@ export async function apply(ctx, config) {
     const obsoleteNotices = new ObsoleteNoticeStore(dataDir, logger);
     await obsoleteNotices.init();
     stores.notices = obsoleteNotices;
+    // md 投射指纹账本（N9）：派生态，缺席/损坏只降级为只读，不弄挂任何读路径。
+    // 它与 feedback/notices 同属“库外 sidecar”，不进快照哈希投影。
+    const mdLedger = new MdLedgerStore(dataDir, logger);
+    await mdLedger.init();
+    stores.mdLedger = mdLedger;
     const recall = registerRecall(ctx, config, stores, logger, live, modes, dataDir, recallUsage);
     runner.setAfterRun(recall.invalidateProfile);
     registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);

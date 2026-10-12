@@ -340,6 +340,16 @@ export class MemoryDb {
             this.logger?.info(`${TAG} l1_records 补 ext_key 列(外部导入幂等键)`);
         }
         this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS l1_records_ext_key_uidx ON l1_records(ext_key) WHERE ext_key <> ''");
+        // ── 文件身份键(md 投射相, N1/N8/N9):`name` 是人可读且可编辑的稳定键，用来当
+        // `<root>/<type>/<name>.memory.md` 的文件名。为何不用 id：id 每轮新铸、从不复用；
+        // 为何不用 scene_name：实测基数大于记录数，当不了唯一名。
+        // 存量 name 恒为 '' ⇒ 部分索引不约束空串 ⇒ 旧库首次建索引必成（不会因重复值而
+        // 整库 degraded）。该列**不进** canonicalRecords 哈希字段表 ⇒ 快照零影响。
+        if (!this.hasColumn('l1_records', 'name')) {
+            this.db.exec("ALTER TABLE l1_records ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+            this.logger?.info(`${TAG} l1_records 补 name 列(文件身份键，存量全空)`);
+        }
+        this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS l1_records_name_uidx ON l1_records(name) WHERE name <> ''");
         // L2 场景重聚类作业队列(治理 W3 T3.10;ruminate 空闲档消费,每轮至多 1 作业)。
         // source 区分触发来源('demote'|'repo-change'),便于诊断与重入队语义区分。
         this.db.exec(`
@@ -456,8 +466,8 @@ export class MemoryDb {
         record_id, content, type, priority, scene_name, session_id, version,
         timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json, family,
         valid_from, valid_to, persistence, scope, workspace_id,
-        repo_key_name, repo_key_owner, applicability, ext_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        repo_key_name, repo_key_owner, applicability, ext_key, name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -478,13 +488,14 @@ export class MemoryDb {
         repo_key_name=excluded.repo_key_name,
         repo_key_owner=excluded.repo_key_owner,
         applicability=excluded.applicability,
-        ext_key=excluded.ext_key
+        ext_key=excluded.ext_key,
+        name=excluded.name
     `);
         this.stmtGetL1 = this.db.prepare(`
       SELECT record_id, content, type, priority, scene_name, version, timestamp_str,
              timestamp_start, timestamp_end, created_time, updated_time, metadata_json, family,
              valid_from, valid_to, persistence, scope, workspace_id,
-             repo_key_name, repo_key_owner, applicability
+             repo_key_name, repo_key_owner, applicability, name
       FROM l1_records WHERE record_id = ?
     `);
         this.stmtL1Exists = this.db.prepare('SELECT 1 FROM l1_records WHERE record_id = ?');
@@ -978,7 +989,10 @@ export class MemoryDb {
         // 旧版导入都会经这里写回记录,若照常重建 FTS/向量行,一条带退场标记的记录
         // 会**悄悄回到检索结果里**(而检索侧刻意不看 valid_to,正是为了零漂移)。
         const retiredNow = record.validTo !== undefined || readSupersedeMarker(record.metadata) !== undefined;
-        this.stmtUpsertL1.run(record.id, record.content, type, priority, sceneName, record.sessionId ?? 'default', record.version ?? 0, ts.str, ts.start, ts.end, toIso(record.createdAt), toIso(record.updatedAt), JSON.stringify(record.metadata ?? {}), family, toIso(record.validFrom), toIso(record.validTo), normPersistence(record.persistence) ?? '', scope, workspaceId, record.repoKeyName ?? '', record.repoKeyOwner ?? '', normApplicability(record.applicability), record.extKey ?? '');
+        this.stmtUpsertL1.run(record.id, record.content, type, priority, sceneName, record.sessionId ?? 'default', record.version ?? 0, ts.str, ts.start, ts.end, toIso(record.createdAt), toIso(record.updatedAt), JSON.stringify(record.metadata ?? {}), family, toIso(record.validFrom), toIso(record.validTo), normPersistence(record.persistence) ?? '', scope, workspaceId, record.repoKeyName ?? '', record.repoKeyOwner ?? '', normApplicability(record.applicability), record.extKey ?? '', 
+        // 文件身份键。存什么由调用方定（`deriveName` 已按 `sanitizeFilename` 纪律截断/洗字符），
+        // 这里只做 undefined → '' 的绑定兜底，与同一行其他可选列同口径。
+        record.name ?? '');
         // vec0 不支持 ON CONFLICT → 先删后插;零向量跳过(cosine 未定义)。
         // 已退场则**只删不插**(见上方 retiredNow 的说明)。
         if (this.stmtDeleteL1Vec && this.stmtInsertL1Vec) {
@@ -1121,7 +1135,7 @@ export class MemoryDb {
                 .prepare("SELECT COUNT(*) AS n FROM l1_records WHERE COALESCE(valid_to, '') <> ''")
                 .get();
             const rows = this.db
-                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability
+                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name
            FROM l1_records WHERE COALESCE(valid_to, '') <> '' ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
                 .all(opts.limit, opts.offset);
             return { items: rows.map(rowToRecord), total: Number(totalRow?.n ?? 0) };
@@ -1147,10 +1161,14 @@ export class MemoryDb {
             const repoCols = table === 'l1_records' && this.hasColumn('l1_records', 'repo_key_name')
                 ? ', repo_key_name, repo_key_owner, applicability'
                 : '';
+            // 文件身份键(md 投射相):同款形状探测。没这一列的旧库读侧归一 undefined，
+            // 不报错——投射器把空 name 回落到 `mem-<id8>`，而不是把整条取记录路径弄挂。
+            const nameCol = table === 'l1_records' && this.hasColumn('l1_records', 'name') ? ', name' : '';
             const metaCols = 'record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family' +
                 temporal +
                 scopeCols +
-                repoCols;
+                repoCols +
+                nameCol;
             stmt =
                 action === 'delete'
                     ? this.db.prepare(`DELETE FROM ${table} WHERE record_id IN (${ph})`)
@@ -1331,6 +1349,44 @@ export class MemoryDb {
         }
     }
     // ── L2 场景重聚类作业队列(治理 W3,T3.10)──────────────────────────────
+    /**
+     * 改一条记录的文件身份名（N1）。三态返回，**不碰 `updated_time`**：它在快照哈希
+     * 字段表里、又是衰减与排序的输入——改名不是“内容变了”，不该顺带把这条记成刚更新过
+     * （与 `setL1WorkspaceIds` 同一个理由）。`name=''` 是合法值（= 没名字，部分索引不约束空串）。
+     *
+     * 唯一性由 `l1_records_name_uidx` 挡：撞名 ⇒ `'dup'`，由调用方决定报错还是让用户先改
+     * 另一条——**不自动加后缀**，那会静默造出语义重叠的第二条记忆。
+     */
+    renameL1(id, name) {
+        if (this.degraded)
+            return 'failed';
+        try {
+            if (this.stmtGetL1.get(id) === undefined)
+                return 'missing';
+            this.db.prepare('UPDATE l1_records SET name = ? WHERE record_id = ?').run(name, id);
+            return 'ok';
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('UNIQUE constraint failed: l1_records.name'))
+                return 'dup';
+            this.logger?.warn(`${TAG} 改名失败(${id}): ${msg}`);
+            return 'failed';
+        }
+    }
+    /** 按文件身份名反查 record_id（重名预检与 md 回灌用）；没这条名 ⇒ undefined。 */
+    findRecordIdByName(name) {
+        if (this.degraded || name.length === 0)
+            return undefined;
+        try {
+            const row = this.db.prepare("SELECT record_id FROM l1_records WHERE name = ? AND name <> '' LIMIT 1").get(name);
+            return row?.record_id;
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} 按名反查失败: ${err instanceof Error ? err.message : String(err)}`);
+            return undefined;
+        }
+    }
     /** 入队一个重聚类作业(demote-to-wiki / repo 归属变化触发;source 区分来源)。 */
     enqueueSceneRecluster(family, sceneNames, batchId, source = 'demote') {
         const jobId = `recl_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
@@ -1400,7 +1456,7 @@ export class MemoryDb {
         if (this.degraded)
             return [];
         const rows = this.db
-            .prepare('SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability FROM l1_records')
+            .prepare('SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name FROM l1_records')
             .all();
         return rows.map(rowToRecord);
     }
@@ -1745,7 +1801,7 @@ export class MemoryDb {
             const whereSql = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
             const totalRow = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records${whereSql}`).get(...params);
             const rows = this.db
-                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability FROM l1_records${whereSql} ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
+                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name FROM l1_records${whereSql} ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
                 .all(...params, opts.limit, opts.offset);
             return { items: rows.map(rowToRecord), total: totalRow?.n ?? 0 };
         }
@@ -2526,6 +2582,9 @@ function rowToRecord(row) {
         repoKeyName: row.repo_key_name ?? '',
         repoKeyOwner: row.repo_key_owner ?? '',
         applicability: normApplicability(row.applicability),
+        // 文件身份键回读：空串归一 undefined（“还没名字”与“名字是空串”不是一种意思），
+        // 缺列的旧库也是 undefined。读侧同样 fail-open。
+        name: row.name || undefined,
     };
 }
 /**

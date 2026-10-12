@@ -59,6 +59,7 @@ import type { SessionRecalledStore } from './store/session-recalled.js';
 import { isFeedbackScore, type RecallFeedbackStore } from './store/recall-feedback.js';
 import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
+import { exportRecords, reconcileLedger, resolveMemoriesRoot } from './store/memory-md-export.js';
 
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = (require('../package.json') as { version: string }).version;
@@ -137,6 +138,8 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/session-recalled',
   'dsh-memory/recall-feedback',
   'dsh-memory/workspace-relink',
+  'dsh-memory/mem-export',
+  'dsh-memory/mem-reconcile',
   'dsh-memory/skills-action',
 ];
 
@@ -549,8 +552,10 @@ export interface EndpointDeps {
     recalled?: SessionRecalledStore;
     /** 召回相关度反馈 sidecar（未装配 = recall-feedback 不可用、列表不带 userRelevance）。 */
     feedback?: RecallFeedbackStore;
-    /** 「已声明过时」待播报队列（与 feedback 同进退）。 */
+    /** 「已声明过时」待播报队列（与 feedback 同进退）。*/
     notices?: ObsoleteNoticeStore;
+    /** md 投射指纹账本（N9；未装配 = mem-export / mem-reconcile 不可用）。*/
+    mdLedger?: import('./store/memory-md-ledger.js').MdLedgerStore;
   };
   status?: MemoryStatusSource;
   live?: LiveSettingsHandle;
@@ -704,6 +709,41 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         dryRun,
         maxRecords: hints.maxRecords,
         timeBudgetMs: hints.timeBudgetMs,
+        logger: deps.logger,
+      });
+    }
+
+    case 'dsh-memory/mem-export': {
+      // 单向导出：库 → md 文件 + 账本。**不写库**（用例钉住：导出前后 hashRecords 相同）。
+      // 先查配置门再查装配门：“整面默认关”时该听到的是“没开”，不是“没装配”。
+      const exp = cfg.memExport;
+      if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
+      const md = stores.mdLedger;
+      if (md === undefined) throw new Error('md 投射账本未装配');
+      const root = resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger);
+      return exportRecords({
+        records: stores.l1.all(),
+        root,
+        ledger: md,
+        maxRecords: exp.maxRecords,
+        timeBudgetMs: exp.timeBudgetMs,
+        logger: deps.logger,
+      });
+    }
+
+    case 'dsh-memory/mem-reconcile': {
+      // 只读对账：不写库、不写文件，只按账本基线出四态报告（所以不需高权限门）。
+      const exp = cfg.memExport;
+      if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
+      const md = stores.mdLedger;
+      if (md === undefined) throw new Error('md 投射账本未装配');
+      const root = resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger);
+      return reconcileLedger({
+        records: stores.l1.all(),
+        root,
+        ledger: md,
+        maxRecords: exp.maxRecords,
+        timeBudgetMs: exp.timeBudgetMs,
         logger: deps.logger,
       });
     }

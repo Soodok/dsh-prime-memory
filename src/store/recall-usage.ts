@@ -120,6 +120,34 @@ export class RecallUsageStore {
     return e ? { ...e } : undefined;
   }
 
+  /**
+   * 把一条记录的使用史搬到新 id（merge 之后由管线调用，P0-d）。
+   *
+   * 必须搬的理由：成熟度 = `priority + used + 老化 + 人工最近一笔` 的合成，而 merge
+   * 每次新铸 id——不搬就等于**每次合并把这条记忆的使用史清零**，它会被系统当成
+   * “没用过”而沉底，而且从面板上看不出来（统计仍挂在已退场的旧 id 上）。
+   *
+   * 两侧都有条目时按“次数相加、时刻取新”合并：这是纯计数，不存在语义冲突。
+   * 没条目（旧 id 从未被召回过）时返回 false，**不造零条目**——那会把表灌满噪声行。
+   */
+  rekey(oldId: string, newId: string): boolean {
+    this.ensureLoaded();
+    if (oldId === newId) return false;
+    const from = this.entries.get(oldId);
+    if (from === undefined) return false;
+    const to = this.entries.get(newId);
+    this.entries.set(newId, {
+      attempts: (to?.attempts ?? 0) + from.attempts,
+      used: (to?.used ?? 0) + from.used,
+      lastAttemptAt: Math.max(to?.lastAttemptAt ?? 0, from.lastAttemptAt ?? 0) || null,
+      lastUsedAt: Math.max(to?.lastUsedAt ?? 0, from.lastUsedAt ?? 0) || null,
+    });
+    this.entries.delete(oldId);
+    this.prune();
+    this.schedulePersist();
+    return true;
+  }
+
   summary(): RecallUsageSummary {
     this.ensureLoaded();
     let attempted = 0;

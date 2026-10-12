@@ -146,6 +146,20 @@ export interface MemoryConfig {
         /** 存量 re-link 的墙钟预算(ms)。 */
         timeBudgetMs: number;
     };
+    /**
+     * md 投射与外部存档（N1/N8/N9）：整面**默认关**，关时零动作——不派生 name、不写文件、
+     * 不建账本，与改动前逐字一致。name 只随本开关写，因为它是文件身份键：没打算投射
+     * 就给它起名，等于让存量库里多出一批没人用的非空列值。
+     */
+    memExport: {
+        enabled: boolean;
+        /** 投射根目录；空 = `<dataDir>/memories`。形状不合则回退默认并 warn，**不抛错**（投射是旁路，不能弄挂记忆）。 */
+        root: string;
+        /** 单次导出的条数护栏（照 wing-backfill / workspace-relink 口径）。 */
+        maxRecords: number;
+        /** 单次导出的墙钟预算(ms)。 */
+        timeBudgetMs: number;
+    };
     /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
     usageScenario: {
         enabled: boolean;
@@ -658,6 +672,17 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
             /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
             noneOf: Schema<string[], string[], "defined">;
         }>>[], "defined">;
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    memExport: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        root: Schema<string, string, "defined">;
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        root: Schema<string, string, "defined">;
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
@@ -1265,6 +1290,17 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
             /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
             noneOf: Schema<string[], string[], "defined">;
         }>>[], "defined">;
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    memExport: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        root: Schema<string, string, "defined">;
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        root: Schema<string, string, "defined">;
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;

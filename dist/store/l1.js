@@ -137,6 +137,21 @@ export class L1Store {
         return this.db.setL1WorkspaceIds(items);
     }
     /**
+     * 改一条记忆的文件身份名（N1）。形状校验在调用方（`normalizeName`），唯一性由
+     * 存储层的部分唯一索引挡——撞名就返 `{ ok: false, reason: 'dup' }`，**不自动加后缀**。
+     * 改名不触发场景重聚类，也不动 `updated_time`（约束在 `renameL1` 里）。
+     */
+    rename(id, name) {
+        const r = this.db.renameL1(id, name);
+        if (r === 'ok')
+            return { ok: true };
+        return { ok: false, reason: r };
+    }
+    /** 按名字反查 id（重名预检 / md 回灌）；未命中 ⇒ undefined。 */
+    findIdByName(name) {
+        return this.db.findRecordIdByName(name);
+    }
+    /**
      * repo 归属变化 → 受影响场景的重聚类作业(治理 W3,repo-change 触发源)。
      * 归属变了,记忆对场景的归属度就变了——受影响场景的摘要必须由当前事实重算
      * (I-20 投影哲学)。反查各 id 的 scene_name 入队(消费器在 ruminate 空闲档,

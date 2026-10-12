@@ -61,6 +61,12 @@ export interface MemoryStores {
   state: StateStore;
   /** 图谱存储(可选:测试缝/未装配时图谱泵整体停用;GraphStore 自带降级 no-op)。 */
   graph?: GraphStore;
+  /**
+   * 派生数据搬运面（P0-d）：merge 后把使用史与人工标注搬到新 id。
+   * 只声明用到的那个方法（不拉整个类入参）——未装配时不搬，行为与改动前一致。
+   */
+  usage?: { rekey(oldId: string, newId: string): boolean };
+  feedback?: { rekey(oldId: string, newId: string): boolean };
 }
 
 /** 管线任务(优先级调度:live > graph > rebuild)。 */
@@ -768,6 +774,12 @@ export class MemoryRunner {
         // 拿不到 → undefined → 归属回落 global(pipeline 侧 `resolveRecordScope` 兜底)。
         sessionWorkspaceIdOf(this.ctx, sessionId),
         anchorMap,
+        // 派生数据跟着搬（P0-d）：不搬等于每次合并把这条记忆的使用史与人工标注清零。
+        // 两个 sidecar 都是后装上的（`stores.usage` 在装配段才填），故在调用时点现取。
+        (oldId, newId) => {
+          this.stores.usage?.rekey(oldId, newId);
+          this.stores.feedback?.rekey(oldId, newId);
+        },
       );
       if (!result.skipped) {
         this.pending[mode] = rest;

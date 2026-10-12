@@ -164,6 +164,41 @@ export class RecallFeedbackStore {
     return this.entries.get(id)?.last;
   }
 
+  /**
+   * 把一条记录的人工标注搬到新 id（merge 之后由管线调用，P0-d）。
+   *
+   * 不搬的后果比使用史更直接：成熟度只吃“人工最近一笔”，而 `last` 留在旧 id 上
+   * 就等于新记录**看起来从没被人打过**；更坏的是旧 id 上那一笔 `-1`（已判过时）
+   * 会跟着旧行一起沉进垃圾堆，新行反而以“未标注”的活状态回到召回里。
+   *
+   * 计数按相加、不按轨迹重算：`history` 截断到 12 条，拿它反推 `obsolete` 必然少算。
+   * 两侧都有条目时取较新一侧的 `last`，轨迹按时间归并。
+   */
+  rekey(oldId: string, newId: string): boolean {
+    this.ensureLoaded();
+    if (oldId === newId) return false;
+    const from = this.entries.get(oldId);
+    if (from === undefined) return false;
+    const to = this.entries.get(newId);
+    const ratedCount = (to?.rated ?? 0) + from.rated;
+    const ratedSum = (to?.mean ?? 0) * (to?.rated ?? 0) + from.mean * from.rated;
+    const newer = to !== undefined && to.updatedAt >= from.updatedAt ? to : from;
+    const next: RecallFeedbackEntry = {
+      last: newer.last,
+      rated: ratedCount,
+      mean: ratedCount > 0 ? Math.round((ratedSum / ratedCount) * 100) / 100 : 0,
+      obsolete: (to?.obsolete ?? 0) + from.obsolete,
+      updatedAt: Math.max(to?.updatedAt ?? 0, from.updatedAt),
+      history: [...(to?.history ?? []), ...from.history].sort((a, b) => a.at - b.at).slice(-HISTORY_CAP),
+    };
+    this.entries.set(newId, next);
+    this.entries.delete(oldId);
+    this.rev += 1;
+    this.prune();
+    this.schedulePersist();
+    return true;
+  }
+
   summary(): { tracked: number; rated: number; obsolete: number } {
     this.ensureLoaded();
     let rated = 0;

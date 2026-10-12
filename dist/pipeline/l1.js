@@ -12,7 +12,8 @@ import { callLLM, parseJsonLogged, resolveLayerTokens } from '../llm.js';
 import { buildReceipts, newRunId, persistReceiptsSafely } from '../store/receipts.js';
 import { buildConflictPair, conflictRejectId, DEFER_MAX, normalizeClaimKey, normalizeConflictType, occupiesConflictQuota, pendingHardTotal, validateConflictPair, } from '../store/conflicts.js';
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt } from '../prompts/l1-extraction.js';
-import { normUsageScenario } from '../metadata-validators.js';
+import { normTags, normUsageScenario, readCognitiveHall, readWing } from '../metadata-validators.js';
+import { deriveName } from '../util/md-name.js';
 import { formatBatchConflictPrompt, getConflictDetectionSystemPrompt } from '../prompts/l1-dedup.js';
 import { resolveSourceAnchors, withSourceAnchors } from './anchors.js';
 import { familyForType, normPersistence, normScope, resolveRecordFamily, resolveRecordScope, WING_FALLBACK } from '../types.js';
@@ -73,7 +74,103 @@ function withUsageScenario(meta) {
     delete out.usageScenario;
     return out;
 }
-function toStoreRecord(m, now, ts, anchorMap) {
+/** 把“可能是数组的 metadata 值”读成字符串数组（不是数组就当空，不猜）。 */
+function asStrings(v) {
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.length > 0) : [];
+}
+/**
+ * 名字分配器：把 `deriveName` 的结果收敛成“本轮内 + 库里”都不重复的名字。
+ *
+ * 撞名时**宁可不写名字**（投射器会回落 `mem-<id8>`），也绝不自动加后缀——后缀会静默
+ * 造出语义重叠的第二条记忆。更现实的理由是：撞名若留给部分唯一索引去挡，INSERT
+ * 会抛错 → `upsertL1Batch` 整批回退逐条 → 那条记忆**直接丢失**。在写库前就把它
+ * 挡下来，比事后从 jsonl 里捞回来便宜得多。
+ *
+ * 返回 `undefined` 而不是空串：没名字的记录与改动前形状一致（零漂移）。
+ */
+function makeNameAllocator(store) {
+    const taken = new Set();
+    return (content) => {
+        const base = deriveName(content);
+        if (base.length === 0)
+            return undefined;
+        if (taken.has(base))
+            return undefined;
+        taken.add(base);
+        if (store.findIdByName(base) !== undefined)
+            return undefined;
+        return base;
+    };
+}
+/**
+ * 合并时的检索轴并集（P0-c）。
+ *
+ * 此前合并产物只带新记忆的 metadata，targets 的 tags/hall/cogHall/使用场景全丢——
+ * 一次合并就把这条记忆从它原来的 Room/Wing 里摘出去，而面板上看不出任何异常（F2）。
+ * 这里只并**检索轴**：派生评价（maturity/usage/rating）与内容层字段不在其列。
+ *
+ * 单值轴（hall/cogHall）两侧互斥时**保留新记忆侧并留痕**，不拼成 `"a,b"`——那会
+ * 造出一个不存在的域（与 `isWingId` 的值域约束相冲）。
+ *
+ * @param self - 新记忆自己的 metadata（可为 undefined）。
+ * @param targets - 被合并掉的旧记录们的 metadata。
+ * @returns 并集后的 metadata 与若干条“丢了什么”的留痕文案。
+ */
+export function mergeAxes(self, targets) {
+    const out = { ...(self ?? {}) };
+    const notes = [];
+    const list = targets.filter((m) => m !== undefined);
+    // tags 是 Room 的构成单元（自生长分类）：并集去重后**仍过 normTags**，
+    // 长度与字符纪律不因合并而放宽。
+    const tags = normTags([...asStrings(out.tags), ...list.flatMap((m) => asStrings(m.tags))], 6);
+    if (tags.length > 0)
+        out.tags = tags;
+    // 使用场景：同样并集，但维持≤ 3 的既有上限（多了会灌 prompt）。
+    const sc = normUsageScenario([...asStrings(out.dsh_usage_scenario), ...list.flatMap((m) => asStrings(m.dsh_usage_scenario))]);
+    if (sc.length > 0)
+        out.dsh_usage_scenario = sc;
+    // Room 待评审状态要跟着走，否则合并把“待评审”洗成“未标注”、下轮反刍重新入队。
+    const cands = normTags([...asStrings(out.roomCandidates), ...list.flatMap((m) => asStrings(m.roomCandidates))], 6);
+    if (cands.length > 0)
+        out.roomCandidates = cands;
+    if (out.roomReview === undefined) {
+        const review = list.find((m) => typeof m.roomReview === 'string' && m.roomReview.length > 0)?.roomReview;
+        if (review !== undefined)
+            out.roomReview = review;
+    }
+    // 单值轴：新记忆已打标则不抢；没打标且目标侧只一个结论才继承，互斥则留痕不猜。
+    const wingMine = readWing(out);
+    if (wingMine === undefined) {
+        const theirs = [...new Set(list.map((m) => readWing(m)).filter((v) => v !== undefined))];
+        if (theirs.length === 1)
+            out.hall = theirs[0];
+        else if (theirs.length > 1)
+            notes.push(`hall 目标侧互斥(${theirs.join('|')})，不猜`);
+    }
+    else {
+        const theirs = new Set(list.map((m) => readWing(m)).filter((v) => v !== undefined));
+        theirs.delete(wingMine);
+        if (theirs.size > 0)
+            notes.push(`hall 保留新记忆侧 ${wingMine}，目标侧 ${[...theirs].join('|')} 被舍`);
+    }
+    const cogMine = readCognitiveHall(out);
+    if (cogMine === undefined) {
+        // 认知 hall 的值是固定枚举（不是 string），故用 Set 收集而不是 `v is string` 谓词。
+        const seen = new Set();
+        for (const m of list) {
+            const v = readCognitiveHall(m);
+            if (v !== undefined)
+                seen.add(v);
+        }
+        if (seen.size === 1)
+            out.cogHall = [...seen][0];
+    }
+    return { metadata: out, notes };
+}
+function toStoreRecord(m, now, ts, anchorMap, 
+/** 文件身份名分配器（`cfg.memExport.enabled` 才传）；不传则**不写 name 键**，记录形状与改动前逐字一致。 */
+nameOf) {
+    const name = nameOf === undefined ? undefined : nameOf(m.content);
     return {
         id: m.record_id,
         content: m.content,
@@ -97,6 +194,8 @@ function toStoreRecord(m, now, ts, anchorMap) {
         ...(m.repoKeyName ? { repoKeyName: m.repoKeyName } : {}),
         ...(m.repoKeyOwner ? { repoKeyOwner: m.repoKeyOwner } : {}),
         ...(m.applicability ? { applicability: m.applicability } : {}),
+        // 文件身份键：没分到名字（关着 / 正文无可用字 / 撞名）就不写键，与改动前同形。
+        ...(name === undefined || name.length === 0 ? {} : { name }),
         ...temporalOf(m.metadata),
     };
 }
@@ -139,7 +238,13 @@ workspaceId,
  * **缺省时行为与改动前逐字一致**——传入的 `pending` 消息若不带锚点(老数据、
  * 未启用捕获侧打戳),`resolveSourceAnchors` 一律返回 undefined,不写 metadata 键。
  */
-anchorMap) {
+anchorMap, 
+/**
+ * 合并后的**派生数据搬运钩子**（P0-d）：旧 id → 新 id。使用史与人工标注存在
+ * 另两个 sidecar 里，而 merge 每次新铸 id——不搬就等于每次合并把这条记忆的
+ * `used`/人工打分清零，它会被当成“没用过”而沉底。缺省不搬（行为与改动前一致）。
+ */
+mergeRekey) {
     if (!cfg.extract.enabled)
         return { stored: 0, skipped: true, sceneName: chainHead(states, mode), newRecords: [] };
     // 触发阈值(渐进爬坡 + 按会话切片计数)由 runner 判定(trigger.ts);
@@ -345,6 +450,12 @@ anchorMap) {
      */
     const supersededBy = new Map();
     const added = [];
+    /**
+     * 文件身份名分配器。**只在 `cfg.memExport.enabled` 为真时存在**——关掉时它就是
+     * undefined，三处 `toStoreRecord` 都走“不写 name 键”的旧路径（零漂移）。
+     * 建在循环外是有意的：去重范围必须是**整轮**，逐条新建 Set 就等于不去重。
+     */
+    const nameOf = cfg.memExport?.enabled === true ? makeNameAllocator(store) : undefined;
     /** §C 本轮新冻结的冲突对(应用完新增记录后统一落盘)。 */
     const frozen = [];
     /**
@@ -361,7 +472,7 @@ anchorMap) {
         const action = decision.action;
         const ts = m.metadata?.activity_start_time ? Date.parse(String(m.metadata.activity_start_time)) : now;
         if (action === 'store') {
-            added.push(toStoreRecord(m, now, ts, anchorMap));
+            added.push(toStoreRecord(m, now, ts, anchorMap, nameOf));
             continue;
         }
         // ── §C 矛盾冻结:不自动裁决 ──
@@ -375,7 +486,7 @@ anchorMap) {
                 ? validateConflictPair(m.record_id, decision.winner, decision.loser, new Set(byId.keys()), batchIds)
                 : null;
             if (pair) {
-                added.push(toStoreRecord(m, now, ts, anchorMap));
+                added.push(toStoreRecord(m, now, ts, anchorMap, nameOf));
                 // Phase 3(task_3.2):两轴**先归一后落库**。畸形输入(非字符串 / 空 / 不在枚举内)
                 // 一律落 'hard' + 空键 —— **绝不**因此回落 store:类型与键是辅助轴,
                 // 它们没有权力否决主轴(这条 conflict 决策是否成立)。
@@ -440,7 +551,7 @@ anchorMap) {
             else {
                 logger.warn(`[memory] 矛盾冻结:第 ${m.record_id} 条的 conflict 决策无法构成冻结对` +
                     `(winner=${String(decision.winner)} loser=${String(decision.loser)}),已回落 store`);
-                added.push(toStoreRecord(m, now, ts, anchorMap));
+                added.push(toStoreRecord(m, now, ts, anchorMap, nameOf));
                 // §C 丢弃留痕(task_1.4):这一跳此前**完全静默**——模型明确说了"判不了",
                 // 而它既不停放、也不落库,只在日志留一行 warn,事后在库里查不到。
                 // **关闭态不落痕**:关闭时 prompt 里根本没有 conflict 动作,模型凭惯性输出它
@@ -472,11 +583,31 @@ anchorMap) {
             .map((t) => Date.parse(t))
             .filter((t) => !Number.isNaN(t))
             .concat([now]);
+        const targetRecords = targets
+            .map((id) => byId.get(id))
+            .filter((r) => r !== undefined);
+        const mergedContent = decision.merged_content && decision.merged_content.trim()
+            ? decision.merged_content
+            : m.content;
+        // 合并产物的身份与检索轴必须从 targets 继承（P0-c）。此前这里只带新记忆的
+        // metadata：`ext_key` 被写成空 ⇒ 幂等保护随合并消失（而它是“文件↔库”的唯一锚）；
+        // `name` 同理 ⇒ 文件身份随合并漂移；tags/hall/使用场景全丢 ⇒ 一次合并就把这条
+        // 记忆从它原来的 Room/Wing 摘出去，且全程无日志（F2）。
+        const inheritedName = targetRecords.find((r) => typeof r.name === 'string' && r.name.length > 0)?.name;
+        const inheritedExtKey = targetRecords.find((r) => typeof r.extKey === 'string' && r.extKey.length > 0)?.extKey;
+        const axes = mergeAxes(m.metadata, targetRecords.map((r) => r.metadata));
+        // 名字优先继承（保持文件身份连续）；没得继承才按**合并后的正文**另起一个。
+        const mergedName = inheritedName ?? (nameOf === undefined ? undefined : nameOf(mergedContent));
+        // 丢东西必须说话：静默合并是这一整期要结的账。
+        for (const note of axes.notes) {
+            logger.info(`[memory] merge 轴冲突(${m.record_id} ← ${targets.join(',')}): ${note}`);
+        }
+        logger.info(`[memory] merge 传播身份(${m.record_id} ← ${targets.length} 条): `
+            + `name=${mergedName ?? '(未分到)'} extKey=${inheritedExtKey ?? '(无)'} `
+            + `tags=${Array.isArray(axes.metadata.tags) ? axes.metadata.tags.length : 0}`);
         added.push({
             id: m.record_id,
-            content: decision.merged_content && decision.merged_content.trim()
-                ? decision.merged_content
-                : m.content,
+            content: mergedContent,
             type: decision.merged_type || m.type,
             priority: Number(decision.merged_priority) || Number(m.priority) || 60,
             scene_name: m.scene_name,
@@ -488,8 +619,11 @@ anchorMap) {
             // R7:合并/更新产出的记录同样带锚点——否则"合并一次就丢坐标",
             // 而合并恰恰是长会话里最常发生的动作。无映射时传空表 →
             // resolveSourceAnchors 返回 undefined → 不写 metadata 键(零漂移)。
-            metadata: withSourceAnchors(m.metadata, resolveSourceAnchors(m.source_message_ids, anchorMap ?? new Map())),
+            metadata: withSourceAnchors(axes.metadata, resolveSourceAnchors(m.source_message_ids, anchorMap ?? new Map())),
             family: m.family,
+            // 身份两键：从 targets 继承（没得继承且开关开着才现分）。
+            ...(inheritedExtKey === undefined ? {} : { extKey: inheritedExtKey }),
+            ...(mergedName === undefined || mergedName.length === 0 ? {} : { name: mergedName }),
             // 归属五字段必须带上：这里此前**一个都没写**，等于每次合并都把 scope/
             // workspaceId/repoKey/applicability 打回默认——cfg.scope='global' 时看不出来，
             // 一旦启用围栏，一条记忆归过哪个项目就在合并后静默丢了。
@@ -516,6 +650,10 @@ anchorMap) {
         }
         for (const [newId, ids] of byNewRecord) {
             store.retire(ids, { at: retiredAt, reason: 'superseded', by: newId });
+            // 旧行退场后它的派生数据不能留在死 id 上：按“每个被合并者 → 新行”搬一次。
+            if (mergeRekey !== undefined)
+                for (const oldId of ids)
+                    mergeRekey(oldId, newId);
         }
     }
     // §C 自动裁决的执行面:LLM 的 loser 从检索面退场(winner 存活),同为**软删**。

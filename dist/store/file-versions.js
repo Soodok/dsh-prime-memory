@@ -27,3 +27,5 @@ export const SESSION_RECALLED_FILE_VERSION = 1;
 export const PENDING_FILE_VERSION = 1;
 /** `reconcile-state.json`。 */
 export const RECONCILE_STATE_FILE_VERSION = 1;
+/** `mem-md-ledger.json`（md 投射指纹账本，N9；派生态，删了可重建）。*/
+export const MEM_MD_LEDGER_FILE_VERSION = 1;

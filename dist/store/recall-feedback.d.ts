@@ -50,6 +50,17 @@ export declare class RecallFeedbackStore {
     meanOf(id: string): number | undefined;
     /** 最近一次打分(-1..5);未标注 → undefined。 */
     lastOf(id: string): FeedbackScore | undefined;
+    /**
+     * 把一条记录的人工标注搬到新 id（merge 之后由管线调用，P0-d）。
+     *
+     * 不搬的后果比使用史更直接：成熟度只吃“人工最近一笔”，而 `last` 留在旧 id 上
+     * 就等于新记录**看起来从没被人打过**；更坏的是旧 id 上那一笔 `-1`（已判过时）
+     * 会跟着旧行一起沉进垃圾堆，新行反而以“未标注”的活状态回到召回里。
+     *
+     * 计数按相加、不按轨迹重算：`history` 截断到 12 条，拿它反推 `obsolete` 必然少算。
+     * 两侧都有条目时取较新一侧的 `last`，轨迹按时间归并。
+     */
+    rekey(oldId: string, newId: string): boolean;
     summary(): {
         tracked: number;
         rated: number;
