@@ -7,9 +7,12 @@
  * - `reconcileLedger` 什么都不写，只按账本与磁盘现状出四态报告——"看看差在哪"
  *   不该需要高权限，`memoryMutate` 的门留给 P2 的真同步。
  *
- * 有界性照 `wing-backfill` / `workspace-relink` 的既有口径：`maxRecords` 与
- * `timeBudgetMs` 双护栏，**扫描阶段也查墙钟**（只数条数不看时间，一条超大记录就能
- * 把一次点击挂死），剩余条数如实回报 `remaining`，由用户再点一次继续。
+ * 有界性照 `wing-backfill` / `workspace-relink` 的既有口径，但**配额数的是「动作」不是「遍历」**：
+ * `maxRecords` 只约束真碰了磁盘的条数（写入 / 补账 / 失败），判为「未变且已记账」的不吃配额。
+ * 原来的写法把未变也计入配额，于是**第二次点击扫的还是同一批前 N 条**，`remaining` 恒等于
+ * 同一个数——真机实测「已写 9 · 未变 291 · 剩余 866」点多少次都停在 300。扫描总量改由
+ * `timeBudgetMs` 兜底（只数条数不看时间，一条超大记录就能把一次点击挂死，这条理由不变），
+ * 剩余条数照旧如实回报 `remaining`。
  */
 import { dirname } from 'node:path';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -59,10 +62,12 @@ export async function exportRecords(deps: MemExportDeps): Promise<MemExportRepor
   const startedAt = (deps.now ?? Date.now)();
   const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
   const report: MemExportReport = { root, inWorkspace: 0, scanned: 0, written: 0, unchanged: 0, skipped: 0, remaining: 0, capped: false };
+  // 吃配额的只有**碰过磁盘**的条数：写入、未变但补账、以及失败的那条（它已经碰过盘）。
+  let worked = 0;
 
   for (let i = 0; i < records.length; i++) {
     // 两条护栏都在**循环顶部**查：写在末尾会被 `continue` 跳过（自家测试抓过这个 bug）。
-    if (report.scanned >= deps.maxRecords || (deps.now ?? Date.now)() - startedAt >= deps.timeBudgetMs) {
+    if (worked >= deps.maxRecords || (deps.now ?? Date.now)() - startedAt >= deps.timeBudgetMs) {
       report.capped = true;
       report.remaining = records.length - i;
       break;
@@ -89,16 +94,34 @@ export async function exportRecords(deps: MemExportDeps): Promise<MemExportRepor
       if (existing !== undefined && digest(existing) === fileDg) {
         report.unchanged++;
         // 内容没变也要补账：首轮导出前账本是空的，不补就永远判不出"文件被改过"。
-        if (ledger.get(abs) === undefined) await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
+        // 补账要吃配额（它写盘），纯未变不吃——否则「再点一次」永远在同一批上打转。
+        if (ledger.get(abs) === undefined) {
+          try {
+            await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
+            worked++;
+          } catch (err) {
+            // 文件与库都没动，只是没记上账：不能算 skipped（它没失败），也不能反回退成未计。
+            logger?.warn(`[memory] md 投射补账失败(下轮仍会重补): ${abs} - ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         await tick();
         continue;
       }
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, text, 'utf8');
       report.written++;
-      await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
+      worked++;
+      // 盘已经写成功了，之后记账失败**不能再算成 skipped**：同一条既 written 又 skipped
+      // 会让三个计数加起来大于 scanned（自家基准测出 1200 条同时报「写 1200 跳 1200」），
+      // 而报告是给人判断「这批要不要重来」的依据，自洽性比分类精细更要紧。
+      try {
+        await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
+      } catch (err) {
+        logger?.warn(`[memory] md 投射已落盘但记账失败(下轮仍会重写这条): ${abs} - ${err instanceof Error ? err.message : String(err)}`);
+      }
     } catch (err) {
       report.skipped++;
+      worked++;
       logger?.warn(`[memory] md 投射单条失败(跳过，不影响其余): ${abs} - ${err instanceof Error ? err.message : String(err)}`);
     }
     await tick();
@@ -162,10 +185,13 @@ export async function reconcileLedger(deps: ReconcileDeps): Promise<ReconcileRep
   const samples: ReconcileSample[] = [];
   const sampleCap = deps.sampleCap ?? 10;
   let scanned = 0;
+  // 与导出同口径：`maxRecords` 数的是**需要人处理差异**的条数，`same` 不吃配额。
+  // 否则一个已经收敛的库会把配额全花在“确认没差”上，真正要看的差异反而被护到窗外。
+  let worked = 0;
   let capped = false;
 
   for (let i = 0; i < records.length; i++) {
-    if (scanned >= deps.maxRecords || (deps.now ?? Date.now)() - startedAt >= deps.timeBudgetMs) { capped = true; break; }
+    if (worked >= deps.maxRecords || (deps.now ?? Date.now)() - startedAt >= deps.timeBudgetMs) { capped = true; break; }
     const r = records[i];
     scanned++;
     if (r === undefined) continue;
@@ -176,6 +202,7 @@ export async function reconcileLedger(deps: ReconcileDeps): Promise<ReconcileRep
     const entry = abs === undefined ? undefined : ledger.get(abs);
     const push = (state: keyof ReconcileCounts): void => {
       counts[state]++;
+      if (state !== 'same') worked++;
       if (samples.length < sampleCap) samples.push({ relPath: target.relPath, id: r.id, state });
     };
     if (abs === undefined) { push('missingFile'); logger?.warn(`[memory] 对账遇到越界路径: ${target.relPath}`); await tick(); continue; }

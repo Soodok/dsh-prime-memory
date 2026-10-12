@@ -141,6 +141,70 @@ describe('exportRecords', () => {
     expect(second.remaining).toBe(0);
     expect(second.written + second.unchanged).toBe(5);
   });
+
+  it('【护栏数的是动作】连续三次点击真的把 6 条推完（不是每次都在前 2 条上打转）', async () => {
+    // 真机形状：面板报「已写 9 · 未变 291 · 剩余 866」且点多少次都停在 300——因为旧判据是
+    // `scanned >= maxRecords`，未变也吃配额，第二轮扫的还是同一批前 N 条。
+    const six = Array.from({ length: 6 }, (_, i) => rec(`p${i}`, `推进 ${i} 号`, { name: `push-${i}` }));
+    const { store, ledger, root, dataDir } = await setup(six);
+    const run = () => exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 2, timeBudgetMs: 60_000 });
+
+    const a = await run();
+    expect([a.written, a.unchanged, a.remaining, a.capped]).toEqual([2, 0, 4, true]);
+
+    // 关键差异就这一行：旧判据会把 p0/p1 的“未变”也吃配额，于是第二轮
+    // `written=0 unchanged=2 remaining=4`（和第一轮一模一样，永远停在 300）。
+    // 现在未变不再吃配额，所以 p2/p3 被真正写出去，remaining 从 4 降到 2。
+    const b = await run();
+    expect([b.written, b.unchanged, b.remaining, b.capped]).toEqual([2, 2, 2, true]);
+
+    const c = await run();
+    expect([c.written, c.unchanged, c.remaining, c.capped]).toEqual([2, 4, 0, false]);
+
+    // 六条真的都在盘上（不只看计数器好看）。
+    for (let i = 0; i < 6; i++) {
+      const text = await readFile(join(root, 'work_fact', `push-${i}.memory.md`), 'utf8');
+      expect(text).toContain(`推进 ${i} 号`);
+    }
+  });
+
+  it('【护栏数的是动作】已收敛的库：maxRecords=1 也能一次扫完全部（未变不吃配额）', async () => {
+    const four = Array.from({ length: 4 }, (_, i) => rec(`q${i}`, `收敛 ${i} 号`, { name: `done-${i}` }));
+    const { store, ledger, dataDir } = await setup(four);
+    await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 100, timeBudgetMs: 60_000 });
+
+    const again = await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 1, timeBudgetMs: 60_000 });
+    expect(again.written).toBe(0);
+    expect(again.unchanged).toBe(4);
+    expect(again.scanned).toBe(4);
+    expect(again.capped).toBe(false);
+    expect(again.remaining).toBe(0);
+  });
+
+  it('写盘成功但记账失败：只计 written，不再叠 skipped（三个计数必能相加自洽）', async () => {
+    // 这个形状是真量出来的：未 init 的账本让 stamp 抛，于是 1200 条同时报「写 1200 跳 1200」。
+    // 报告是给人判断“这批要不要重来”的依据，不自洽就等于骗人。
+    const bad: MdLedgerStore = {
+      get: () => undefined,
+      set: () => { throw new Error('账本故意报错'); },
+      flush: async () => {},
+    } as unknown as MdLedgerStore;
+    const two = [rec('x1', '自洽 1 号', { name: 'sane-1' }), rec('x2', '自洽 2 号', { name: 'sane-2' })];
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-mdstamp-'));
+    dirs.push(dir);
+    const warns: string[] = [];
+    const rep = await exportRecords({
+      records: two, cfgRoot: dir, dataDir: dir, ledger: bad,
+      maxRecords: 100, timeBudgetMs: 60_000,
+      logger: { info: () => {}, warn: (m) => { warns.push(m); }, error: () => {} },
+    });
+    expect(rep.written).toBe(2);
+    expect(rep.skipped).toBe(0);
+    expect(rep.written + rep.unchanged + rep.skipped).toBe(rep.scanned);
+    expect(warns.some((w) => w.includes('记账失败'))).toBe(true);
+    // 盘上下得去的文件仍在（失败只影响便利度，不影响事实）。
+    expect(await readFile(join(dir, 'work_fact', 'sane-1.memory.md'), 'utf8')).toContain('自洽 1 号');
+  });
 });
 
 describe('resolveMemoriesRoot', () => {
