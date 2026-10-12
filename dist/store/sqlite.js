@@ -625,6 +625,10 @@ export class MemoryDb {
       `);
             if (ftsRebuilt)
                 this.backfillL1Fts();
+            // 退场残留清理(幂等):历史上退场不变量只在写入漏斗上强制,FTS 重建回灌与
+            // 增量重嵌入两条旁路会把已退场记录留在检索面里(实测本机 725 行)。
+            // 上面的口径修复只挡新增，已有的要在这里收掉——否则那 725 条永远脏着。
+            this.purgeRetiredRetrievalRows();
             this.stmtL0FtsInsert = this.db.prepare(`
         INSERT INTO l0_fts (message_text, message_text_original, record_id, session_id, role, recorded_at, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -791,6 +795,35 @@ export class MemoryDb {
         catch {
             return -1;
         }
+    }
+    /**
+     * 清除“已退场但仍待在检索面”的残留行（FTS + 向量）。幂等：第二次跑命中 0 行。
+     *
+     * 为什么必须存在于启动路径：口径修复只挡住**新增**的脏行，而存量脏行仍在给
+     * BM25/向量检索供货——对用户而言就是“标了失效却还能被召回”。
+     * 失败只 warn：这是个修复动作，无权把库拖进 degraded，更不能抛进启动
+     * 的 await 链（那里报错 = storageOk=false = 记忆功能整体停用）。
+     */
+    purgeRetiredRetrievalRows() {
+        const sub = `SELECT record_id FROM l1_records WHERE ${retiredL1Sql()}`;
+        // 能力不在就别发 DELETE——每次启动一条无谓告警会把真问题埋掉。
+        const targets = [
+            { table: 'l1_fts', ready: this.stmtL1FtsInsert !== undefined },
+            { table: 'l1_vec', ready: this.stmtDeleteL1Vec !== undefined && this.tableExists('l1_vec') },
+        ];
+        let purged = 0;
+        for (const t of targets) {
+            if (!t.ready)
+                continue;
+            try {
+                purged += Number(this.db.prepare(`DELETE FROM ${t.table} WHERE record_id IN (${sub})`).run().changes);
+            }
+            catch (err) {
+                this.logger?.warn(`${TAG} 退场残留清理失败(${t.table}，本轮跳过): ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
+        if (purged > 0)
+            this.logger?.info(`${TAG} 清理退场残留检索行 ${purged} 条(FTS + 向量)`);
     }
     /** 重建后的 l0_fts 从 l0_conversations 全量回灌(仅 drop 重建时调用;iterate 流式)。 */
     backfillL0Fts() {

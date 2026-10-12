@@ -121,6 +121,15 @@ export declare class MemoryDb {
     private backfillL1Fts;
     /** 已退场 L1 行数(回灌留痕用)。失败返回 -1——宁可日志写“未知”,也不假装 0 条。 */
     private countL1Retired;
+    /**
+     * 清除“已退场但仍待在检索面”的残留行（FTS + 向量）。幂等：第二次跑命中 0 行。
+     *
+     * 为什么必须存在于启动路径：口径修复只挡住**新增**的脏行，而存量脏行仍在给
+     * BM25/向量检索供货——对用户而言就是“标了失效却还能被召回”。
+     * 失败只 warn：这是个修复动作，无权把库拖进 degraded，更不能抛进启动
+     * 的 await 链（那里报错 = storageOk=false = 记忆功能整体停用）。
+     */
+    private purgeRetiredRetrievalRows;
     /** 重建后的 l0_fts 从 l0_conversations 全量回灌(仅 drop 重建时调用;iterate 流式)。 */
     private backfillL0Fts;
     private readEmbeddingMeta;

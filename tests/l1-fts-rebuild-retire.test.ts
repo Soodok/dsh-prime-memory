@@ -168,3 +168,57 @@ describe('增量重嵌入不得把退场记录塞回向量面', () => {
     db.close();
   });
 });
+
+/**
+ * 存量脏行的清理（口径修复只挡新增，本机实测已有 725 行脏着）。
+ *
+ * 这里手动把退场行塞回 `l1_fts` 伪造脏数据（FTS5 是内置模块，裸连接就能写；
+ * `l1_vec` 是 vec0 虚表、按连接生效，裸写会炸，所以向量侧不在本用例面里造脏）。
+ * 对照项：活跃行的 FTS 行必须原样保留——防止把清理写成“整表清空”式假修复。
+ */
+describe('启动清理存量退场残留', () => {
+  it('人工脏化的退场行在重开库后被清掉，活跃行不受影响', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'dsh-retire-purge-'));
+    dirs.push(dataDir);
+    const dbPath = join(dataDir, 'p.db');
+    let db = new MemoryDb(dbPath, DIM);
+    db.init();
+    let store = new L1Store(dataDir, db, fakeEmbed(), 'hybrid', undefined, 0);
+    await store.init();
+    await store.appendNew([
+      rec(GONE, '部署脚本 evidence 目录 回滚逻辑'),
+      rec(KEEP, '咖啡豆每周采购一次'),
+    ]);
+    store.retire([GONE], { at: AT, reason: 'obsolete' });
+    db.close();
+
+    // 造脏：照历史旁路（无过滤的回灌）那样把退场行插回 FTS 面
+    const raw = new DatabaseSync(dbPath);
+    raw
+      .prepare('INSERT INTO l1_fts (content, content_original, record_id, type, family, scope) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('部署脚本 evidence 目录 回滚逻辑', '部署脚本 evidence 目录 回滚逻辑', GONE, 'work_fact', 'work', 'global');
+    const dirty = raw.prepare('SELECT COUNT(*) n FROM l1_fts WHERE record_id = ?').get(GONE) as { n: number };
+    expect(dirty.n, '脏数据应已造好(否则本用例无意义)').toBe(1);
+    raw.close();
+
+    // 重开→init 里的清理应当收掉它
+    db = new MemoryDb(dbPath, DIM);
+    db.init();
+    store = new L1Store(dataDir, db, fakeEmbed(), 'hybrid', undefined, 0);
+    await store.init();
+    const check = new DatabaseSync(dbPath, { readOnly: true });
+    expect((check.prepare('SELECT COUNT(*) n FROM l1_fts WHERE record_id = ?').get(GONE) as { n: number }).n, '退场残留必须被清').toBe(0);
+    // 对照：活跃行不能被误删
+    expect((check.prepare('SELECT COUNT(*) n FROM l1_fts WHERE record_id = ?').get(KEEP) as { n: number }).n, '活跃行不能被误清').toBe(1);
+    check.close();
+
+    // 幂等：再重开一次不得报错，也不得把活跃行清掉
+    db.close();
+    db = new MemoryDb(dbPath, DIM);
+    db.init();
+    const again = new DatabaseSync(dbPath, { readOnly: true });
+    expect((again.prepare('SELECT COUNT(*) n FROM l1_fts WHERE record_id = ?').get(KEEP) as { n: number }).n, '二次启动仍不得伤及活跃行').toBe(1);
+    again.close();
+    db.close();
+  });
+});
