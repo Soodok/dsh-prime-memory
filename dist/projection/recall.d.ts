@@ -19,6 +19,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { SessionRecalledStore } from '../store/session-recalled.js';
+import type { MemoryRecord } from '../types.js';
 export declare const MEMORY_RECALL_KEY = "memoryRecall";
 /** view 最多透出条数（最近在上；超出部分只计入 count，防 wire 体量失控）。 */
 export declare const RECALL_VIEW_CAP = 20;
@@ -36,6 +37,16 @@ export interface RecallItemView {
      * 卡片靠它把已打的那一笔显示成选中态；均值等细粒度数据走 `session-recalled` 端点。
      */
     rating?: number;
+    /**
+     * 正文全文（截断至 BODY_MAX）；消费方悬停泡泡直接读它，不再回查端点。
+     * 缺席 = 旧帧（读侧退化成只显示 title）。
+     */
+    body?: string;
+    /**
+     * 该记录已被判定过时（`isRetired`）。只写 true：未退场时字段缺席，
+     * 读侧按「缺席即活跃」处理，旧帧自然兼容。
+     */
+    retired?: true;
 }
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
 export interface RecallProjectionState {
@@ -64,15 +75,10 @@ interface SchemaLike<T> {
 export declare const stateSchema: SchemaLike<RecallProjectionState>;
 /** view 校验（出网前调用；未知键容忍，同 slots 投影的语义边界）。 */
 export declare const viewSchema: SchemaLike<RecallView>;
-/** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。 */
+/** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。
+ *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。 */
 export interface RecallL1Face {
-    getByIds(ids: string[]): Array<{
-        id: string;
-        type: string;
-        content: string;
-        priority: number;
-        metadata?: Record<string, unknown>;
-    }>;
+    getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo'>>;
 }
 /** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
 export interface RecallFeedbackFace {

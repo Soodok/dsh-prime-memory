@@ -5907,7 +5907,8 @@ var __defProp = Object.defineProperty;
 		            children: TYPE_LABELS[r.type] || r.type
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "dsh-mem-sinfo-val", style: textStyle, children: r.content }),
+		        /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "dsh-mem-sinfo-val", style: r.retired === true ? STALE_TEXT_STYLE : textStyle, children: r.content }),
+		        r.retired === true ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 10, color: "var(--dsh-mem-text-3)", whiteSpace: "nowrap", flexShrink: 0 }, children: "已判过时" }) : null,
 		        r.maturity ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { style: { fontSize: 10, color: "var(--dsh-mem-text-3)", whiteSpace: "nowrap", flexShrink: 0 }, children: MATURITY_LABEL[r.maturity] }) : null
 		      ] }, r.id)),
 		      hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: "+ " + hidden + " 条更早召回（详见面板「记忆」页）" }) : null
@@ -5930,6 +5931,7 @@ var __defProp = Object.defineProperty;
 		  WebkitBoxOrient: "vertical",
 		  overflow: "hidden"
 		};
+		var STALE_TEXT_STYLE = { ...textStyle, textDecoration: "line-through" };
 		function rowTitle(r) {
 		  const head = "[" + (TYPE_LABELS[r.type] || r.type) + "] " + r.content;
 		  const sc = r.usageScenario && r.usageScenario.length > 0 ? "\n使用场景：" + r.usageScenario.join("；") : "";

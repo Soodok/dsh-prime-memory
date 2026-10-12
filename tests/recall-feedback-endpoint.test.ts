@@ -3,7 +3,8 @@
  *
  * 这里钉的是**语义**而不是存储细节：
  *   - 打分只能落在"本会话真召回过、且还活着"的记录上（结构性护栏，替代全局高权限模式）；
- *   - `-1` 一次做齐三件事：退场(reason=obsolete) + 从活召回集摘掉 + 排入播报队列；
+ *   - `-1` 一次做齐两件事：退场(reason=obsolete) + 排入播报队列；条目**不**从活召回集摘掉，
+ *     而是要留在列表里让卡片打上删除线（文本仍在上下文，直到压缩）；
  *   - 0..5 只做聚合，**不碰退场、不碰播报**（相关度低不等于过时）；
  *   - 播报是一次性的：drain 后下一轮不再有；关 announce 时退场但仍不播报。
  */
@@ -136,7 +137,7 @@ describe('dsh-memory/recall-feedback：0..5 只聚合', () => {
 });
 
 describe('dsh-memory/recall-feedback：-1 = 声明过时', () => {
-  it('退场(reason=obsolete) + 摘出活召回集 + 排播报', async () => {
+  it('退场(reason=obsolete) + 留在活召回集 + 排播报', async () => {
     const { deps, retireCalls, notices, recalled, feedback } = await makeDeps({
       records: [{ id: 'r1', content: 'npm 版本列表是 2026-09-25 的快照\n细节', type: 'work_fact', priority: 78 }],
       recalledIds: ['r1', 'r2'],
@@ -146,8 +147,10 @@ describe('dsh-memory/recall-feedback：-1 = 声明过时', () => {
     };
     expect(res).toMatchObject({ retired: true, announced: true, rating: { obsolete: 1 } });
     expect(retireCalls).toEqual([{ ids: ['r1'], reason: 'obsolete' }]);
-    // 只摘这一条,其余召回条目留在卡上
-    expect(recalled.list('sess-1')).toEqual(['r2']);
+    // 不摘除：被判过时的那条仍留在列表里（卡片靠 view 的 retired 画删除线），
+    // 其余条目更不该跟着一起消失。
+    expect(recalled.list('sess-1')).toEqual(['r1', 'r2']);
+    expect(res.retired).toBe(true);
     const queued = notices.peek('sess-1');
     expect(queued).toHaveLength(1);
     expect(queued[0]).toMatchObject({ id: 'r1', title: 'npm 版本列表是 2026-09-25 的快照' });

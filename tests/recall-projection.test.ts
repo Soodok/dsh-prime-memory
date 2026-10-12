@@ -51,7 +51,7 @@ interface View {
   rev: number;
   sessionId: string;
   count: number;
-  items: Array<{ id: string; type: string; title: string; priority: number; scenario?: string[]; rating?: number }>;
+  items: Array<{ id: string; type: string; title: string; priority: number; scenario?: string[]; rating?: number; body?: string; retired?: true }>;
 }
 
 async function newStore(): Promise<SessionRecalledStore> {
@@ -88,7 +88,7 @@ async function captured(
 
 const header = (id: string): unknown => ({ version: 3, id, createdAt: Date.now(), isSeeded: false });
 
-function fakeL1(rows: Record<string, { type?: string; content: string; priority?: number; metadata?: Record<string, unknown> }>): RecallL1Face {
+function fakeL1(rows: Record<string, { type?: string; content: string; priority?: number; metadata?: Record<string, unknown>; validTo?: number }>): RecallL1Face {
   return {
     getByIds: (ids) =>
       ids
@@ -99,6 +99,8 @@ function fakeL1(rows: Record<string, { type?: string; content: string; priority?
           content: rows[id]!.content,
           priority: rows[id]!.priority ?? 60,
           metadata: rows[id]!.metadata,
+          // 真库的 getL1ByIds 不过滤退场行，假面也不能滤（否则删除线测不到）。
+          ...(rows[id]!.validTo !== undefined ? { validTo: rows[id]!.validTo } : {}),
         })),
   };
 }
@@ -327,6 +329,53 @@ describe('人打分（rating）进 view', () => {
   it('viewSchema 拒非数字 rating', () => {
     expect(() => viewSchema.parse({
       rev: 0, sessionId: 's', count: 1, items: [{ id: 'a', type: 't', title: 'x', priority: 1, rating: 'high' }],
+    })).toThrow();
+  });
+});
+
+describe('正文全文（body）与退场标注（retired）进 view', () => {
+  it('items 带 body；超长截断到 BODY_MAX 并补省略号（≤701 字符）', async () => {
+    const long = `${'甲'.repeat(800)}\n尾部不该被丢到看不见`;
+    const { def, store } = await captured(fakeL1({ a: { content: long } }));
+    store.add('s', ['a']);
+    const v = def.wire.view(def.init(header('s')));
+    const body = v.items[0]!.body!;
+    expect(body.length).toBeLessThanOrEqual(701);
+    expect(body.endsWith('…')).toBe(true);
+    // title 仍只取首行，不受 body 影响
+    expect(v.items[0]!.title.length).toBeLessThanOrEqual(160);
+  });
+
+  it('短正文原样透出（去首尾空白，不丢换行）', async () => {
+    const { def, store } = await captured(fakeL1({ a: { content: '  第一行\n第二行  ' } }));
+    store.add('s', ['a']);
+    const v = def.wire.view(def.init(header('s')));
+    expect(v.items[0]!.body).toBe('第一行\n第二行');
+  });
+
+  it('退场记录仍在 items 里且 retired === true（删除线的根）', async () => {
+    const { def, store } = await captured(fakeL1({
+      a: { content: '活跃', validTo: undefined },
+      b: { content: '已判过时', validTo: Date.parse('2026-10-12T00:00:00Z') },
+    }));
+    store.add('s', ['a', 'b']);
+    const v = def.wire.view(def.init(header('s')));
+    expect(v.count).toBe(2);
+    expect(v.items).toHaveLength(2); // 不得被摘出列表
+    const alive = v.items.find((i) => i.id === 'a')!;
+    const stale = v.items.find((i) => i.id === 'b')!;
+    expect(alive).not.toHaveProperty('retired'); // 缺席即活跃，旧帧同形状
+    expect(stale.retired).toBe(true);
+  });
+
+  it('viewSchema 容忍无 body/retired 的旧帧；retired:false 视为脏帧抛错', () => {
+    const legacy = { rev: 0, sessionId: 's', count: 1, items: [{ id: 'a', type: 't', title: 'x', priority: 1 }] };
+    expect(() => viewSchema.parse(legacy)).not.toThrow();
+    expect(() => viewSchema.parse({
+      rev: 0, sessionId: 's', count: 1, items: [{ id: 'a', type: 't', title: 'x', priority: 1, retired: false }],
+    })).toThrow();
+    expect(() => viewSchema.parse({
+      rev: 0, sessionId: 's', count: 1, items: [{ id: 'a', type: 't', title: 'x', priority: 1, body: 42 }],
     })).toThrow();
   });
 });

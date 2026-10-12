@@ -14,34 +14,41 @@ afterAll(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
 });
 
-describe('SessionRecalledStore.remove（挨条摘除）', () => {
-  it('只摘指定那一条，其余保持插入序（挨条退场不该连带洗掉整张卡）', async () => {
+describe('SessionRecalledStore 不负责任意单条摘除（删除线的根）', () => {
+  it('不提供 remove：条目只能随 reset（压缩/清空）整段离开', async () => {
     const base = await dataDir();
-    const s = new SessionRecalledStore(join(base, `rm-${Math.random().toString(36).slice(2)}`));
+    const s = new SessionRecalledStore(join(base, `no-remove-${Math.random().toString(36).slice(2)}`));
+    // 护栏：这个 API 上一季存在过，作用是「声明过时就把条目从列表剔掉」，
+    // 后果是卡片上条目瞬时消失、用户看不出自己刚判过谁过时。不得再回来。
+    expect((s as unknown as { remove?: unknown }).remove).toBeUndefined();
     s.add('s', ['a', 'b', 'c']);
-    expect(s.remove('s', ['b'])).toBe(1);
-    expect(s.list('s')).toEqual(['a', 'c']);
+    const rev = s.revision();
+    expect(s.list('s')).toEqual(['a', 'b', 'c']);
+    // 未被压缩 → 一条也不该少，且不动 revision
+    expect(s.revision()).toBe(rev);
+    // 压缩 → 整段清
+    s.reset('s');
+    expect(s.list('s')).toEqual([]);
     await s.flush();
   });
 
-  it('空命中 / 未知会话 → 返回 0 且不推 revision、不写盘', async () => {
+  it('reset 只清该会话，不连带洗掉别的会话（挨条退场不该变成全局洗）', async () => {
     const base = await dataDir();
     const s = new SessionRecalledStore(join(base, `rm2-${Math.random().toString(36).slice(2)}`));
     s.add('s', ['a']);
-    const rev = s.revision();
-    expect(s.remove('s', ['nope'])).toBe(0);
-    expect(s.remove('ghost', ['a'])).toBe(0);
-    expect(s.revision()).toBe(rev);
-    expect(s.list('s')).toEqual(['a']);
+    s.add('other', ['z']);
+    s.reset('s');
+    expect(s.list('s')).toEqual([]);
+    expect(s.list('other')).toEqual(['z']);
     await s.flush();
   });
 
-  it('摘空后整会话条目消失，持久化往返不把它载回来', async () => {
+  it('reset 后的会话持久化往返不把它载回来', async () => {
     const base = await dataDir();
     const dirFor = join(base, `rm3-${Math.random().toString(36).slice(2)}`);
     const s = new SessionRecalledStore(dirFor);
     s.add('s', ['a']);
-    s.remove('s', ['a']);
+    s.reset('s');
     await s.flush();
     const t = new SessionRecalledStore(dirFor);
     await t.flush();

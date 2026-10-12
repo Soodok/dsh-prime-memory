@@ -19,6 +19,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { SessionRecalledStore } from '../store/session-recalled.js';
+import type { MemoryRecord } from '../types.js';
+import { isRetired } from '../store/supersede.js';
 
 export const MEMORY_RECALL_KEY = 'memoryRecall';
 
@@ -26,6 +28,8 @@ export const MEMORY_RECALL_KEY = 'memoryRecall';
 export const RECALL_VIEW_CAP = 20;
 /** 单条标题（正文首行）最大长度。 */
 const TITLE_MAX = 160;
+/** 单条全文最大长度（泡泡里显示的正文；超出截断并补省略号，防 wire 体量失控）。 */
+const BODY_MAX = 700;
 
 /** 一条召回记录在 wire view 上的呈现。 */
 export interface RecallItemView {
@@ -41,6 +45,16 @@ export interface RecallItemView {
    * 卡片靠它把已打的那一笔显示成选中态；均值等细粒度数据走 `session-recalled` 端点。
    */
   rating?: number;
+  /**
+   * 正文全文（截断至 BODY_MAX）；消费方悬停泡泡直接读它，不再回查端点。
+   * 缺席 = 旧帧（读侧退化成只显示 title）。
+   */
+  body?: string;
+  /**
+   * 该记录已被判定过时（`isRetired`）。只写 true：未退场时字段缺席，
+   * 读侧按「缺席即活跃」处理，旧帧自然兼容。
+   */
+  retired?: true;
 }
 
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
@@ -124,14 +138,18 @@ export const viewSchema: SchemaLike<RecallView> = {
         item.scenario.forEach((s, j) => requireString(s, `${at}.scenario[${j}]`, 'scenario'));
       }
       if (item.rating !== undefined && typeof item.rating !== 'number') invalid(at, 'rating 必须是数字');
+      // 附加字段：旧帧没有 → 容忍；有 → 必须成形状。retired 只认 true，false 视为脏帧。
+      if (item.body !== undefined) requireString(item.body, at, 'body');
+      if (item.retired !== undefined && item.retired !== true) invalid(at, 'retired 只能是 true 或缺席');
     });
     return value as RecallView;
   },
 };
 
-/** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。 */
+/** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。
+ *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。 */
 export interface RecallL1Face {
-  getByIds(ids: string[]): Array<{ id: string; type: string; content: string; priority: number; metadata?: Record<string, unknown> }>;
+  getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo'>>;
 }
 
 /** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
@@ -145,6 +163,12 @@ function firstLine(content: string): string {
   const line = content.split('\n').find((l) => l.trim().length > 0) ?? content;
   const trimmed = line.trim();
   return trimmed.length > TITLE_MAX ? trimmed.slice(0, TITLE_MAX) : trimmed;
+}
+
+/** 正文全文 → 泡泡用（去首尾空白，超长截断补省略号）。 */
+function clampBody(content: string): string {
+  const s = content.trim();
+  return s.length > BODY_MAX ? `${s.slice(0, BODY_MAX)}…` : s;
 }
 
 /** 读 store 建态；ids 与旧态一致时返回旧引用（避免无谓 republish）。 */
@@ -191,8 +215,11 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, fe
       type: r.type,
       title: firstLine(r.content),
       priority: r.priority,
+      body: clampBody(r.content),
       ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),
       ...(typeof rating === 'number' ? { rating } : {}),
+      // 退场记录仍留在列表里（文本还在上下文，直到压缩），只是该打上删除线。
+      ...(isRetired(r) ? { retired: true as const } : {}),
     });
   }
   const next: RecallView = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };

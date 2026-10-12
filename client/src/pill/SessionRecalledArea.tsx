@@ -84,9 +84,15 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
               >
                 {TYPE_LABELS[r.type] || r.type}
               </span>
-              <span className="dsh-mem-sinfo-val" style={textStyle}>
+              <span className="dsh-mem-sinfo-val" style={r.retired === true ? STALE_TEXT_STYLE : textStyle}>
                 {r.content}
               </span>
+              {/* 判过时的条目不摘除，只划掉：文本仍在上下文里，直到压缩。 */}
+              {r.retired === true ? (
+                <span style={{ fontSize: 10, color: 'var(--dsh-mem-text-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  已判过时
+                </span>
+              ) : null}
               {r.maturity ? (
                 <span style={{ fontSize: 10, color: 'var(--dsh-mem-text-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {MATURITY_LABEL[r.maturity]}
@@ -122,6 +128,9 @@ const textStyle = {
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
 } as CSSProperties & Record<string, string | number>;
+
+/** 已判过时：同一样式加删除线（不新增颜色字面量，置灰交给行旁的旁注）。 */
+const STALE_TEXT_STYLE = { ...textStyle, textDecoration: 'line-through' } as CSSProperties & Record<string, string | number>;
 
 /** 悬停给全文与使用场景（正文行内被钳制，别让人只看到半句）。 */
 function rowTitle(r: UiRecord): string {

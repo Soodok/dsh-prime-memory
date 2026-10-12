@@ -18,13 +18,10 @@ export declare class SessionRecalledStore {
     /** 压缩/清空：注入内容已离开上下文，清该会话活召回集（写穿）。 */
     reset(sessionKey: string): void;
     /**
-     * 摘除该会话活召回集里的**指定几条**（写穿）。
-     *
-     * 与 `reset` 的差别：reset 是"上下文整段离开"（压缩/清空），remove 是"这一条已被
-     * 用户判定过时"——其余召回条目仍在上下文里，不该跟着一起消失。
-     * 无命中时零写盘（免得一次无效点击刷一次 updatedAt、把会话留在盘上）。
+     * 注：曾有 `remove(sessionKey, recordIds)` 供「声明过时」单条摘除，已删。
+     * 理由：用户判过时后条目得留在召回列表里显示删除线（文本仍在上下文，直到压缩），
+     * 所以**只有** `reset`（压缩/清空）能让条目离开这张列表。
      */
-    remove(sessionKey: string, recordIds: readonly string[]): number;
     size(): number;
     /** 等待在途持久化写完成（测试/停机）。 */
     flush(): Promise<void>;

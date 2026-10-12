@@ -428,8 +428,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
         }
         case 'dsh-memory/recall-feedback': {
             // 人在召回卡上给一条召回记忆打分：0..5 = 相关度（只聚合，不改写任何排序分）；
-            // -1 = 声明过时，顺手做三件事：退场该记录（软删可恢复）+ 从本会话活召回集摘掉
-            // + 排一条下一轮向模型的播报（取走即离队，不常驻）。
+            // -1 = 声明过时，做两件事：退场该记录（软删可恢复）+ 排一条下一轮向模型的播报
+            //（取走即离队，不常驻）。条目**不**从本会话活召回集摘掉——它得留在列表里显示删除线。
             if (cfg.recallFeedback?.enabled !== true)
                 throw new Error('召回反馈未开启（cfg.recallFeedback.enabled）');
             const feedback = stores.feedback;
@@ -455,8 +455,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
             if (p.score === -1) {
                 const rec = stores.l1.getByIds([id])[0];
                 retired = stores.l1.retire([id], { at: new Date().toISOString(), reason: 'obsolete' }) > 0;
-                // 卡片立即不再列它（投影下一帧生效）；其余召回条目不受影响。
-                stores.recalled?.remove(sessionId, [id]);
+                // 不再摘除：条目要留在列表里显示删除线（文本仍在上下文，直到压缩）；
+                // 检索侧已由 detachL1FromRetrieval 阻断再注入。
                 if (cfg.recallFeedback?.announce !== false && stores.notices !== undefined && rec !== undefined) {
                     const title = (rec.content.split('\n').find((l) => l.trim().length > 0) ?? rec.content).trim().slice(0, 120);
                     stores.notices.push(sessionId, { id, title, at: Date.now() });

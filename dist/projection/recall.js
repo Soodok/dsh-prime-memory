@@ -1,8 +1,11 @@
+import { isRetired } from '../store/supersede.js';
 export const MEMORY_RECALL_KEY = 'memoryRecall';
 /** view 最多透出条数（最近在上；超出部分只计入 count，防 wire 体量失控）。 */
 export const RECALL_VIEW_CAP = 20;
 /** 单条标题（正文首行）最大长度。 */
 const TITLE_MAX = 160;
+/** 单条全文最大长度（泡泡里显示的正文；超出截断并补省略号，防 wire 体量失控）。 */
+const BODY_MAX = 700;
 function invalid(what, detail) {
     throw new Error(`${what}: ${detail}`);
 }
@@ -58,6 +61,11 @@ export const viewSchema = {
             }
             if (item.rating !== undefined && typeof item.rating !== 'number')
                 invalid(at, 'rating 必须是数字');
+            // 附加字段：旧帧没有 → 容忍；有 → 必须成形状。retired 只认 true，false 视为脏帧。
+            if (item.body !== undefined)
+                requireString(item.body, at, 'body');
+            if (item.retired !== undefined && item.retired !== true)
+                invalid(at, 'retired 只能是 true 或缺席');
         });
         return value;
     },
@@ -67,6 +75,11 @@ function firstLine(content) {
     const line = content.split('\n').find((l) => l.trim().length > 0) ?? content;
     const trimmed = line.trim();
     return trimmed.length > TITLE_MAX ? trimmed.slice(0, TITLE_MAX) : trimmed;
+}
+/** 正文全文 → 泡泡用（去首尾空白，超长截断补省略号）。 */
+function clampBody(content) {
+    const s = content.trim();
+    return s.length > BODY_MAX ? `${s.slice(0, BODY_MAX)}…` : s;
 }
 /** 读 store 建态；ids 与旧态一致时返回旧引用（避免无谓 republish）。 */
 function buildState(sessionId, store, feedbackRev, prev) {
@@ -111,8 +124,11 @@ function makeView(state, l1, feedback) {
             type: r.type,
             title: firstLine(r.content),
             priority: r.priority,
+            body: clampBody(r.content),
             ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),
             ...(typeof rating === 'number' ? { rating } : {}),
+            // 退场记录仍留在列表里（文本还在上下文，直到压缩），只是该打上删除线。
+            ...(isRetired(r) ? { retired: true } : {}),
         });
     }
     const next = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };
