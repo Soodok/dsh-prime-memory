@@ -9,11 +9,12 @@
  *   - 一批 `set()` 后 `flush()`：落盘次数必须恒为 1（旧写法会交出 200）；
  *   - 同一批后磁盘内容必须是全量 200 条（证明合批没丢写）。
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MdLedgerStore, type MdLedgerEntry } from '../src/store/memory-md-ledger.js';
+import { MEM_MD_LEDGER_FILE_VERSION } from '../src/store/file-versions.js';
 
 const dirs: string[] = [];
 afterAll(async () => {
@@ -97,5 +98,44 @@ describe('MdLedgerStore 合批落盘', () => {
     expect(ledger.delete('/root/work_fact/item-0.memory.md')).toBe(false);
     await ledger.flush();
     expect(await diskCount(file)).toBe(1);
+  });
+});
+
+describe('MdLedgerStore 加载时的 relPath 规整（N10 后键是绝对路径）', () => {
+  /**
+   * 直接落一份账本文件再用新实例读回 —— 被测的是**加载路径**，不是 set()。
+   *
+   * 钉的真缺陷：旧实现“键与 relPath 不一致就以键为准重写”，而 N10 后键是绝对路径、
+   * relPath 是相对形状，两者永远不相等 → 每次加载都把相对形状覆写成绝对键（真机 1167/1241 条）。
+   * 下游危害：孤儿归档拼出 `<批次>/home/C:\Users\...` 这种含冒号的非法目录，mkdir 直接 ENOENT。
+   */
+  async function seed(
+    pickRelPath: (key: string, root: string) => string,
+    rootOverride?: string,
+  ): Promise<{ ledger: MdLedgerStore; key: string }> {
+    const dataDir = await mkdtemp(join(tmpdir(), 'dsh-mdledger-seed-'));
+    dirs.push(dataDir);
+    const root = join(dataDir, 'memories');
+    const key = join(root, 'work_fact', 'item-7.memory.md');
+    const e: MdLedgerEntry = { ...entry(7), root: rootOverride ?? root, relPath: pickRelPath(key, root) };
+    await writeFile(join(dataDir, 'mem-md-ledger.json'), JSON.stringify({ version: MEM_MD_LEDGER_FILE_VERSION, entries: { [key]: e } }), 'utf8');
+    const ledger = new MdLedgerStore(dataDir);
+    await ledger.init();
+    return { ledger, key };
+  }
+
+  it('存的是相对形状时不得被绝对键覆写', async () => {
+    const { ledger, key } = await seed(() => 'work_fact/item-7.memory.md');
+    expect(ledger.get(key)?.relPath).toBe('work_fact/item-7.memory.md');
+  });
+
+  it('存下来的是绝对路径（被旧 bug 污染的数据）→ 按 root+键重推成相对形状', async () => {
+    const { ledger, key } = await seed((k) => k);
+    expect(ledger.get(key)?.relPath).toBe('work_fact/item-7.memory.md');
+  });
+
+  it('root 也丢了时退到文件名，绝不留下会拼出非法目录的形状', async () => {
+    const { ledger, key } = await seed((k) => k, '');
+    expect(ledger.get(key)?.relPath).toBe('item-7.memory.md');
   });
 });

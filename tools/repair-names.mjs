@@ -71,6 +71,9 @@ export const HELP = `用法: node tools/repair-names.mjs [选项]
                          真因：llama.cpp 单 slot 会把并发请求排队，8 路并发下每路都要等
                          完前面所有批（实测第 5/9 批直接撞 30s 旧硬时）。
   --only-bad             只处理坏味形状的名字（判据委托 validateTitle，单一真源不漂移）
+  --sweep-orphans        只跑孤儿投射文件归档（面板那枚按钮的命令行版）。**默认也是干跑**，
+                         要真搬必须再叠 --apply；它不依赖计划文件，收的是“账本记着但
+                         已无记录认领”的所有残片（改名后的旧路径就靠这一步收尾）
   --endpoint <url>       OpenAI 兼容端点，默认 ${DEFAULT_ENDPOINT}
   --model <name>         请求体 model 字段，默认 default
   --help                 本帮助
@@ -96,7 +99,7 @@ export const HELP = `用法: node tools/repair-names.mjs [选项]
 /** 需要带值的旗标。`--cfg-root` 是 `--memories-root` 的历史别名，两者同义。 */
 const VALUE_FLAGS = new Set(['--plan-file', '--revert', '--db', '--data-dir', '--memories-root', '--cfg-root', '--max', '--budget-ms', '--timeout-ms', '--concurrency', '--endpoint', '--model']);
 /** 布尔旗标。 */
-const BOOLEAN_FLAGS = new Set(['--plan', '--dry-run', '--apply', '--only-bad']);
+const BOOLEAN_FLAGS = new Set(['--plan', '--dry-run', '--apply', '--only-bad', '--sweep-orphans']);
 
 /** `--memories-root` → `memoriesRoot`。 */
 function camelize(flagName) {
@@ -971,7 +974,10 @@ export async function runCli(argv) {
   const dbPath = resolve(opts.db ?? defDb);
   // memories-root 主名（就是 cfg.memExport.root），cfg-root 是同义别名。
   const cfgRoot = opts.memoriesRoot ?? opts.cfgRoot;
-  const mode = opts.revert !== undefined ? 'revert' : (opts.apply === true ? 'apply' : 'plan');
+  const sweepOnly = opts.sweepOrphans === true;
+  const mode = opts.revert !== undefined
+    ? 'revert'
+    : (opts.apply === true ? (sweepOnly ? 'sweep' : 'apply') : (sweepOnly ? 'sweep' : 'plan'));
   const endpoint = opts.endpoint ?? DEFAULT_ENDPOINT;
   const model = opts.model ?? 'default';
   // 密钥可缺：局域网 llama.cpp 不吃鉴权，缺了就不发 Authorization 头（给了也只进 header）。
@@ -988,6 +994,22 @@ export async function runCli(argv) {
   const { db, l1, ledger } = await bootstrap({ dbPath, dataDir, logger });
   const summary = { mode, db: dbPath, dataDir };
   try {
+    if (mode === 'sweep') {
+      // 只跑孤儿归档：改名成功后旧路径全靠这一步收尾，否则残片一直躺在活档案里、
+      // 账本也一直虚高（真机本轮：1167 → 1241 条，75 个没人认领）。
+      // 面板端点有 dryRun 默认 true 同一纪律，这里也不给“默认就搬”。
+      const rep = await sweepOrphanFiles({
+        records: l1.all(), cfgRoot, dataDir, ledger,
+        dryRun: opts.apply !== true,
+        maxFiles: opts.max === undefined ? 100 : Number(opts.max),
+        timeBudgetMs: opts.budgetMs === undefined ? 60_000 : Number(opts.budgetMs),
+        logger,
+      });
+      summary.sweep = { dryRun: rep.dryRun, scanned: rep.scanned, claimed: rep.claimed, orphans: rep.orphans, moved: rep.moved, failed: rep.failed, missing: rep.missing, capped: rep.capped, remaining: rep.remaining, dir: rep.dir, samples: rep.samples.slice(0, 8) };
+      process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      return rep.failed > 0 ? 1 : 0;
+    }
+
     if (mode === 'plan') {
       const records = l1.all();
       const plan = await planRenames({

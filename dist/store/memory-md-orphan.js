@@ -18,6 +18,7 @@
 import { mkdir, rename, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { disablePathOf, resolveMemoriesRoot, safeJoin, targetFor } from './memory-md.js';
+import { deriveRelPath, looksAbsolute } from './memory-md-ledger.js';
 /** 样本条数上限：孤儿可能上千，面板不需要全量。 */
 const SAMPLE_CAP = 20;
 /**
@@ -99,13 +100,18 @@ export async function sweepOrphanFiles(deps) {
             continue;
         }
         const side = e.root === homeRoot ? 'home' : 'ws';
-        const dest = safeJoin(archiveDir, `${side}/${e.relPath}`);
-        if (dest === undefined) {
-            // 账本被人手工编辑过（relPath 越界）：宁可不动，也不要借这道手续把文件写到目录外。
+        // **不直接信存下来的 relPath**：它曾经被加载器污染成绝对路径（真机 1167/1241 条），
+        // 而 `safeJoin` 拦不住它——`join(归档根, 'home/C:\\Users\\…')` 的结果仍以归档根开头，
+        // 于是拼出含冒号的非法目录、75 条搬家全 ENOENT。键才是事实源：按 root+键重推，
+        // 推不出再退回存值（存值看着像绝对路径就一律不走）。
+        const rel = deriveRelPath(e.root, path) ?? (looksAbsolute(e.relPath) ? undefined : e.relPath);
+        const dest = rel === undefined ? undefined : safeJoin(archiveDir, `${side}/${rel}`);
+        if (rel === undefined || dest === undefined) {
+            // 账本被人手工编辑过（relPath 越界或 root 丢失）：宁可不动，也不要借这道手续把文件写到目录外。
             report.failed++;
             worked++;
             sample(path, 'unsafe-relPath');
-            logger?.warn(`[memory] 孤儿投射跳过（账本 relPath 越界）: ${path} → ${e.relPath}`);
+            logger?.warn(`[memory] 孤儿投射跳过（推不出安全的归档相对路径）: ${path} → ${e.relPath}`);
             continue;
         }
         try {

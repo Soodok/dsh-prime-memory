@@ -1,4 +1,4 @@
-import type { MdLedgerStore } from './memory-md-ledger.js';
+import { type MdLedgerStore } from './memory-md-ledger.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 import type { OrphanReport } from './memory-md-types.js';
 export interface OrphanDeps {

@@ -14,10 +14,32 @@
  *   **不进**快照哈希投影（`canonicalRecords` 不动），也不需要迁移。
  * - **写穿失败只降级为只读并 warn 一次**，绝不抛给调用方：投射是旁路，旁路不能弄挂主路。
  */
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { atomicWriteText, ensureDir, readJsonStrict } from '../util/io.js';
 import { MEM_MD_LEDGER_FILE_VERSION } from './file-versions.js';
 import type { MemoryLogger } from '../types.js';
+
+/** 看起来就是绝对路径（Windows 盘符形状或 POSIX 以 `/` 开头）。归档侧也要用它挡坏数据。 */
+export function looksAbsolute(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('/');
+}
+
+/**
+ * 由「绝对键 + 条目记的 root」推出相对形状（正斜杠）。
+ *
+ * 这是 relPath 的唯一正确算法：键才是事实源（N10 以后它是绝对路径），root 只是
+ * 其中一个字段。`root` 缺失、键不在 root 下、或推出 `..` 开头都返回 `undefined`——不猜。
+ *
+ * @param root - 投射根（绝对）。
+ * @param key - 账本键 = 文件绝对路径。
+ * @returns `<类型>/<名>` 的相对形状，推不出时 `undefined`。
+ */
+export function deriveRelPath(root: string, key: string): string | undefined {
+  if (root.length === 0 || looksAbsolute(key) === false) return undefined;
+  const rel = relative(root, key);
+  if (rel.length === 0 || rel.startsWith('..')) return undefined;
+  return rel.split(sep).join('/');
+}
 
 /** 一条投射记录的指纹账。`db*` 是库侧、`file*` 是磁盘侧，两边成对才能判象限。 */
 export interface MdLedgerEntry {
@@ -63,6 +85,8 @@ export class MdLedgerStore {
   private writeChain: Promise<void> = Promise.resolve();
   /** 有未落盘的变更。 */
   private dirty = false;
+  /** 已提醒过的 relPath 修正数（防上千条条目刷屏）。 */
+  private mismatchWarned = 0;
   /** 已发生的整本落盘次数（见 `writeCount`）。 */
   private writes = 0;
   /** 已排上的合批定时器（undefined = 窗口外）。 */
@@ -86,11 +110,27 @@ export class MdLedgerStore {
       this.loaded = true;
       return;
     }
-    for (const [rel, e] of Object.entries(read.value.entries ?? {})) {
+    for (const [key, e] of Object.entries(read.value.entries ?? {})) {
       const parsed = this.normalize(e);
-      // 键与条目内的 relPath 不一致 ⇒ 以键为准重写（不丢条目，但留一行 warn：
-      // 手工编辑过账本的人需要知道它被规整了）。
-      if (parsed !== undefined) this.entries.set(rel, { ...parsed, relPath: rel });
+      if (parsed === undefined) continue;
+      // 键是**绝对路径**（N10），relPath 是 `<类型>/<名>` 的相对形状——两者本来就不该相等。
+      // 旧写法是“键与 relPath 不一致就以键为准重写”，那是键还叫 relPath 时代的逻辑；
+      // N10 之后它每次加载都必然判定不一致，于是相对形状被绝对键吃掉（真机 1167/1241 条命中）。
+      // 危害不是难看而是下游：孤儿归档拼出 `<批次>/home/C:\Users\...` 这种含冒号的非法
+      // 目录，75 条搬家全 ENOENT。现在规整判据换成“键 == join(root, relPath)”：
+      // 只有真推不出相对形状（root 缺失/越界）才退回存下来的值。
+      const derived = deriveRelPath(parsed.root, key);
+      let relPath = derived ?? parsed.relPath;
+      if (looksAbsolute(relPath)) {
+        // 坏数据兼容：以前被绝对键污染过的条目，若 root 也推不出来，退到文件名——
+        // 至少归档不会拼出带冒号的非法路径。名字重复由 freeSlot 的数字尾巴兼着。
+        relPath = basename(relPath);
+      }
+      if (relPath !== parsed.relPath && this.mismatchWarned < 8) {
+        this.mismatchWarned++;
+        this.logger?.warn(`[memory] md 账本 relPath 已按键修正: ${key} → ${relPath}`);
+      }
+      this.entries.set(key, { ...parsed, relPath });
     }
     this.loaded = true;
   }

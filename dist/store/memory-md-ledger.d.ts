@@ -1,4 +1,17 @@
 import type { MemoryLogger } from '../types.js';
+/** 看起来就是绝对路径（Windows 盘符形状或 POSIX 以 `/` 开头）。归档侧也要用它挡坏数据。 */
+export declare function looksAbsolute(p: string): boolean;
+/**
+ * 由「绝对键 + 条目记的 root」推出相对形状（正斜杠）。
+ *
+ * 这是 relPath 的唯一正确算法：键才是事实源（N10 以后它是绝对路径），root 只是
+ * 其中一个字段。`root` 缺失、键不在 root 下、或推出 `..` 开头都返回 `undefined`——不猜。
+ *
+ * @param root - 投射根（绝对）。
+ * @param key - 账本键 = 文件绝对路径。
+ * @returns `<类型>/<名>` 的相对形状，推不出时 `undefined`。
+ */
+export declare function deriveRelPath(root: string, key: string): string | undefined;
 /** 一条投射记录的指纹账。`db*` 是库侧、`file*` 是磁盘侧，两边成对才能判象限。 */
 export interface MdLedgerEntry {
     /** 记录 id（写入时刻的那一个；merge 后可能变，故只当线索不当键）。 */
@@ -28,6 +41,8 @@ export declare class MdLedgerStore {
     private writeChain;
     /** 有未落盘的变更。 */
     private dirty;
+    /** 已提醒过的 relPath 修正数（防上千条条目刷屏）。 */
+    private mismatchWarned;
     /** 已发生的整本落盘次数（见 `writeCount`）。 */
     private writes;
     /** 已排上的合批定时器（undefined = 窗口外）。 */

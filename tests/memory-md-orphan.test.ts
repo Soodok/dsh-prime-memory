@@ -148,27 +148,45 @@ describe('sweepOrphanFiles', () => {
     expect(await exists(join(root, 'work_fact', 'retired-file.memory.md'))).toBe(true);
   });
 
-  it('账本 relPath 越界 → 记 failed 且不动文件（不许借归档手续写到目录外）', async () => {
+  it('账本 relPath 越界不再决定落点：按「root+键」重推，仍搬进归档目录内', async () => {
     const { dataDir, store, ledger, root, archiveRoot, run } = await setup([rec('t1', '越界账本', { name: 'edge-case' })]);
     await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 100, timeBudgetMs: 60_000 });
     store.rename('t1', 'renamed-away');
-    // 手工把一条账本的 relPath 改成越界形状（模拟被人编辑过的账本文件）。
+    // 手工把那条账本的 relPath 改成越界形状（模拟被人编辑过的账本文件）。
     const rows = ledger.allWithKeys();
     const bad = rows.find((r) => r.path.endsWith('edge-case.memory.md'))!;
     ledger.set(bad.path, { ...bad.entry, relPath: '../../escape.memory.md' });
     await ledger.flush();
 
     const rep = await run({ dryRun: false });
+    // 键才是事实源：越界的 relPath 被扔掉，落点由 root+键推出，所以这条照样搬走。
+    // （旧契约“记 failed 且不动文件”已推翻：把没人认领的历史残片留在活档案里不是安全，只是堆积。）
     expect(rep.orphans).toBe(1);
-    expect(rep.failed).toBe(1);
-    expect(rep.moved).toBe(0);
-    expect(rep.samples.some((s) => s.reason === 'unsafe-relPath')).toBe(true);
-    // 原文件还在投射目录里，没被搬走，也没在投射根之外造出文件。
-    expect(await exists(join(root, 'work_fact', 'edge-case.memory.md'))).toBe(true);
+    expect(rep.moved).toBe(1);
+    expect(rep.failed).toBe(0);
+    expect(await exists(join(root, 'work_fact', 'edge-case.memory.md'))).toBe(false);
+    expect(await exists(join(rep.dir, 'home', 'work_fact', 'edge-case.memory.md'))).toBe(true);
+    // 但绝不在归档目录之外造出文件（越界形状没被当成落点）。
     expect(await exists(join(dataDir, 'escape.memory.md'))).toBe(false);
-    // 什么都没搬成 → 连批次目录都不该建（不留空转的归档目录）。
-    expect(await exists(archiveRoot)).toBe(false);
-    expect(await exists(join(dataDir, 'memories-orphans'))).toBe(false);
+    expect(await exists(join(root, '..', 'escape.memory.md'))).toBe(false);
+    expect(rep.dir.startsWith(archiveRoot)).toBe(true);
+  });
+
+  it('relPath 被污染成绝对路径（真机 1167/1241 条的形状）也要搬对，不再拼出非法目录', async () => {
+    // 回归钉：加载器曾把绝对键覆写进 relPath，归档拼出 `<批次>/home/C:\Users\...`
+    // 这种含冒号的目录，Windows 下 mkdir 直接 ENOENT，75 条搬家全失败。
+    const { dataDir, store, ledger, run } = await setup([rec('u1', '绝对污染账本', { name: 'polluted' })]);
+    await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 100, timeBudgetMs: 60_000 });
+    store.rename('u1', 'renamed-away-2');
+    const rows = ledger.allWithKeys();
+    const bad = rows.find((r) => r.path.endsWith('polluted.memory.md'))!;
+    ledger.set(bad.path, { ...bad.entry, relPath: bad.path });
+    await ledger.flush();
+
+    const rep = await run({ dryRun: false });
+    expect(rep.moved).toBe(1);
+    expect(rep.failed).toBe(0);
+    expect(await exists(join(rep.dir, 'home', 'work_fact', 'polluted.memory.md'))).toBe(true);
   });
 
   it('护栏只吃动作：前面一堆“仍被认领”不能把孤儿挡在窗外', async () => {
