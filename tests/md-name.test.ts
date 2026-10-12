@@ -11,7 +11,7 @@
  * 在新流水线下的产物，防止退回"首行前 24 字"的残句行为。
  */
 import { describe, expect, it } from 'vitest';
-import { NAME_MAX, NARRATIVE_LEAD_INS, allocUniqueName, deriveName, fallbackStem, normalizeName, validateTitle } from '../src/util/md-name.js';
+import { NAME_CLIP_MAX, NAME_MAX, NARRATIVE_LEAD_INS, allocUniqueName, clipAtTokenBoundary, deriveName, fallbackStem, normalizeName, validateTitle } from '../src/util/md-name.js';
 
 describe('deriveName（既有语义：取首行 / 截断 / 剥前缀 / 平台雷）', () => {
   it('取首个非空行，跳过 markdown 的前缀符号', () => {
@@ -21,16 +21,16 @@ describe('deriveName（既有语义：取首行 / 截断 / 剥前缀 / 平台雷
     expect(deriveName('> 引用式开头')).toBe('引用式开头');
   });
 
-  it('截断到 NAME_MAX，且不会留尾部悬空分隔符', () => {
+  it('截断到 NAME_CLIP_MAX（不是闸门上限），且不会留尾部悬空分隔符', () => {
     const long = `${'记忆'.repeat(40)}\n第二行`;
     const n = deriveName(long);
-    expect(n.length).toBeLessThanOrEqual(NAME_MAX);
+    expect(n.length).toBeLessThanOrEqual(NAME_CLIP_MAX);
     expect(n).not.toMatch(/[-_.]$/);
   });
 
   it('洗掉文件名非法字符（走 sanitizeFilename 的白名单）', () => {
     expect(deriveName('a/b\\c:d*e?f"g<h>i|j')).not.toMatch(/[/\\:*?"<>|]/);
-    // 改处理由：Phase 2 词元边界收尾不再切半 ASCII 单词，NAME_MAX 也放宽到 28——
+    // 改处理由：Phase 2 词元边界收尾不再切半 ASCII 单词，NAME_MAX 也从 24 放宽（现在 40）——
     // 旧值 'pnpm-install-frozen-lo' 把 'lockfile' 腰斩，新值整词丢弃超长尾词。
     expect(deriveName('pnpm install --frozen-lockfile')).toBe('pnpm-install-frozen');
   });
@@ -88,7 +88,7 @@ describe('deriveName 分段流水线（Phase 2 金标准表：真机坏味样本
     for (const [, content] of GOLDEN) {
       const n = deriveName(content);
       if (n.length === 0) continue;
-      expect(n.length).toBeLessThanOrEqual(NAME_MAX);
+      expect(n.length).toBeLessThanOrEqual(NAME_CLIP_MAX);
       expect(n).not.toMatch(/[-_.]$/);
       expect(n).not.toMatch(/[。！？]$/);
     }
@@ -119,9 +119,49 @@ describe('validateTitle（Phase 3 few-shot 门禁：形状判据）', () => {
     expect(validateTitle('C1-9a-1门禁判定与根因确认-Target..')).toEqual({ ok: false, reason: 'ends-with-punctuation' });
   });
 
-  it('长度区间 4–28 之外的直接拒', () => {
+  it('正当词组名不得再被 `session-` 子串误杀（真机改名计划实测：模型返的合法标题 4/20 被旧宽判拒）', () => {
+    // `session-steward` 是插件名，不是会话 id；只有 `session-<hex 串>` 才算残片。
+    expect(validateTitle('DSH插件session-steward体检功能修复方案').ok).toBe(true);
+    expect(validateTitle('会话管家插件名称与文案差异').ok).toBe(true);
+    // 对照：真 id 形状仍拒。样本得控制在 NAME_MAX 内，否则先撞 `too-long`（长度闸在前）。
+    expect(validateTitle('周报-session-9ed2ec04')).toEqual({ ok: false, reason: 'has-session-id' });
+  });
+
+  it('剥引子与拒名字两张表必须分开：裸主语「用户/团队」不再误杀正当名（真机 10/13 fallback 的成因）', () => {
+    // 这些是**名词短语**，「用户/团队」是所属主语而不是话头；短语类引子照旧拒。
+    expect(validateTitle('用户npm账号用户名').ok).toBe(true);
+    expect(validateTitle('用户本地Python解释器路径').ok).toBe(true);
+    expect(validateTitle('团队profile配置保留五个浮动引用').ok).toBe(true);
+    expect(validateTitle('用户要求将-dsh-agent-teams-插件')).toEqual({ ok: false, reason: 'starts-with-lead-in' });
+    expect(validateTitle('团队已完成Codex-3个参考项目')).toEqual({ ok: false, reason: 'starts-with-lead-in' });
+    // 但 deriveName 面对叙述句时，裸主语仍该剥（两张表各自成立）。
+    expect(NARRATIVE_LEAD_INS).toContain('用户');
+    expect(deriveName('用户：(陈一鹏)的职业身份已更新：原为运维工程师。').startsWith('陈一鹏')).toBe(true);
+  });
+
+  it('数字尾巴：属于标识符名字的放行，CJK 后的截断残片仍拒（真机 4 条 ADR 误杀样本）', () => {
+    // 模型给的真标题：数字前是 ASCII 字母，那是名字本体，不是 id 残片。
+    expect(validateTitle('ADR-0006-决策凭证保留策略设计').ok).toBe(true);
+    expect(validateTitle('新增-ADR-0009-与-ADR-0011-决策记录').ok).toBe(true);
+    expect(validateTitle('Han-1413141-的仓库徽章收录情况').ok).toBe(true);
+    // 对照：数字前是 CJK 的，是 `deriveName` 腰斩留下的数字尾巴，照旧拒。
+    expect(validateTitle('记录-12345-号')).toEqual({ ok: false, reason: 'has-id-fragment' });
+    expect(validateTitle('需求-2026-版本说明')).toEqual({ ok: false, reason: 'has-id-fragment' });
+  });
+
+  it('clipAtTokenBoundary：超长时按词元边界收，绝不切半 ASCII 单词', () => {
+    expect(clipAtTokenBoundary('短名字', 28)).toBe('短名字');
+    // 切点落在 `Downloader` 中间 → 整个残词回删，不留 `Downloa` 这种断尾巴。
+    expect(clipAtTokenBoundary('joshua-使用-NeatDownloader-作为下载工具工具工具', 20)).toBe('joshua-使用-');
+    // CJK 逐字，不需要回退。
+    expect(clipAtTokenBoundary('本地已注册的文档处理技能位于用户目录下', 10)).toBe('本地已注册的文档处理');
+  });
+
+  it('长度区间 4–NAME_MAX 之外的直接拒', () => {
     expect(validateTitle('abc')).toEqual({ ok: false, reason: 'too-short' });
-    expect(validateTitle('x'.repeat(29))).toEqual({ ok: false, reason: 'too-long' });
+    expect(validateTitle('x'.repeat(NAME_MAX + 1))).toEqual({ ok: false, reason: 'too-long' });
+    // 钉住“闸用常量不硬写”：曾经这里手抄过 28，常量改 40 后闸仍在 28 就是静默漂移。
+    expect(validateTitle('x'.repeat(NAME_MAX)).ok).toBe(true);
   });
 
   it('换行 / 盘符路径 / 裸斜杠 / url / id 残片 各自命中', () => {
@@ -159,12 +199,19 @@ describe('截断纪律（task_2.3：12 条尾点形状输入全部收敛）', ()
     for (const content of DOT_END_SHAPES) {
       const n = deriveName(content);
       expect(n).not.toMatch(/[._-]$/);
-      expect(n.length).toBeLessThanOrEqual(NAME_MAX);
+      expect(n.length).toBeLessThanOrEqual(NAME_CLIP_MAX);
     }
   });
 
-  it('NAME_MAX 由 24 放宽到 28', () => {
-    expect(NAME_MAX).toBe(28);
+  it('NAME_MAX(40) 与 NAME_CLIP_MAX(28) 必须是两个数：闸门宽、规则兜底紧', () => {
+    expect(NAME_MAX).toBe(40);
+    expect(NAME_CLIP_MAX).toBe(28);
+    // 为什么不能合一个：实测统一放 40 后，叙述句兼作兜底名会拖出句子尾巴
+    // （`buildTurnCompactSystemPrompt` 变成 `…-负责组装每一轮的系统提示`）。
+    // 闸门的长度是语义（人/模型有意写的），兜底截断的长度只是噪声上限。
+    expect(deriveName('buildTurnCompactSystemPrompt 负责组装每一轮的系统提示词。')).toBe('buildTurnCompactSystemPrompt');
+    // ASCII 标识符与汉字同价计数：正当的混合名在旧 28 字闸下会被判 too-long，现在放行。
+    expect(validateTitle('dsh-agent-teams-插件适配-DSH-0.1.2-的根因分析报告').ok).toBe(true);
   });
 });
 
@@ -208,13 +255,18 @@ describe('allocUniqueName（同一个基底洗出多个名字时的消歧）', (
     expect(allocUniqueName('官方地址上行', 'rec-0003', isFree, taken)).toBe('官方地址上行-2');
   });
 
-  it('后缀要留位置：总长不得超过 NAME_MAX', () => {
-    const base = deriveName('记'.repeat(60));
-    expect(base.length).toBe(NAME_MAX);
-    const taken = new Set<string>([base]);
-    const got = allocUniqueName(base, 'rec-0004', freeAll, taken);
+  it('后缀要留位置：总长不得超过 NAME_MAX（基底超顶时截基底而不是超上限）', () => {
+    // 常规路径：deriveName 只到 NAME_CLIP_MAX，加后缀仍宽裕，不应再动基底。
+    const short = deriveName('记'.repeat(60));
+    expect(short.length).toBe(NAME_CLIP_MAX);
+    const got = allocUniqueName(short, 'rec-0004', freeAll, new Set<string>([short]));
+    expect(got).toBe(`${short}-2`);
     expect(got.length).toBeLessThanOrEqual(NAME_MAX);
-    expect(got).toBe(`${base.slice(0, NAME_MAX - 2)}-2`);
+    // 边界路径：人/模型直接给一个顶格基底，后缀必须吃自己的位置，不能把总长撑过闸门。
+    const topBase = '记'.repeat(NAME_MAX);
+    const squeezed = allocUniqueName(topBase, 'rec-0005', freeAll, new Set<string>([topBase]));
+    expect(squeezed.length).toBeLessThanOrEqual(NAME_MAX);
+    expect(squeezed).toBe(`${topBase.slice(0, NAME_MAX - 2)}-2`);
   });
 
   it('基底洗不出名字（纯标点正文）时回落 mem-<id8>，两条也不互撞', () => {

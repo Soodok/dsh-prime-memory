@@ -18,10 +18,26 @@
 import { sanitizeFilename } from '../store/scenes.js'
 
 /**
- * 名字干长度上限（字符）。Phase 2 由 24 放宽到 28：目标区间 6–14，
- * 允许最长 28，够容纳一条完整短标题而不必腰斩词元。
+ * 入库闸门的长度上限（字符）。人/模型**有意给**的名字允许到这里。
+ *
+ * 历史：24 → 28 → **40**。放宽的理由不是“名字长点好看”，是**计数把 ASCII 与汉字同价**：
+ * 本项目记忆标题里 `dsh-agent-teams`、`Python-3.13`、`NeatDownloader` 这类标识符很常见，
+ * 一个词就吃掉 13–16 个额度，于是语义上只有一两个词的正当名在字符上“超长”
+ * （真机 13 条 fallback 里 3 条属此类）。28 的代价不是难看，是把已经拿到的语义丢掉重算。
+ * 仍钉在 40 而不是更松：投射路径要留在 Windows `MAX_PATH` 里，而且超过 40 的名
+ * 几乎必然是句子而不是标题。
  */
-export const NAME_MAX = 28
+export const NAME_MAX = 40
+
+/**
+ * 规则兜底名（{@link deriveName}）的截断上限，**故意比闸门紧**。
+ *
+ * 两者不能合为一个数（实测过：统一放 40 后，`buildTurnCompactSystemPrompt` 会拖出
+ * 「负责组装每一轮的系统提示」这种句子尾巴）：`deriveName` 吃的是**叙述句**，多给的额度
+ * 只会被句子吃掉；而闸门吃的是**人/模型写的标题**，那里长度是语义而不是噪声。
+ * 28 仍是兜底名不至于变成句子的上限。
+ */
+export const NAME_CLIP_MAX = 28
 
 /** 目标区间下界（推荐名短于此偏空），仅作注释性常量，不作硬闸。 */
 export const NAME_TARGET_MIN = 6
@@ -41,6 +57,17 @@ export const NARRATIVE_LEAD_INS: readonly string[] = [
 
 /** 由长到短排序，保证「用户要求」优先于「用户」命中（前缀匹配不会被短项截胡）。 */
 const LEAD_IN_SORTED = [...NARRATIVE_LEAD_INS].sort((a, b) => b.length - a.length)
+
+/**
+ * 闸门用的引子表 = 剥引子表**去掉裸主语**（`用户` / `团队`）。
+ *
+ * 两张表本来就该是两个用途，之前共用一份是误杀源：
+ * - `deriveName` 吃的是**完整叙述句**，句首裸「用户」只是话头、不含信息量，该剥；
+ * - `validateTitle` 吃的是**人/模型给的名词短语**，「用户npm账号用户名」「团队profile配置」里的
+ *   「用户/团队」是正当的所属主语，当成叙述引子拒掉就是误杀（真机改名计划 13 条 fallback 里 10 条栽在这两个词）。
+ * 所以这不是把闸门调松，是把「剥话头」与「拒名字」分开——短语类引子（用户要求/团队已/针对/本次…）照旧拒。
+ */
+const GATE_LEAD_IN_SORTED = LEAD_IN_SORTED.filter((lead) => lead !== '用户' && lead !== '团队')
 
 /** 引子之后可能残留的单个话头连接词（「用户要求将…」的「将」），一并丢弃。 */
 const LEAD_IN_CONNECTOR = '(?:将|把|要|需|做了|做|规定|需要|的)?'
@@ -78,7 +105,7 @@ export function deriveName(content: string): string {
   if (s.length === 0) return ''
   s = stripLeadIn(s)
   s = structuralTruncate(s)
-  s = clipAtTokenBoundary(s, NAME_MAX)
+  s = clipAtTokenBoundary(s, NAME_CLIP_MAX)
   if (s.length === 0) return ''
   return applyTrailingDiscipline(s)
 }
@@ -143,8 +170,12 @@ function structuralTruncate(raw: string): string {
  * 步骤 5：截到 maxLen，且绝不切半 ASCII 单词。
  * 若刚好落在 ASCII 词元中间（末字符与被丢字符都是 `[A-Za-z0-9]`），回删整个残词。
  * CJK 逐字，无需回退。
+ *
+ * 导出是因为**改名侧也要同一个收梢算法**：模型给的 title 只是超长（`too-long`）时，
+ * 按词元边界收一刀仍是好名字，直接回落 `deriveName` 等于把已经拿到的语义扔掉重算。
+ * 两处共用一份，截断形状才不会分头演化。
  */
-function clipAtTokenBoundary(raw: string, maxLen: number): string {
+export function clipAtTokenBoundary(raw: string, maxLen: number): string {
   if (raw.length <= maxLen) return raw
   let clipped = raw.slice(0, maxLen)
   const lastKept = clipped.slice(-1)
@@ -178,14 +209,19 @@ export function validateTitle(raw: string): { ok: true; name: string } | { ok: f
   if (s.length === 0) return { ok: false, reason: 'empty' }
   if (/[\r\n]/.test(s)) return { ok: false, reason: 'has-newline' }
   if (s.length < 4) return { ok: false, reason: 'too-short' }
-  if (s.length > 28) return { ok: false, reason: 'too-long' }
+  if (s.length > NAME_MAX) return { ok: false, reason: 'too-long' }
   if (/[。！？!?.]$/.test(s)) return { ok: false, reason: 'ends-with-punctuation' }
   if (/[A-Za-z]:[\\/]/.test(s)) return { ok: false, reason: 'has-drive-path' }
   if (s.includes('/')) return { ok: false, reason: 'has-slash' }
   if (/http/i.test(s)) return { ok: false, reason: 'has-url' }
-  if (/session-/i.test(s)) return { ok: false, reason: 'has-session-id' }
+  // 只拒**真 id 形状**（session-44332549…）：宽判 `session-` 子串会把
+  // `dsh-session-steward` 这类正当词组名误拒（真机改名计划实测 4/20 的误杀源）。
+  if (/session-[0-9a-f]{6,}/i.test(s)) return { ok: false, reason: 'has-session-id' }
   if (/[0-9a-fA-F]{32,36}/.test(s)) return { ok: false, reason: 'has-hex-id' }
-  if (/-\d{4}/.test(s)) return { ok: false, reason: 'has-id-fragment' }
+  // 数字尾巴**只在它不属于某个标识符名字**时才算残片：`记录-12345-号` 是截断产物（数字前是 CJK），
+  // 而 `ADR-0006`、`Han-1413141` 里数字前面是 ASCII 字母——那是名字本体（`[^ -~]` = 非可打印 ASCII）。
+  // 旧判据一律拒 `-\d{4}`，真机把 4 条 ADR 记录的正当 LLM 标题全打进 fallback（反而掉回 `ADR-0006` 这种半截名）。
+  if (/[^ -~]-\d{4}/.test(s)) return { ok: false, reason: 'has-id-fragment' }
   if (startsNarrativeLeadIn(s)) return { ok: false, reason: 'starts-with-lead-in' }
   if (isBareCodeIdentifier(s)) return { ok: false, reason: 'code-identifier' }
   const safe = sanitizeFilename(s).replace(/\.md$/i, '')
@@ -193,9 +229,9 @@ export function validateTitle(raw: string): { ok: true; name: string } | { ok: f
   return { ok: true, name: safe }
 }
 
-/** 是否以叙述引子开头（与 deriveName 共用 {@link NARRATIVE_LEAD_INS}）。 */
+/** 是否以叙述引子开头（用 {@link GATE_LEAD_IN_SORTED}：剥引子与拒名字两张表用途不同，见其注释）。 */
 function startsNarrativeLeadIn(s: string): boolean {
-  return LEAD_IN_SORTED.some((lead) => s.startsWith(lead))
+  return GATE_LEAD_IN_SORTED.some((lead) => s.startsWith(lead))
 }
 
 /**

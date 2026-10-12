@@ -1,8 +1,23 @@
 /**
- * 名字干长度上限（字符）。Phase 2 由 24 放宽到 28：目标区间 6–14，
- * 允许最长 28，够容纳一条完整短标题而不必腰斩词元。
+ * 入库闸门的长度上限（字符）。人/模型**有意给**的名字允许到这里。
+ *
+ * 历史：24 → 28 → **40**。放宽的理由不是“名字长点好看”，是**计数把 ASCII 与汉字同价**：
+ * 本项目记忆标题里 `dsh-agent-teams`、`Python-3.13`、`NeatDownloader` 这类标识符很常见，
+ * 一个词就吃掉 13–16 个额度，于是语义上只有一两个词的正当名在字符上“超长”
+ * （真机 13 条 fallback 里 3 条属此类）。28 的代价不是难看，是把已经拿到的语义丢掉重算。
+ * 仍钉在 40 而不是更松：投射路径要留在 Windows `MAX_PATH` 里，而且超过 40 的名
+ * 几乎必然是句子而不是标题。
  */
-export declare const NAME_MAX = 28;
+export declare const NAME_MAX = 40;
+/**
+ * 规则兜底名（{@link deriveName}）的截断上限，**故意比闸门紧**。
+ *
+ * 两者不能合为一个数（实测过：统一放 40 后，`buildTurnCompactSystemPrompt` 会拖出
+ * 「负责组装每一轮的系统提示」这种句子尾巴）：`deriveName` 吃的是**叙述句**，多给的额度
+ * 只会被句子吃掉；而闸门吃的是**人/模型写的标题**，那里长度是语义而不是噪声。
+ * 28 仍是兜底名不至于变成句子的上限。
+ */
+export declare const NAME_CLIP_MAX = 28;
 /** 目标区间下界（推荐名短于此偏空），仅作注释性常量，不作硬闸。 */
 export declare const NAME_TARGET_MIN = 6;
 /** 目标区间上界（推荐名长于此偏啰嗦），仅作注释性常量，不作硬闸。 */
@@ -29,6 +44,16 @@ export declare const NARRATIVE_LEAD_INS: readonly string[];
  * @returns 文件名安全的名字干；无可用文字时 `''`。
  */
 export declare function deriveName(content: string): string;
+/**
+ * 步骤 5：截到 maxLen，且绝不切半 ASCII 单词。
+ * 若刚好落在 ASCII 词元中间（末字符与被丢字符都是 `[A-Za-z0-9]`），回删整个残词。
+ * CJK 逐字，无需回退。
+ *
+ * 导出是因为**改名侧也要同一个收梢算法**：模型给的 title 只是超长（`too-long`）时，
+ * 按词元边界收一刀仍是好名字，直接回落 `deriveName` 等于把已经拿到的语义扔掉重算。
+ * 两处共用一份，截断形状才不会分头演化。
+ */
+export declare function clipAtTokenBoundary(raw: string, maxLen: number): string;
 /**
  * 校验一个**人给的或模型给的**名字是否可用（形状，不含唯一性）。
  *
