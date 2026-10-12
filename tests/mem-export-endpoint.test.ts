@@ -81,6 +81,15 @@ describe('dsh-memory/mem-export', () => {
     expect(entries).not.toContain('memories');
   });
 
+  it('关着 → 抛错且骨架目录一个不建（红线：enabled=false 时零动作）', async () => {
+    // 骨架接线在配置门之后（enabled!==true 已先抛），故关着时 ensureTypeSkeleton 根本到不了。
+    const { d, dataDir } = await deps();
+    (d.cfg as unknown as { memExport: { enabled: boolean } }).memExport.enabled = false;
+    await expect(handleEndpoint('dsh-memory/mem-export', {}, d)).rejects.toThrow('未开启');
+    const rootExists = await readdir(join(dataDir, 'memories')).then(() => true, () => false);
+    expect(rootExists).toBe(false);
+  });
+
   it('开着 → 落盘并回报计数，且库内容一字未改', async () => {
     const { d, store, ledger } = await deps();
     (d.stores as unknown as { mdLedger: MdLedgerStore }).mdLedger = ledger;

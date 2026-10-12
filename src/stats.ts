@@ -62,6 +62,8 @@ import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
 import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
 import { disableProjectionFile } from './store/memory-md-disable.js';
+import { MEMORY_TYPE_DIRS, UNSORTED_DIR, resolveMemoriesRoot, targetFor } from './store/memory-md.js';
+import { ensureTypeSkeleton } from './store/memory-md-skeleton.js';
 import { sweepOrphanFiles } from './store/memory-md-orphan.js';
 import { collectProjectionFiles } from './store/memory-md-archive.js';
 import { syncFromFiles } from './pipeline/md-sync.js';
@@ -755,6 +757,20 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (naming.failed > 0) {
         deps.logger?.warn(`[memory] md 投射命名回填失败 ${naming.failed} 条(下轮导出会重试)`);
       }
+      // 类型目录骨架（pm-name-distill Phase 4）：37 类目录各放一个 `_index.md`（类名 + 库里条数）。
+      // 目录集合从词表真源派生（在 ensureTypeSkeleton 内），这里只喂 countsByType 与 roots。
+      // 单根必补；workspace 根**按需**——只给本轮 `targetFor` 算出真有落点（inWorkspace）的根补，
+      // 不建空 workspace 根（消失的 workspace 已由 targetFor 护栏退回单根，这里不绕过它造目录树）。
+      // 配置门在前（enabled!==true 已在上头抛错），故关着时该端点根本到不了这里 → 骨架零动作。
+      const countsByType = new Map<string, number>();
+      const skeletonRoots = new Set<string>([resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger)]);
+      for (const r of all) {
+        const dir = MEMORY_TYPE_DIRS.has(r.type) ? r.type : UNSORTED_DIR;
+        countsByType.set(dir, (countsByType.get(dir) ?? 0) + 1);
+        const t = targetFor(r, exp.root, deps.dataDir, deps.logger);
+        if (t.inWorkspace) skeletonRoots.add(t.root);
+      }
+      await ensureTypeSkeleton({ roots: [...skeletonRoots], countsByType, logger: deps.logger });
       const rep = await exportRecords({
         records: all,
         cfgRoot: exp.root,

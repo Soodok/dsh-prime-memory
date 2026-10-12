@@ -198,4 +198,24 @@ describe('syncFromFiles 边界', () => {
     expect(rep.capped).toBe(true);
     expect(rep.remaining).toBe(2);
   });
+
+  it('骨架文件 `_index.md` 不进任何计数（md-sync 只认 .memory.md/.disable 后缀）', async () => {
+    // 钉住判据：`listProjectionFiles` 按后缀过滤，`_index.md` 既不以 `.memory.md` 也不以
+    // `.disable` 结尾 → 根本不进 files 列表，扫不到、也不当新文件/陌生格式计数。
+    const { store, root, sync } = await setup();
+    const idx = join(root, 'work_fact', '_index.md');
+    await writeFile(idx, '# 工作事实\n\n- 类型: work_fact\n- 条数: 3\n', 'utf8');
+    const before = hashRecords(store.all());
+
+    const rep = await sync();
+    expect(rep.scanned).toBe(3);
+    expect(rep.same).toBe(3);
+    expect(rep.newFiles).toBe(0);
+    expect(rep.skipped).toBe(0);
+    expect(rep.imported).toBe(0);
+    expect(rep.rendered).toBe(0);
+    // 原地不动：内容逐字未变，库一字不改。
+    expect(await readFile(idx, 'utf8')).toContain('工作事实');
+    expect(hashRecords(store.all())).toBe(before);
+  });
 });

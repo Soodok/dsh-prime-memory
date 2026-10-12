@@ -189,4 +189,21 @@ describe('sweepOrphanFiles', () => {
     expect(rep.remaining).toBe(0);
     expect(rep.samples[0]?.path.endsWith('claimed-11.memory.md')).toBe(true);
   });
+
+  it('骨架文件 `_index.md` 不被当孤儿搬走（孤儿扫描只遍历账本键，不认它）', async () => {
+    // 钉住判据：`sweepOrphanFiles` 的扫描面 = 账本键，而 `_index.md` 从不进账本 → 天然不在遍历集里。
+    const { dataDir, store, ledger, root, run } = await setup([rec('w1', '正经记录', { name: 'keep-me' })]);
+    await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 100, timeBudgetMs: 60_000 });
+    const idx = join(root, 'work_fact', '_index.md');
+    const idxText = '# 工作事实\n\n- 类型: work_fact\n- 条数: 1\n';
+    await writeFile(idx, idxText, 'utf8');
+
+    const rep = await run({ dryRun: false });
+    expect(rep.orphans).toBe(0);
+    expect(rep.moved).toBe(0);
+    expect(await exists(idx)).toBe(true);
+    expect(await readFile(idx, 'utf8')).toBe(idxText);
+    // 账本里根本没有这条骨架路径的键（扫描面与它无交集）。
+    expect(ledger.allWithKeys().some((r) => r.path === idx)).toBe(false);
+  });
 });
