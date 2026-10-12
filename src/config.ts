@@ -151,9 +151,10 @@ export interface MemoryConfig {
     timeBudgetMs: number;
   };
   /**
-   * md 投射与外部存档（N1/N8/N9）：整面**默认关**，关时零动作——不派生 name、不写文件、
-   * 不建账本，与改动前逐字一致。name 只随本开关写，因为它是文件身份键：没打算投射
-   * 就给它起名，等于让存量库里多出一批没人用的非空列值。
+   * md 投射与外部存档（N1/N8/N9）：**投射默认开**（用户定：“这个应该常开”）——
+   * 整个 md 权威计划的前提就是“文件为内容权威 + 库为索引”，默认关就等于默认不用。
+   * 会写盘：无 `workspace_id` 的落 `<dataDir>/memories/`，有归属的落 `<ws>/.agents/memory/`。
+   * 但**反向同步（会写库的那一面）仍默认关**：风险不对称，且它需要先有一份导出跳过的基线。
    */
   memExport: {
     enabled: boolean;
@@ -500,9 +501,9 @@ export const memorySchema = Schema.object({
     maxRecords: Schema.number().min(1).max(10_000).default(300),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
   }),
-  // md 投射与外部存档：默认关。root 空串 = 用默认根（<dataDir>/memories），形状校验在投射器里做。
+  // md 投射与外部存档：**默认开**（写盘不影响检索，关掉只会让人看不到任何投影文件）。root 空串 = 用默认根（<dataDir>/memories），形状校验在投射器里做。
   memExport: Schema.object({
-    enabled: Schema.boolean().default(false),
+    enabled: Schema.boolean().default(true),
     root: Schema.string().default(''),
     maxRecords: Schema.number().min(1).max(10_000).default(300),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),

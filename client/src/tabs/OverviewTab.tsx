@@ -6,6 +6,7 @@ import { modeLabel } from '../pill/modes.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { SwitchRow } from '../ui/controls.js';
+import { ArchiveSection } from './ArchiveSection.js';
 import { DistillSettings } from './DistillSettings.js';
 import { EmbeddingSection } from './EmbeddingSection.js';
 import { RebuildPanel } from './RebuildPanel.js';
@@ -269,6 +270,9 @@ export function OverviewTab(props: { rpc: RpcFn }) {
           })}
         </div>
       )}
+      {/* 外部存档节（用户要求拉到概览页）：导出/对账/同步/清理这四个动作与上面的
+          「重建记忆」「反刍整理」是同一类运维动作，放两个页里人找不到。 */}
+      <ArchiveSection rpc={rpc} />
       <p style={S.hint}>浏览各层记忆内容请切换上方 Tab；原始对话（L0）不入浏览器，可由模型侧 conversation_search 工具查询。</p>
     </div>
   );
