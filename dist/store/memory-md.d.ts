@@ -1,8 +1,14 @@
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 /** 允许当目录名的 type 值（与面板 `TYPE_LABELS` 同集合；P4 换类别树时一并改）。 */
 export declare const MEMORY_TYPE_DIRS: ReadonlySet<string>;
-/** 不在白名单的 type 落到这个目录（旧库/异常值不至于写不出文件，也不污染目录树）。 */
-export declare const UNSORTED_DIR = "unsorted";
+/**
+ * 不在词表的 type 落到这个目录（P4.1 的**默认类**）。
+ *
+ * 它是**目录层的投影**，不是库内事实：记录自己的 `type` 原值照旧写进 frontmatter，
+ * 也绝不回填到 `rowToRecord`/upsert/metadata（F5 红线）。之所以不直接归进某个 `work_*`：
+ * 那会把这批无类记录的 `family` 挑到 work 侧，而 family 决定共享面——等于静默改了可见性。
+ */
+export declare const UNSORTED_DIR = "unclassified";
 /** frontmatter 允许出现的键（用例断言键集**恰等于**它，防检索轴泄漏进文件）。 */
 export declare const FRONTMATTER_KEYS: readonly string[];
 /** 内容指纹长度（12 hex ≈ 48 bit；账本只用来判"变没变"，不当身份用）。 */

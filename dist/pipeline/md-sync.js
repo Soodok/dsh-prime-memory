@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { DISABLE_SUFFIX, digest, recordDigest, targetFor } from '../store/memory-md.js';
 import { exportRecords } from '../store/memory-md-export.js';
 import { parseMdFile } from '../store/memory-md-parse.js';
+import { normalizeContentMd } from '../util/md-normalize.js';
 /** 投射结构是 `<type>/<stem>.memory.md` 两层，3 层已足够宽容人的整理习惯，再深就是别人的目录。 */
 const MAX_DEPTH = 3;
 /** 样本上限：报告要进面板，全量路径会把面板撑爆；计数才是判据。 */
@@ -239,9 +240,11 @@ export async function syncFromFiles(deps) {
             continue;
         }
         // 只有文件变 → 回灌入库，再把文件重写成规范渲染（消写回环）。
+        // 入库前同样过一道版式归一：两头用同一个函数，才能保证“库里的内容”与“渲染出的正文”
+        // 是同一个形状，下一轮才判得出 `same`（P4.2）。
         const updated = {
             ...rec,
-            content: parsed.content,
+            content: normalizeContentMd(parsed.content),
             updatedAt: now(),
             version: (rec.version ?? 0) + 1,
         };

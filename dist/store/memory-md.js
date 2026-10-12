@@ -17,13 +17,20 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, normalize, resolve, sep } from 'node:path';
 import { normText } from '../memport/format.js';
 import { deriveName } from '../util/md-name.js';
+import { normalizeContentMd } from '../util/md-normalize.js';
 import { sanitizeFilename } from './scenes.js';
 /** 允许当目录名的 type 值（与面板 `TYPE_LABELS` 同集合；P4 换类别树时一并改）。 */
 export const MEMORY_TYPE_DIRS = new Set([
     'persona', 'episodic', 'instruction', 'work_fact', 'work_task', 'work_method', 'work_artifact',
 ]);
-/** 不在白名单的 type 落到这个目录（旧库/异常值不至于写不出文件，也不污染目录树）。 */
-export const UNSORTED_DIR = 'unsorted';
+/**
+ * 不在词表的 type 落到这个目录（P4.1 的**默认类**）。
+ *
+ * 它是**目录层的投影**，不是库内事实：记录自己的 `type` 原值照旧写进 frontmatter，
+ * 也绝不回填到 `rowToRecord`/upsert/metadata（F5 红线）。之所以不直接归进某个 `work_*`：
+ * 那会把这批无类记录的 `family` 挑到 work 侧，而 family 决定共享面——等于静默改了可见性。
+ */
+export const UNSORTED_DIR = 'unclassified';
 /** frontmatter 允许出现的键（用例断言键集**恰等于**它，防检索轴泄漏进文件）。 */
 export const FRONTMATTER_KEYS = [
     'name', 'type', 'priority', 'createdAt', 'updatedAt', 'usageScenario', 'extKey', 'id', 'retired',
@@ -153,7 +160,9 @@ export function renderRecord(r) {
     if (r.validTo !== undefined)
         lines.push(fmLine('retired', true));
     lines.push('---', '');
-    lines.push(r.content.trim());
+    // 正文过一道版式归一（P4.2）：无结构存量文本出口就是标准形状。归一是**幂等**的，
+    // 所以不会把账本 `fileDigest` 每轮推得变一下（不幂等 = 反向同步永远判“文件被改过”）。
+    lines.push(normalizeContentMd(r.content));
     lines.push('');
     return { relPath, text: lines.join('\n') };
 }

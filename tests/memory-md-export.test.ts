@@ -223,8 +223,8 @@ describe('reconcileLedger 四态', () => {
     expect(r.fileOnly).toBe(0);
   });
 
-  it('renderRecord 的 relPath 落在 type 目录下，未知 type 归 unsorted', () => {
+  it('renderRecord 的 relPath 落在 type 目录下，未知 type 归默认类 unclassified', () => {
     expect(renderRecord(rec('x', '内容', { type: 'work_fact' })).relPath).toMatch(/^work_fact\/.+\.memory\.md$/);
-    expect(renderRecord(rec('y', '内容', { type: 'legacy_unknown' })).relPath).toMatch(/^unsorted\/.+\.memory\.md$/);
+    expect(renderRecord(rec('y', '内容', { type: 'legacy_unknown' })).relPath).toMatch(/^unclassified\/.+\.memory\.md$/);
   });
 });

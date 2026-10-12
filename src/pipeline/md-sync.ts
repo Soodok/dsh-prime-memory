@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { DISABLE_SUFFIX, digest, recordDigest, targetFor } from '../store/memory-md.js';
 import { exportRecords } from '../store/memory-md-export.js';
 import { parseMdFile } from '../store/memory-md-parse.js';
+import { normalizeContentMd } from '../util/md-normalize.js';
 import type { MdLedgerEntry, MdLedgerStore } from '../store/memory-md-ledger.js';
 import type { MemExportReport, MdSyncReport, MdSyncSample } from '../store/memory-md-types.js';
 import type { L1Store } from '../store/l1.js';
@@ -264,9 +265,11 @@ export async function syncFromFiles(deps: MdSyncDeps): Promise<MdSyncReport> {
     }
 
     // 只有文件变 → 回灌入库，再把文件重写成规范渲染（消写回环）。
+    // 入库前同样过一道版式归一：两头用同一个函数，才能保证“库里的内容”与“渲染出的正文”
+    // 是同一个形状，下一轮才判得出 `same`（P4.2）。
     const updated: MemoryRecord = {
       ...rec,
-      content: parsed.content,
+      content: normalizeContentMd(parsed.content),
       updatedAt: now(),
       version: (rec.version ?? 0) + 1,
     };
