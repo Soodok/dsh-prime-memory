@@ -17,6 +17,15 @@
 import { dirname, join } from 'node:path';
 import { atomicWriteText, ensureDir, readJsonStrict } from '../util/io.js';
 import { MEM_MD_LEDGER_FILE_VERSION } from './file-versions.js';
+/**
+ * 合批窗口(ms)。
+ *
+ * 账本是**整本 JSON 的原子重写**（临时文件 + rename），所以“每 set 一条就落盘”把导出
+ * 成本变成 O(n²)：本机实测 1200 条记录 9.4 秒，其中只碰文件面只需 1.6 秒。改为窗口内
+ * 只记脏、由 `flush()` 收尾落一次，1200 次 set 就是一次落盘。
+ * 窗口只是**兜底**：三个写方（导出 / 失效 / 同步）本来就在收尾 `await flush()`。
+ */
+const PERSIST_COALESCE_MS = 250;
 export class MdLedgerStore {
     logger;
     file;
@@ -25,6 +34,12 @@ export class MdLedgerStore {
     degraded;
     degradedLogged = false;
     writeChain = Promise.resolve();
+    /** 有未落盘的变更。 */
+    dirty = false;
+    /** 已发生的整本落盘次数（见 `writeCount`）。 */
+    writes = 0;
+    /** 已排上的合批定时器（undefined = 窗口外）。 */
+    timer;
     constructor(dataDir, logger) {
         this.logger = logger;
         this.file = join(dataDir, 'mem-md-ledger.json');
@@ -106,7 +121,39 @@ export class MdLedgerStore {
     schedulePersist() {
         if (this.degraded)
             return;
-        this.writeChain = this.writeChain.then(() => this.persist(), () => this.persist());
+        this.dirty = true;
+        // 已在窗口内就不再排：一个 burst 只留一次落盘。
+        if (this.timer !== undefined)
+            return;
+        this.timer = setTimeout(() => {
+            this.timer = undefined;
+            void this.enqueuePersist();
+        }, PERSIST_COALESCE_MS);
+        // 不让一个兜底定时器拖住进程退出（宿主常驻时无影响，测试收尾时干净）。
+        this.timer.unref?.();
+    }
+    /** 串行落盘：并发 set 不能交叠写同一个临时文件。 */
+    enqueuePersist() {
+        this.writeChain = this.writeChain.then(() => this.persistNow(), () => this.persistNow());
+        return this.writeChain;
+    }
+    async persistNow() {
+        if (!this.dirty || this.degraded)
+            return;
+        this.dirty = false;
+        this.writes += 1;
+        await this.persist();
+    }
+    /**
+     * 已发生的整本落盘次数。
+     *
+     * 留着它是因为这个类的性能形状就是它的全部意义：账本每次落盘都重写整本 JSON，
+     * 所以「这个数是不是跟 `set()` 次数一起涨」直接就能区分 O(n) 与 O(n²)。合批前 200 次
+     * `set()` 会落盘 200 次；合批后应该恒为 1。没这个计数器就只能靠时间差或磁盘状态去猜，
+     * 那种断言在旧实现上也能绿（自家刚踩过）。
+     */
+    get writeCount() {
+        return this.writes;
     }
     async persist() {
         if (this.degraded)
@@ -128,8 +175,18 @@ export class MdLedgerStore {
             }
         }
     }
-    /** 等待在途写完成（测试/停机/导出收尾）。 */
+    /**
+     * 等待在途写完成（测试/停机/导出收尾）。
+     *
+     * 合批之后这一步是**语义上的“现在就要落盘”**：清掉定时器并强制一次写，所以写完
+     * `set()` 不 `flush()` 就不能假设磁盘已经可信。`persistNow` 自带脏位判定，
+     * 没变更时不会空写一轮。
+     */
     flush() {
-        return this.writeChain;
+        if (this.timer !== undefined) {
+            clearTimeout(this.timer);
+            this.timer = undefined;
+        }
+        return this.enqueuePersist();
     }
 }

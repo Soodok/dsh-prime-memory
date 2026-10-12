@@ -1,8 +1,8 @@
 import { safeJoin, resolveMemoriesRoot } from './memory-md.js';
 import type { MdLedgerStore } from './memory-md-ledger.js';
-import type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample } from './memory-md-types.js';
+import type { MemExportReport, MemExportResponse, ReconcileCounts, ReconcileReport, ReconcileSample } from './memory-md-types.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
-export type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample };
+export type { MemExportReport, MemExportResponse, ReconcileCounts, ReconcileReport, ReconcileSample };
 export { resolveMemoriesRoot, safeJoin };
 /** 导出报告等形状见 `memory-md-types.ts`（与契约层共用）。 */
 export interface MemExportDeps {

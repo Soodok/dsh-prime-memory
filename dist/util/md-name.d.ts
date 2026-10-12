@@ -28,3 +28,25 @@ export declare function normalizeName(raw: string): {
     ok: false;
     reason: string;
 };
+/** 名字没洗出可用字符时的回落干：`mem-<id 后 8 位>`。 */
+export declare function fallbackStem(id: string): string;
+/**
+ * 给一个名字求**全库唯一**的落名：基底 → `基底-2` → `基底-3` → … → 回落名。
+ *
+ * 为什么必须在这里消歧，而不是“谁先到谁写”：`deriveName` 只取正文首行前 24 字，
+ * 同一段话的多条记录必然洗出同一个名字。真机实测 1166 条里 42 条挤进 17 个同名
+ * 文件（最狠一个路径 6 条），后果是导出每轮都把被覆盖的那几条重写一遍（面板上那个
+ * 永远不归零的「已写 9」）、而反向同步会把一份内容回灌给六条记录。
+ *
+ * 分配本身只取决于“基底 + 已占用集”，因此**调用方必须按 id 排序后再分配**：
+ * 同一个基底碰上同一次分配时，谁先谁拿到裸名——顺序不钉死的话，两次导出会给同一条
+ * 记录分到不同名字，文件在盘上跳来跳去。后缀要留位置：总长不超过 {@link NAME_MAX}，
+ * 宁可截基底也不让它超长。
+ *
+ * @param base - 基底名（通常是 `deriveName(content)`，可以为空）。
+ * @param id - 记录 id，基底不可用时落回 `mem-<id8>`。
+ * @param isFree - 库侧查询：这个名字没被**其它**记录占着。
+ * @param reserved - 本轮已分配出去的名字（调用方逐次加入，函数也会自己加）。
+ * @returns 可用的名字；实在找不到就把 `id` 的回落名加上数字尾巴交出去（仍进 reserved）。
+ */
+export declare function allocUniqueName(base: string, id: string, isFree: (name: string) => boolean, reserved: Set<string>): string;

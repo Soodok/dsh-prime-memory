@@ -26,6 +26,12 @@ export declare class MdLedgerStore {
     private degraded;
     private degradedLogged;
     private writeChain;
+    /** 有未落盘的变更。 */
+    private dirty;
+    /** 已发生的整本落盘次数（见 `writeCount`）。 */
+    private writes;
+    /** 已排上的合批定时器（undefined = 窗口外）。 */
+    private timer;
     constructor(dataDir: string, logger?: MemoryLogger | undefined);
     init(): Promise<void>;
     /** 逐条收窄：形状不符的条目丢弃，不让一条坏数据拖垮整表。 */
@@ -38,7 +44,25 @@ export declare class MdLedgerStore {
     /** 条目上限护栏：投射是"文件 ↔ 库"的一一对应，超量只可能是脏数据堆积。 */
     private prune;
     private schedulePersist;
+    /** 串行落盘：并发 set 不能交叠写同一个临时文件。 */
+    private enqueuePersist;
+    private persistNow;
+    /**
+     * 已发生的整本落盘次数。
+     *
+     * 留着它是因为这个类的性能形状就是它的全部意义：账本每次落盘都重写整本 JSON，
+     * 所以「这个数是不是跟 `set()` 次数一起涨」直接就能区分 O(n) 与 O(n²)。合批前 200 次
+     * `set()` 会落盘 200 次；合批后应该恒为 1。没这个计数器就只能靠时间差或磁盘状态去猜，
+     * 那种断言在旧实现上也能绿（自家刚踩过）。
+     */
+    get writeCount(): number;
     private persist;
-    /** 等待在途写完成（测试/停机/导出收尾）。 */
+    /**
+     * 等待在途写完成（测试/停机/导出收尾）。
+     *
+     * 合批之后这一步是**语义上的“现在就要落盘”**：清掉定时器并强制一次写，所以写完
+     * `set()` 不 `flush()` 就不能假设磁盘已经可信。`persistNow` 自带脏位判定，
+     * 没变更时不会空写一轮。
+     */
     flush(): Promise<void>;
 }

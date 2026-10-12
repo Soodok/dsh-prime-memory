@@ -7,7 +7,7 @@
  * 这里因此既测业务规则（取首行、截断、剥 markdown 前缀），也测那几条平台雷。
  */
 import { describe, expect, it } from 'vitest';
-import { NAME_MAX, deriveName, normalizeName } from '../src/util/md-name.js';
+import { NAME_MAX, allocUniqueName, deriveName, fallbackStem, normalizeName } from '../src/util/md-name.js';
 
 describe('deriveName', () => {
   it('取首个非空行，跳过 markdown 的前缀符号', () => {
@@ -68,6 +68,51 @@ describe('normalizeName（人给的改名入参）', () => {
   it('合法名字原样通过，并返回归一后的值', () => {
     expect(normalizeName('pnpm-hoisted')).toEqual({ ok: true, name: 'pnpm-hoisted' });
     expect(normalizeName('上行必须走官方地址')).toEqual({ ok: true, name: '上行必须走官方地址' });
+  });
+});
+
+describe('allocUniqueName（同一个基底洗出多个名字时的消歧）', () => {
+  /** 空库：什么都不算占。 */
+  const freeAll = () => true;
+
+  it('基底没人占就直接用，并把它推进占用集', () => {
+    const taken = new Set<string>();
+    expect(allocUniqueName('官方地址上行', 'rec-0001', freeAll, taken)).toBe('官方地址上行');
+    expect(taken.has('官方地址上行')).toBe(true);
+    // 第二次同样基底 → 拿 -2（同一轮里的重复分配靠占用集挡住，不看库）。
+    expect(allocUniqueName('官方地址上行', 'rec-0002', freeAll, taken)).toBe('官方地址上行-2');
+  });
+
+  it('基底已被库里另一条占着 → 走后缀，不拿别人的名字', () => {
+    const taken = new Set<string>();
+    const isFree = (n: string) => n !== '官方地址上行';
+    expect(allocUniqueName('官方地址上行', 'rec-0003', isFree, taken)).toBe('官方地址上行-2');
+  });
+
+  it('后缀要留位置：总长不得超过 NAME_MAX', () => {
+    const base = deriveName('记'.repeat(60));
+    expect(base.length).toBe(NAME_MAX);
+    const taken = new Set<string>([base]);
+    const got = allocUniqueName(base, 'rec-0004', freeAll, taken);
+    expect(got.length).toBeLessThanOrEqual(NAME_MAX);
+    expect(got).toBe(`${base.slice(0, NAME_MAX - 2)}-2`);
+  });
+
+  it('基底洗不出名字（纯标点正文）时回落 mem-<id8>，两条也不互撞', () => {
+    const taken = new Set<string>();
+    const a = allocUniqueName('', 'abcdef1234500001', freeAll, taken);
+    const b = allocUniqueName('', 'abcdef1234500002', freeAll, taken);
+    expect(a).toBe(fallbackStem('abcdef1234500001'));
+    expect(b).toBe(fallbackStem('abcdef1234500002'));
+    expect(a).not.toBe(b);
+  });
+
+  it('回落名也被占时继续加后缀，绝不交出一个重复名', () => {
+    const id = 'zzzz0000abcd1234';
+    const stem = fallbackStem(id);
+    const taken = new Set<string>([stem, `${stem}-2`]);
+    const got = allocUniqueName('', id, freeAll, taken);
+    expect(got).toBe(`${stem}-3`);
   });
 
   it('与 deriveName 一致：蒸馏出来的名字一定过得了 normalizeName（两条路不能互斥）', () => {

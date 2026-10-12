@@ -18,6 +18,7 @@ import { isRetired, type SupersedeInfo } from './supersede.js';
 import { exportThenPurge, readSnapshotManifest, readSnapshotRecords, restoreL1Snapshot, selectSnapshotTargets, snapshotDirFor, listSnapshots as listSnapshotsIn, type ExportThenPurgeResult, type PurgeOptions, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
 import { EmbedHelper, NoopEmbeddingService, type EmbeddingService } from './embedding.js';
 import { appendJsonl, dayKey, ensureDir, readJsonl } from '../util/io.js';
+import { allocUniqueName, deriveName } from '../util/md-name.js';
 import { applyDecayWeight, normalizeRrf, rrfMerge , markDedupPath } from './search-utils.js';
 import { isZeroVector, type L1MetaLite, type MemoryDb } from './sqlite.js';
 
@@ -106,6 +107,14 @@ export class L1Store {
     decayHalfLifeDays?: number,
     /** 图谱路提供者(§D 第 3 路);不传则该路不存在,融合退回双路。 */
     graphLane?: GraphLaneProvider,
+    /**
+     * “该不该给没名字的新记录起名”的实时判据（装配层递 `() => cfg.memExport.enabled`）。
+     *
+     * 用函数而不是布尔：设置面可热改，存下快照就会与当前开关漂移。
+     * 不传 = 不主动起名（“投射关着时零动作”这条既有承诺不改），但**别人占着的名字照样修**
+     * ——那是防丢数据，与开关无关。
+     */
+    private readonly autoName?: () => boolean,
   ) {
     this.dataDir = dataDir;
     this.recordsDir = path.join(dataDir, 'records');
@@ -223,6 +232,86 @@ export class L1Store {
   /** 按名字反查 id（重名预检 / md 回灌）；未命中 ⇒ undefined。 */
   findIdByName(name: string): string | undefined {
     return this.db.findRecordIdByName(name);
+  }
+
+  /**
+   * 给一批**名字缺失或被别人占着**的记录分配文件身份名（N1 的机器起名，全库唯一判据的唯一真源）。
+   *
+   * 为什么必须做：`deriveName` 只取正文首行前 24 字，同一段话的多条记录必然洗出同名。
+   * 真机实测 1166 条记录 `name` 全空、42 条挤进 17 个同名投射文件（最狠一个路径 6 条），
+   * 后果是导出每轮重刷被覆盖的那几条、反向同步会把一份内容回灌给六条记录。不回填 name，
+   * P0 加的这一列与部分唯一索引就一直是空转。
+   *
+   * “要起名”的判据不是“name 为空”，而是两种都要管：
+   * - **空名**（存量与“抽取时没起名”的新行）——只在 `autoName()` 为真时补；
+   * - **名字属于库里另一条**——无条件重命。这一类不是想象：调用方拿 `{ ...旧记录, id: 新 id }`
+   *   复制新记录（去重 merge / 取代路径就这么写），旧记录刚被本函数填上 name；不重命的话
+   *   新记录拿着别人占着的名字去写库，**撞部分唯一索引 → 整条写不进检索库**（旧记录已退场、
+   *   取代者根本不存，两个自家用例就是这么挂的）。
+   *
+   * 三条约束：
+   * - **不覆写属于它自己的名字**：人的命名是权威；
+   * - **只改 name**：不碰内容/类型/退场态，也不进快照哈希字段表（`canonicalRecords` 里没有
+   *   `name`），所以这一步不会弄挂「导出不改检索面」的护栏；
+   * - **按 id 排序后再分配**：同一个基底谁先拿到裸名由顺序决定，不钉死会给同一条记录
+   *   两次分到不同名字，文件在盘上跳来跳去。
+   *
+   * @param records - 待起名的记录（**就地改 `.name`**，内存与库保持一致）。
+   * @param opts.persist - true 走 `renameL1Batch` 落库（存量回填）；false 只算名不落库
+   *   （新增记录还没进库，名字由随后的 upsert 一并写）。
+   * @param opts.fillEmpty - 是否给**空名**起名（默认按 `autoName()` 判）。“名字属于别人”那类
+   *   不受此参数影响，永远修。
+   * @returns `named` 本轮起名条数，`failed` 落库失败条数（persist=false 时恒为 0）。
+   */
+  assignMissingNames(
+    records: MemoryRecord[],
+    opts: { persist?: boolean; fillEmpty?: boolean } = {},
+  ): { named: number; failed: number } {
+    const fillEmpty = opts.fillEmpty ?? (this.autoName?.() === true);
+    // 名字属于库里另一条的（含被 `{...旧记录}` 复制走的），一律重新分配。
+    const foreignName = (r: MemoryRecord): boolean => {
+      const n = (r.name ?? '').trim();
+      if (n.length === 0) return false;
+      const owner = this.db.findRecordIdByName(n);
+      return owner !== undefined && owner !== r.id;
+    };
+    const emptyName = (r: MemoryRecord): boolean => (r.name ?? '').trim().length === 0;
+    const needSet = new Set<MemoryRecord>();
+    for (const r of records) {
+      if (foreignName(r) || (fillEmpty && emptyName(r))) needSet.add(r);
+    }
+    const need = records.filter((r) => needSet.has(r)).sort((a, b) => a.id.localeCompare(b.id));
+    if (need.length === 0) return { named: 0, failed: 0 };
+
+    // 占用集：本批里**不需要重新分配**的那些名字（它们确实是自己的）+ 本轮刚分出去的。
+    const reserved = new Set<string>();
+    for (const r of records) {
+      if (needSet.has(r)) continue;
+      const n = (r.name ?? '').trim();
+      if (n.length > 0) reserved.add(n);
+    }
+    const needIds = new Set(need.map((r) => r.id));
+    const isFree = (name: string): boolean => {
+      const owner = this.db.findRecordIdByName(name);
+      // 持者是本轮正要起名的某条自己（存量回填时它们已在库里），不算占。
+      return owner === undefined || needIds.has(owner);
+    };
+
+    const items: Array<{ id: string; name: string }> = [];
+    for (const r of need) {
+      // 基底始终取正文，而不是取那个“属于别人的旧名字”。
+      const name = allocUniqueName(deriveName(r.content), r.id, isFree, reserved);
+      r.name = name;
+      items.push({ id: r.id, name });
+    }
+    if (opts.persist !== true) return { named: items.length, failed: 0 };
+    const { done, failed } = this.db.renameL1Batch(items);
+    // 落库失败的条目把内存侧名字收回：否则内存与库不一致，下一轮又当“已有名字”而永不重试。
+    if (failed.length > 0) {
+      const bad = new Set(failed);
+      for (const r of need) if (bad.has(r.id)) r.name = '';
+    }
+    return { named: done.length, failed: failed.length };
   }
 
   /**
@@ -438,6 +527,9 @@ export class L1Store {
     for (const r of records) {
       if (!r.family) r.family = familyForType(r.type);
     }
+    // 起名必须在**追加事实源之前**：名字是文件身份键，进了 JSONL 才能跟记录一起重生。
+    // 这批还没进库，所以只算名字不落库（persist=false），由下面的 upsert 一并写。
+    this.assignMissingNames(records, { persist: false });
     const byDay = new Map<string, MemoryRecord[]>();
     for (const r of records) {
       const k = dayKey(r.createdAt || Date.now());
@@ -464,6 +556,8 @@ export class L1Store {
   /** 去重 update/merge 产出的记录:只更新检索库(JSONL 事实源不改写,官方语义)。 */
   async upsert(record: MemoryRecord): Promise<void> {
     if (!record.family) record.family = familyForType(record.type);
+    // merge 分支会继承胜方的 name；两边都没名字时在这里补上，别让新铸的行继续带空名。
+    this.assignMissingNames([record], { persist: false });
     const vec = (await this.helper.batch([record.content]))[0];
     if (!this.db.upsertL1(record, vec)) {
       this.logger?.error(

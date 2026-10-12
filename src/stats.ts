@@ -737,14 +737,23 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
     }
 
     case 'dsh-memory/mem-export': {
-      // 单向导出：库 → md 文件 + 账本。**不写库**（用例钉住：导出前后 hashRecords 相同）。
+      // 单向导出：库 → md 文件 + 账本。**不写检索面**（用例钉住：导出前后 hashRecords 相同）。
       // 先查配置门再查装配门：“整面默认关”时该听到的是“没开”，不是“没装配”。
       const exp = cfg.memExport;
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
-      return exportRecords({
-        records: stores.l1.all(),
+      // 命名回填：没名字的记录先拿到全库唯一的 `name`，再算落点。
+      // 不回填就是真机那个形状：1166 条 name 全空、42 条挤进 17 个同名文件，
+      // 文件互相覆盖 + 导出每轮重刷 + 反向同步把一份内容回灌给多条。
+      // 它只写 `name` 列（不在快照哈希字段表里），所以 hashRecords 仍逐字不变。
+      const all = stores.l1.all();
+      const naming = stores.l1.assignMissingNames(all, { persist: true });
+      if (naming.failed > 0) {
+        deps.logger?.warn(`[memory] md 投射命名回填失败 ${naming.failed} 条(下轮导出会重试)`);
+      }
+      const rep = await exportRecords({
+        records: all,
         cfgRoot: exp.root,
         dataDir: deps.dataDir,
         ledger: md,
@@ -752,6 +761,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         timeBudgetMs: exp.timeBudgetMs,
         logger: deps.logger,
       });
+      return { ...rep, named: naming.named, nameFailed: naming.failed };
     }
 
     case 'dsh-memory/mem-reconcile': {

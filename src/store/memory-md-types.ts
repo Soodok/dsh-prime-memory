@@ -26,6 +26,21 @@ export interface MemExportReport {
   capped: boolean;
 }
 
+/**
+ * `dsh-memory/mem-export` 的响应 = 导出报告 + 命名回填计数。
+ *
+ * 为什么要单开一个类型：投射默认开后，导出这条路径现在会先做一步**写库**的命名回填
+ * （给 `name` 为空的记录派生全库唯一的文件身份名）。它只改 `name`——内容/类型/退场态都不动，
+ * 而 `name` 不在 `canonicalRecords` 的快照哈希字段表里，所以「导出不改检索面」依旧成立；
+ * 但“导出什么都不写”这句话已经不成立了，把计数摆到响应上是让这笔写在面板上看得见。
+ */
+export interface MemExportResponse extends MemExportReport {
+  /** 本轮新起了多少条名字（0 = 全都已有名）。 */
+  named: number;
+  /** 起名算出来但落库失败的条数（下轮会重试）。 */
+  nameFailed: number;
+}
+
 /** 四态计数（外加两个边界态）。 */
 export interface ReconcileCounts {
   /** 账本里没有这条文件（首次导出前，或人新加了文件）。 */

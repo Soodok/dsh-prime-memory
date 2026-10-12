@@ -1514,6 +1514,7 @@ export class MemoryDb {
    *
    * 唯一性由 `l1_records_name_uidx` 挡：撞名 ⇒ `'dup'`，由调用方决定报错还是让用户先改
    * 另一条——**不自动加后缀**，那会静默造出语义重叠的第二条记忆。
+   * （另一个口径：机器给**本来没名字**的记录起名时必须消歧，见 `renameL1Batch` 的注释。）
    */
   renameL1(id: string, name: string): 'ok' | 'dup' | 'missing' | 'failed' {
     if (this.degraded) return 'failed';
@@ -1529,7 +1530,55 @@ export class MemoryDb {
     }
   }
 
-  /** 按文件身份名反查 record_id（重名预检与 md 回灌用）；没这条名 ⇒ undefined。 */
+  /**
+   * 批量写 `name`（单事务）。给“机器起名”用：存量记录没名字时一次补齐。
+   *
+   * 与 `renameL1` 的分工不是性能而是**语义**：那里是**人给的**名字，撞了就报错让用户
+   * 先改另一条，绝不静默加后缀；这里是机器给**本来没名字**的记录派生名字，同正文的
+   * 多条必然撞名（真机实测 42 条挤进 17 个路径），**不消歧就是每轮导出重刷 + 反向同步
+   * 把一份内容回灌给多条**。所以消歧必须在本层之上先把名字算唯一，本层只负责落库。
+   *
+   * 与 `renameL1` 同样**不碰 `updated_time`**（起名不是“内容变了”），也不动 FTS——
+   * `name` 不在检索面里（`l1_fts` 没这一列）。
+   *
+   * @param items - `{ id, name }`，name 已由调用方保证全库唯一。
+   * @returns 实际写入的 id 集（现值已等于目标值的跳过——幂等）与失败集。
+   */
+  renameL1Batch(items: ReadonlyArray<{ id: string; name: string }>): { done: string[]; failed: string[] } {
+    const done: string[] = [];
+    const failed: string[] = [];
+    if (this.degraded || items.length === 0) return { done, failed: items.map((it) => it.id) };
+    const upd = this.db.prepare(
+      "UPDATE l1_records SET name = ? WHERE record_id = ? AND COALESCE(name, '') <> ?",
+    );
+    try {
+      this.withTransaction(() => {
+        for (const it of items) {
+          if (!it.id || it.name.length === 0) { failed.push(it.id); continue; }
+          try {
+            const ch = Number(upd.run(it.name, it.id, it.name).changes);
+            // changes=0 两种可能：没这行，或现值已相等。前者要报出去，后者算幂等成功。
+            if (ch === 0 && this.stmtGetL1.get(it.id) === undefined) { failed.push(it.id); continue; }
+            done.push(it.id);
+          } catch (err) {
+            // 单条撞唯一索引不影响事务里的其它行（ABORT 只回退当前语句）。
+            this.logger?.warn(
+              `${TAG} 批量起名单条失败(${it.id}): ${err instanceof Error ? err.message : String(err)}`,
+            );
+            failed.push(it.id);
+          }
+        }
+      });
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} 批量起名事务失败(${items.length} 条): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      for (const it of items) if (!done.includes(it.id)) failed.push(it.id);
+    }
+    return { done, failed };
+  }
+
+  /** 按文件身份名反查 record_id（重名预检与 md 回灌用）；没这条名 ⇒ undefined。*/
   findRecordIdByName(name: string): string | undefined {
     if (this.degraded || name.length === 0) return undefined;
     try {

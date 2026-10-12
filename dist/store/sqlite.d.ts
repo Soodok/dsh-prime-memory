@@ -267,9 +267,31 @@ export declare class MemoryDb {
      *
      * 唯一性由 `l1_records_name_uidx` 挡：撞名 ⇒ `'dup'`，由调用方决定报错还是让用户先改
      * 另一条——**不自动加后缀**，那会静默造出语义重叠的第二条记忆。
+     * （另一个口径：机器给**本来没名字**的记录起名时必须消歧，见 `renameL1Batch` 的注释。）
      */
     renameL1(id: string, name: string): 'ok' | 'dup' | 'missing' | 'failed';
-    /** 按文件身份名反查 record_id（重名预检与 md 回灌用）；没这条名 ⇒ undefined。 */
+    /**
+     * 批量写 `name`（单事务）。给“机器起名”用：存量记录没名字时一次补齐。
+     *
+     * 与 `renameL1` 的分工不是性能而是**语义**：那里是**人给的**名字，撞了就报错让用户
+     * 先改另一条，绝不静默加后缀；这里是机器给**本来没名字**的记录派生名字，同正文的
+     * 多条必然撞名（真机实测 42 条挤进 17 个路径），**不消歧就是每轮导出重刷 + 反向同步
+     * 把一份内容回灌给多条**。所以消歧必须在本层之上先把名字算唯一，本层只负责落库。
+     *
+     * 与 `renameL1` 同样**不碰 `updated_time`**（起名不是“内容变了”），也不动 FTS——
+     * `name` 不在检索面里（`l1_fts` 没这一列）。
+     *
+     * @param items - `{ id, name }`，name 已由调用方保证全库唯一。
+     * @returns 实际写入的 id 集（现值已等于目标值的跳过——幂等）与失败集。
+     */
+    renameL1Batch(items: ReadonlyArray<{
+        id: string;
+        name: string;
+    }>): {
+        done: string[];
+        failed: string[];
+    };
+    /** 按文件身份名反查 record_id（重名预检与 md 回灌用）；没这条名 ⇒ undefined。*/
     findRecordIdByName(name: string): string | undefined;
     /** 入队一个重聚类作业(demote-to-wiki / repo 归属变化触发;source 区分来源)。 */
     enqueueSceneRecluster(family: string, sceneNames: readonly string[], batchId: string, source?: string): string;

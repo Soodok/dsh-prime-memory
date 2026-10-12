@@ -156,7 +156,9 @@ export interface MemoryConfig {
         enabled: boolean;
         /** 投射根目录；空 = `<dataDir>/memories`。形状不合则回退默认并 warn，**不抛错**（投射是旁路，不能弄挂记忆）。 */
         root: string;
-        /** 单次导出的条数护栏（照 wing-backfill / workspace-relink 口径）。 */
+        /** 单次导出的**动作数**护栏（照 wing-backfill / workspace-relink 口径）：只数碰了磁盘的
+         *  条（写入 / 补账 / 失败）。“未变且已记账”的不吃配额，否则第二次点击在同一批前 N 条上
+         *  打转、`remaining` 永不递减；扫描总量由 `timeBudgetMs` 兜底。 */
         maxRecords: number;
         /** 单次导出的墙钟预算(ms)。 */
         timeBudgetMs: number;

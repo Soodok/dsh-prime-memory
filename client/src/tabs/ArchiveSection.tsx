@@ -46,7 +46,11 @@ async function call<K extends ArchiveEndpoint>(
 
 function lineOf(rep: ExportReport): string {
   const head = `已写 ${rep.written} · 未变 ${rep.unchanged} · 跳过 ${rep.skipped}`;
-  return rep.remaining > 0 ? `${head} · 剩余 ${rep.remaining} 条，再点一次继续` : head;
+  // 起名回填是这一步顺带做的写库动作（只写 name 列），得让人看得见它动了几条。
+  const named = rep.named > 0 ? ` · 新起名 ${rep.named} 条` : '';
+  const nameBad = rep.nameFailed > 0 ? ` · 起名失败 ${rep.nameFailed} 条(下轮重试)` : '';
+  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 条，再点一次继续` : '';
+  return head + named + nameBad + tail;
 }
 
 function lineOfReconcile(rep: ReconcileReport): string {

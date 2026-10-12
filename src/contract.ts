@@ -1509,10 +1509,15 @@ export interface RecallFeedbackResponse {
  * dsh-memory/mem-export / mem-reconcile：md 投射的导出与对账（P1 + N8/N9）。
  *
  * 两个都无入参（护栏条数/墙钟来自 config），响应形状直接取存储层的报告类型
- * ——同一事实源，避开“契约手抄一份然后与实现漂移”。导出**不写库**，对账**什么都不写**。
+ * ——同一事实源，避开“契约手抄一份然后与实现漂移”。
+ *
+ * 写面要说准：**对账什么都不写**；**导出写文件、写账本，并会回填一次 `l1_records.name`**
+ * （给没名字的记录派生全库唯一的文件身份名，计数在 `named`/`nameFailed`）。那一步只改
+ * `name`：内容、类型、退场态、检索面一律不动，而 `name` 不在 `canonicalRecords` 的快照
+ * 哈希字段表里，所以“导出不得改变库内容”这条护栏仍成立——但“导出不碰库”不成立。
  */
 export type MemExportRequest = Record<string, never>;
-export type MemExportResponse = import('./store/memory-md-types.js').MemExportReport;
+export type MemExportResponse = import('./store/memory-md-types.js').MemExportResponse;
 export type MemReconcileRequest = Record<string, never>;
 export type MemReconcileResponse = import('./store/memory-md-types.js').ReconcileReport;
 

@@ -1550,7 +1550,10 @@ var __defProp = Object.defineProperty;
 		}
 		function lineOf(rep) {
 		  const head = `已写 ${rep.written} · 未变 ${rep.unchanged} · 跳过 ${rep.skipped}`;
-		  return rep.remaining > 0 ? `${head} · 剩余 ${rep.remaining} 条，再点一次继续` : head;
+		  const named = rep.named > 0 ? ` · 新起名 ${rep.named} 条` : "";
+		  const nameBad = rep.nameFailed > 0 ? ` · 起名失败 ${rep.nameFailed} 条(下轮重试)` : "";
+		  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 条，再点一次继续` : "";
+		  return head + named + nameBad + tail;
 		}
 		function lineOfReconcile(rep) {
 		  const parts = [

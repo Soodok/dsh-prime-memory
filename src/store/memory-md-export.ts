@@ -20,10 +20,10 @@ import { digest, recordDigest, renderRecord, safeJoin, targetFor, resolveMemorie
 import type { MdLedgerEntry, MdLedgerStore } from './memory-md-ledger.js';
 // 报告形状住在纯类型文件里：`contract.ts` 也 import 它，但不能把 node 依赖拖进
 // client 编译程序（详见 `memory-md-types.ts` 的模块头）。
-import type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample } from './memory-md-types.js';
+import type { MemExportReport, MemExportResponse, ReconcileCounts, ReconcileReport, ReconcileSample } from './memory-md-types.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 
-export type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample };
+export type { MemExportReport, MemExportResponse, ReconcileCounts, ReconcileReport, ReconcileSample };
 // 路径纪律已收到 `memory-md.ts`（N10 后导出/对账/失效/归档四处共用）；这里再导一次
 // 只为不拆已有调用方（stats.ts 与用例都从本模块拿它们）。
 export { resolveMemoriesRoot, safeJoin };
