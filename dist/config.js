@@ -180,6 +180,13 @@ export const memorySchema = Schema.object({
         maxRecords: Schema.number().min(1).max(10_000).default(300),
         timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
     }),
+    // md 投射与外部存档：默认关。root 空串 = 用默认根（<dataDir>/memories），形状校验在投射器里做。
+    memExport: Schema.object({
+        enabled: Schema.boolean().default(false),
+        root: Schema.string().default(''),
+        maxRecords: Schema.number().min(1).max(10_000).default(300),
+        timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+    }),
     // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。
     usageScenario: Schema.object({
         enabled: Schema.boolean().default(false),

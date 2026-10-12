@@ -30,6 +30,16 @@ export interface MemoryStores {
     state: StateStore;
     /** 图谱存储(可选:测试缝/未装配时图谱泵整体停用;GraphStore 自带降级 no-op)。 */
     graph?: GraphStore;
+    /**
+     * 派生数据搬运面（P0-d）：merge 后把使用史与人工标注搬到新 id。
+     * 只声明用到的那个方法（不拉整个类入参）——未装配时不搬，行为与改动前一致。
+     */
+    usage?: {
+        rekey(oldId: string, newId: string): boolean;
+    };
+    feedback?: {
+        rekey(oldId: string, newId: string): boolean;
+    };
 }
 /** 管线任务(优先级调度:live > graph > rebuild)。 */
 export interface PipelineTask {

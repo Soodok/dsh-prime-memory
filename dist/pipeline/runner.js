@@ -662,7 +662,13 @@ export class MemoryRunner {
             // §E 写入侧工作区:后台蒸馏手上只有 sessionId(没有 exec),经
             // `ctx.get('agents')` 宽容解析——与 §A 的多级父链解析同一招。
             // 拿不到 → undefined → 归属回落 global(pipeline 侧 `resolveRecordScope` 兜底)。
-            sessionWorkspaceIdOf(this.ctx, sessionId), anchorMap);
+            sessionWorkspaceIdOf(this.ctx, sessionId), anchorMap, 
+            // 派生数据跟着搬（P0-d）：不搬等于每次合并把这条记忆的使用史与人工标注清零。
+            // 两个 sidecar 都是后装上的（`stores.usage` 在装配段才填），故在调用时点现取。
+            (oldId, newId) => {
+                this.stores.usage?.rekey(oldId, newId);
+                this.stores.feedback?.rekey(oldId, newId);
+            });
             if (!result.skipped) {
                 this.pending[mode] = rest;
                 // 重建轮(force)不是有机对话,不推进爬坡

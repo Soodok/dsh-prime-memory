@@ -256,6 +256,17 @@ export declare class MemoryDb {
         id: string;
         workspaceId: string;
     }>): number;
+    /**
+     * 改一条记录的文件身份名（N1）。三态返回，**不碰 `updated_time`**：它在快照哈希
+     * 字段表里、又是衰减与排序的输入——改名不是“内容变了”，不该顺带把这条记成刚更新过
+     * （与 `setL1WorkspaceIds` 同一个理由）。`name=''` 是合法值（= 没名字，部分索引不约束空串）。
+     *
+     * 唯一性由 `l1_records_name_uidx` 挡：撞名 ⇒ `'dup'`，由调用方决定报错还是让用户先改
+     * 另一条——**不自动加后缀**，那会静默造出语义重叠的第二条记忆。
+     */
+    renameL1(id: string, name: string): 'ok' | 'dup' | 'missing' | 'failed';
+    /** 按文件身份名反查 record_id（重名预检与 md 回灌用）；没这条名 ⇒ undefined。 */
+    findRecordIdByName(name: string): string | undefined;
     /** 入队一个重聚类作业(demote-to-wiki / repo 归属变化触发;source 区分来源)。 */
     enqueueSceneRecluster(family: string, sceneNames: readonly string[], batchId: string, source?: string): string;
     /** 取一个待处理作业(ruminate 空闲消费;按创建序)。 */

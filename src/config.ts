@@ -150,6 +150,20 @@ export interface MemoryConfig {
     /** 存量 re-link 的墙钟预算(ms)。 */
     timeBudgetMs: number;
   };
+  /**
+   * md 投射与外部存档（N1/N8/N9）：整面**默认关**，关时零动作——不派生 name、不写文件、
+   * 不建账本，与改动前逐字一致。name 只随本开关写，因为它是文件身份键：没打算投射
+   * 就给它起名，等于让存量库里多出一批没人用的非空列值。
+   */
+  memExport: {
+    enabled: boolean;
+    /** 投射根目录；空 = `<dataDir>/memories`。形状不合则回退默认并 warn，**不抛错**（投射是旁路，不能弄挂记忆）。 */
+    root: string;
+    /** 单次导出的条数护栏（照 wing-backfill / workspace-relink 口径）。 */
+    maxRecords: number;
+    /** 单次导出的墙钟预算(ms)。 */
+    timeBudgetMs: number;
+  };
   /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
   usageScenario: {
     enabled: boolean;
@@ -471,6 +485,13 @@ export const memorySchema = Schema.object({
         noneOf: ['dsh'],
       },
     ]),
+    maxRecords: Schema.number().min(1).max(10_000).default(300),
+    timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+  }),
+  // md 投射与外部存档：默认关。root 空串 = 用默认根（<dataDir>/memories），形状校验在投射器里做。
+  memExport: Schema.object({
+    enabled: Schema.boolean().default(false),
+    root: Schema.string().default(''),
     maxRecords: Schema.number().min(1).max(10_000).default(300),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
   }),

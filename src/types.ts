@@ -300,6 +300,15 @@ export interface MemoryRecord {
    * 与 `scene_name`/`metadata.origin` 不同:这是**存储层强制去重键**,不是展示用的溯源标签。
    */
   extKey?: string;
+  /**
+   * 文件身份键（md 投射相，N1）：人可读、可编辑、全库唯一，直接当
+   * `<root>/<type>/<name>.memory.md` 的文件名。与 `extKey` 的分工：extKey 是
+   * **导入幂等键**（机器算的、来源内唯一），name 是**文件身份**（人写的、全库唯一）。
+   * 不用 id 当身份：id 每轮新铸、从不复用；不用 scene_name：它的基数大于记录数。
+   * undefined = 还没名字（存量记录），投射器则回落 `mem-<id8>`。
+   * 非空值受 `l1_records` 上的部分唯一索引约束；该列**不进**快照哈希投影。
+   */
+  name?: string;
 }
 
 /** L2 场景块摘要(META 解析结果)。 */
