@@ -798,6 +798,11 @@ export interface UiRecord {
   maturity?: 'low' | 'mid' | 'high';
   /** 使用场景（G1）：从 metadata.dsh_usage_scenario 读出；功能关/无则 undefined。 */
   usageScenario?: string[];
+  /**
+   * 人给的相关度均值(0..5)；从未被 0..5 打过分为 undefined（**缺席 ≠ 0 分**）。
+   * 读时从 recall-feedback sidecar 派生，不进存储/快照。
+   */
+  userRelevance?: number;
 }
 export interface ListRecordsResponse {
   items: UiRecord[];
@@ -1448,6 +1453,36 @@ export interface SessionRecalledResponse {
   records: UiRecord[];
 }
 
+/**
+ * dsh-memory/recall-feedback（人在召回卡上打分）。
+ *
+ * 语义边界：`0..5` = 人给的相关度（只聚合、不改写任何排序分）；`-1` = 声明过时，
+ * 服务端会顺手做三件事——退场该记录（软删，可 `records-restore` 恢复）、从本会话
+ * 活召回集摘掉、把“已向模型播报”入队（下一轮一次性告知）。
+ */
+export interface RecallFeedbackRequest {
+  sessionId: string;
+  /** 被打分的那条召回记录 id（必须是本会话活召回集里的，否则拒）。 */
+  id: string;
+  /** -1 或 0..5。 */
+  score: number;
+}
+export interface RecallFeedbackResponse {
+  id: string;
+  score: number;
+  /** 聚合后的反馈条目。 */
+  rating: {
+    last: number;
+    rated: number;
+    mean: number;
+    obsolete: number;
+  };
+  /** 本次是否触发了退场(仅 score=-1)。 */
+  retired: boolean;
+  /** 退场后是否已排入下一轮向模型播报(仅 score=-1 且 cfg.recallFeedback.announce)。 */
+  announced: boolean;
+}
+
 export interface DshMemoryRequestMap {
   'dsh-memory/stats': Record<string, never>;
   'dsh-memory/token-cost': TokenCostRequest;
@@ -1501,6 +1536,7 @@ export interface DshMemoryRequestMap {
   'dsh-memory/memport-scan': MemportScanRequest;
   'dsh-memory/skills-list': Record<string, never>;
   'dsh-memory/session-recalled': SessionRecalledRequest;
+  'dsh-memory/recall-feedback': RecallFeedbackRequest;
   'dsh-memory/skills-action': SkillsActionRequest;
 }
 
@@ -1557,6 +1593,7 @@ export interface DshMemoryResponseMap {
   'dsh-memory/memport-scan': MemportScanResponse;
   'dsh-memory/skills-list': SkillsListResponse;
   'dsh-memory/session-recalled': SessionRecalledResponse;
+  'dsh-memory/recall-feedback': RecallFeedbackResponse;
   'dsh-memory/skills-action': SkillsActionResponse;
 }
 

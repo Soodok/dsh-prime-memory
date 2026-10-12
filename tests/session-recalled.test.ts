@@ -14,6 +14,41 @@ afterAll(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
 });
 
+describe('SessionRecalledStore.remove（挨条摘除）', () => {
+  it('只摘指定那一条，其余保持插入序（挨条退场不该连带洗掉整张卡）', async () => {
+    const base = await dataDir();
+    const s = new SessionRecalledStore(join(base, `rm-${Math.random().toString(36).slice(2)}`));
+    s.add('s', ['a', 'b', 'c']);
+    expect(s.remove('s', ['b'])).toBe(1);
+    expect(s.list('s')).toEqual(['a', 'c']);
+    await s.flush();
+  });
+
+  it('空命中 / 未知会话 → 返回 0 且不推 revision、不写盘', async () => {
+    const base = await dataDir();
+    const s = new SessionRecalledStore(join(base, `rm2-${Math.random().toString(36).slice(2)}`));
+    s.add('s', ['a']);
+    const rev = s.revision();
+    expect(s.remove('s', ['nope'])).toBe(0);
+    expect(s.remove('ghost', ['a'])).toBe(0);
+    expect(s.revision()).toBe(rev);
+    expect(s.list('s')).toEqual(['a']);
+    await s.flush();
+  });
+
+  it('摘空后整会话条目消失，持久化往返不把它载回来', async () => {
+    const base = await dataDir();
+    const dirFor = join(base, `rm3-${Math.random().toString(36).slice(2)}`);
+    const s = new SessionRecalledStore(dirFor);
+    s.add('s', ['a']);
+    s.remove('s', ['a']);
+    await s.flush();
+    const t = new SessionRecalledStore(dirFor);
+    await t.flush();
+    expect(t.list('s')).toEqual([]);
+  });
+});
+
 describe('SessionRecalledStore', () => {
   it('add 累积、list 按插入序去重、reset 清空', async () => {
     const s = new SessionRecalledStore(await dataDir());

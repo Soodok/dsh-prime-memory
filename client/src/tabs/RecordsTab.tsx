@@ -279,6 +279,7 @@ export function RecordsTab(props: { rpc: RpcFn }) {
     conflict: '裁决退场',
     superseded: '被取代',
     manual: '人工退场',
+    obsolete: '声明过时',
     unknown: '已退场',
   };
 

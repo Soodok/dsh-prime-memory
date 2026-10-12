@@ -133,6 +133,18 @@ export interface MemoryConfig {
     narrativeTemplates: {
         enabled: boolean;
     };
+    /**
+     * 召回相关度反馈（人在召回卡上打 -1..5）。
+     *
+     * 默认**开**，与 usageScenario/narrativeTemplates 的默认关不同——那两个改的是
+     * 已发布的蒸馏产物，本项只新增一个写端点与一张卡；而播报只在用户显式打 -1
+     * 之后才发生（动作即授权），不开这个开关不会凭空改变任何现有行为。
+     */
+    recallFeedback: {
+        enabled: boolean;
+        /** -1 之后下一轮向模型声明“这条已退场”(一次性注入，取走即离队)。 */
+        announce: boolean;
+    };
     recall: {
         enabled: boolean;
         /** 每步自动召回注入的 L1 条数。 */
@@ -594,6 +606,13 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
+    }>>, "plain">;
+    recallFeedback: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        announce: Schema<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        announce: Schema<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
@@ -1157,6 +1176,13 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
+    }>>, "plain">;
+    recallFeedback: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        announce: Schema<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        announce: Schema<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;

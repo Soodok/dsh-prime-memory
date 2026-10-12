@@ -129,6 +129,13 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, "plain">;
+    recallFeedback: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+    }>>, "plain">;
     recall: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
         maxResults: import("@deepseek-ai/schemastery").default<number, number, "defined">;
@@ -691,6 +698,13 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+    }>>, "plain">;
+    recallFeedback: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        announce: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, "plain">;
     recall: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;

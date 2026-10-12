@@ -34,7 +34,7 @@ export const SUPERSEDE_METADATA_KEY = 'dsh_superseded';
  * 退场原因。**穷举**而非自由字符串:面板要按原因给不同文案与图标,
  * 自由字符串会让"未识别的原因"静默退化成无徽标。
  */
-export type RetireReason = 'conflict' | 'superseded' | 'manual';
+export type RetireReason = 'conflict' | 'superseded' | 'manual' | 'obsolete';
 
 /** 取代标记(写进 metadata 的负载)。 */
 export interface SupersedeInfo {
@@ -56,7 +56,7 @@ export interface SupersedeInfo {
   by?: string;
 }
 
-const REASONS: readonly RetireReason[] = ['conflict', 'superseded', 'manual'];
+const REASONS: readonly RetireReason[] = ['conflict', 'superseded', 'manual', 'obsolete'];
 
 /**
  * 写入取代标记(返回**新对象**)。

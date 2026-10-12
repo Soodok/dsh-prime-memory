@@ -44,12 +44,15 @@ import { SlotStore } from './store/slots.js';
 import { registerMemoryTools } from './tools/index.js';
 import { registerSlotTools } from './tools/slots.js';
 import { registerSlotRecall } from './hooks/slot-recall.js';
+import { registerObsoleteNotice } from './hooks/obsolete-notice.js';
 import { RoomRegistryStore } from './store/rooms-registry.js';
 import { MemorySourceStore } from './store/memory-sources.js';
 import { SkillStore } from './store/skill-store.js';
 import { registerSkillRecall } from './hooks/skill-recall.js';
 import { registerSkillTools } from './tools/skills.js';
 import { RecallUsageStore } from './store/recall-usage.js';
+import { RecallFeedbackStore } from './store/recall-feedback.js';
+import { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { registerSlotsProjection } from './projection/slots.js';
 import { registerRecallProjection } from './projection/recall.js';
 import type { MemoryLogger } from './types.js';
@@ -214,6 +217,9 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
     state: new StateStore(StateStore.pathFor(dataDir), logger),
     // 会话“活召回集”（G-live）：sessionKey → 本会话已注入未压缩的记录 id；持久化，旧会话重开载回。
     recalled: new SessionRecalledStore(dataDir, logger),
+    // 召回相关度反馈与过时播报队列（装配于下方，需 await init）。
+    feedback: undefined as RecallFeedbackStore | undefined,
+    notices: undefined as ObsoleteNoticeStore | undefined,
     // 激活槽位(active slot):独立 slots.json,高频小改不拖累 checkpoint 原子写
     slots: new SlotStore(
       SlotStore.pathFor(dataDir),
@@ -434,6 +440,14 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   const recallUsage = new RecallUsageStore(dataDir, logger);
   await recallUsage.init();
   stores.usage = recallUsage;
+  // 召回相关度反馈（人在召回卡上打 -1..5）与「已声明过时」待播报队列。
+  // 两个都是低频用户动作 → 立即落盘；sidecar 缺席/损坏只降级为只读，不阻断任何读路径。
+  const recallFeedback = new RecallFeedbackStore(dataDir, logger);
+  await recallFeedback.init();
+  stores.feedback = recallFeedback;
+  const obsoleteNotices = new ObsoleteNoticeStore(dataDir, logger);
+  await obsoleteNotices.init();
+  stores.notices = obsoleteNotices;
   const recall = registerRecall(ctx, config, stores, logger, live, modes, dataDir, recallUsage);
   runner.setAfterRun(recall.invalidateProfile);
   registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);
@@ -451,7 +465,10 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   registerSlotsProjection(ctx, stores.slots, stores.l1);
   // memoryRecall 投影：本会话“已注入且未被压缩覆盖”的召回集（会话感知，init 取 header.id），
   // 与常驻槽位是两条轴：那个是手动 pin 的硬注入约定，这个是非常驻的相关性浮现结果。
-  registerRecallProjection(ctx, stores.recalled, stores.l1);
+  // 带上反馈面：条目要显示人已经打过的那一笔（rating）。
+  registerRecallProjection(ctx, stores.recalled, stores.l1, recallFeedback);
+  // 人打 -1 声明过时后，下一轮向模型一次性播报“这条已退场、别再依据它作答”。
+  registerObsoleteNotice(ctx, config, obsoleteNotices, logger);
   void slotRecall;
   registerMemoryRpc(
     ctx,

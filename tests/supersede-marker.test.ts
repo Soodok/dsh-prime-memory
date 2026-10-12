@@ -49,6 +49,13 @@ describe('readSupersedeMarker', () => {
     expect(readSupersedeMarker(withSupersedeMarker({ hall: 'work' }, info))).toEqual(info);
   });
 
+  it('四个退场原因全部能写完读回（读侧是白名单，漏一个就静默丢标记）', () => {
+    for (const reason of ['conflict', 'superseded', 'manual', 'obsolete'] as const) {
+      const back = readSupersedeMarker(withSupersedeMarker({}, { at: AT, reason }));
+      expect(back, `reason=${reason}`).toEqual({ at: AT, reason });
+    }
+  });
+
   it('形状校验从严:缺 at / reason 非法 → undefined', () => {
     expect(readSupersedeMarker({ [SUPERSEDE_METADATA_KEY]: { reason: 'conflict' } })).toBeUndefined();
     expect(readSupersedeMarker({ [SUPERSEDE_METADATA_KEY]: { at: '' } })).toBeUndefined();

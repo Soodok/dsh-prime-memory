@@ -3801,6 +3801,7 @@ var __defProp = Object.defineProperty;
 		    conflict: "裁决退场",
 		    superseded: "被取代",
 		    manual: "人工退场",
+		    obsolete: "声明过时",
 		    unknown: "已退场"
 		  };
 		  const countText = total !== null ? "共 " + total + " 条" : items.length + " 条" + (hasMore ? "+" : "");

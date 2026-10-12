@@ -6,7 +6,7 @@
  * 必须靠命名空间隔开,否则一次 LLM 幻觉输出 `superseded` 就能伪装成人工裁决。
  */
 export const SUPERSEDE_METADATA_KEY = 'dsh_superseded';
-const REASONS = ['conflict', 'superseded', 'manual'];
+const REASONS = ['conflict', 'superseded', 'manual', 'obsolete'];
 /**
  * 写入取代标记(返回**新对象**)。
  *

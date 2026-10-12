@@ -36,11 +36,21 @@ export interface RecallItemView {
   priority: number;
   /** 使用场景（metadata.dsh_usage_scenario）；无则缺席（附加字段，旧帧没有也整条通过）。 */
   scenario?: string[];
+  /**
+   * 人给的最近一次打分(-1..5)；未标注则缺席。
+   * 卡片靠它把已打的那一笔显示成选中态；均值等细粒度数据走 `session-recalled` 端点。
+   */
+  rating?: number;
 }
 
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
 export interface RecallProjectionState {
   rev: number;
+  /**
+   * 反馈 sidecar 的序号（打分也会让 view 变：条目要显示已打的那一笔）。
+   * 可选：旧 checkpoint 帧里没这个字段，读侧必须容忍。
+   */
+  fb?: number;
   sessionId: string;
   /** 注入序（旧→新），由 store 保证。 */
   ids: string[];
@@ -113,6 +123,7 @@ export const viewSchema: SchemaLike<RecallView> = {
         if (!Array.isArray(item.scenario)) invalid(at, 'scenario 必须是字符串数组');
         item.scenario.forEach((s, j) => requireString(s, `${at}.scenario[${j}]`, 'scenario'));
       }
+      if (item.rating !== undefined && typeof item.rating !== 'number') invalid(at, 'rating 必须是数字');
     });
     return value as RecallView;
   },
@@ -121,6 +132,12 @@ export const viewSchema: SchemaLike<RecallView> = {
 /** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。 */
 export interface RecallL1Face {
   getByIds(ids: string[]): Array<{ id: string; type: string; content: string; priority: number; metadata?: Record<string, unknown> }>;
+}
+
+/** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
+export interface RecallFeedbackFace {
+  revision(): number;
+  lastOf(id: string): number | undefined;
 }
 
 /** 正文首行 → 标题（投影内不引 client 的 format 工具，保持服务端自足）。 */
@@ -134,13 +151,15 @@ function firstLine(content: string): string {
 function buildState(
   sessionId: string,
   store: SessionRecalledStore,
+  feedbackRev: number,
   prev?: RecallProjectionState,
 ): RecallProjectionState {
   const ids = store.list(sessionId);
-  if (prev !== undefined && prev.rev === store.revision() && sameIds(prev.ids, ids)) return prev;
-  const next: RecallProjectionState = { rev: store.revision(), sessionId, ids };
-  // rev 变了但本会话集合没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
-  if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids)) return prev;
+  const sameCounters = prev !== undefined && prev.rev === store.revision() && (prev.fb ?? 0) === feedbackRev;
+  if (sameCounters && sameIds(prev.ids, ids)) return prev;
+  const next: RecallProjectionState = { rev: store.revision(), fb: feedbackRev, sessionId, ids };
+  // rev 变了但本会话集合与反馈都没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
+  if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids) && (prev.fb ?? 0) === feedbackRev) return prev;
   return next;
 }
 
@@ -153,7 +172,7 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
 /** view 引用稳定：同一 state 恒返回同一对象（registry 按 Object.is 判发布）。 */
 const viewMemo = new WeakMap<RecallProjectionState, RecallView>();
 
-function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined): RecallView {
+function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, feedback?: RecallFeedbackFace): RecallView {
   const memoized = viewMemo.get(state);
   if (memoized !== undefined) return memoized;
   const recentFirst = [...state.ids].reverse();
@@ -166,12 +185,14 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined): R
     const scenario = Array.isArray(r.metadata?.dsh_usage_scenario)
       ? (r.metadata?.dsh_usage_scenario as string[])
       : undefined;
+    const rating = feedback?.lastOf(id);
     items.push({
       id: r.id,
       type: r.type,
       title: firstLine(r.content),
       priority: r.priority,
       ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),
+      ...(typeof rating === 'number' ? { rating } : {}),
     });
   }
   const next: RecallView = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };
@@ -201,25 +222,28 @@ function sessionIdOf(header: unknown): string {
  * 注册 memoryRecall 投影。
  *
  * 缺席降级同 slots 投影：`ctx.inject` 在服务未提供时不回调；形状不符静默不注册。
- * apply 是 O(1) 判脏（store.revision() 比对），任意已提交事件都会带进来看一眼。
+ * apply 是 O(1) 判脏（store.revision() 与反馈序号比对），任意已提交事件都会带进来看一眼。
+ * @param feedback - 相关度反馈只读面；缺席时 view 不带 rating（旧行为）。
  */
 export function registerRecallProjection(
   ctx: Context,
   store: SessionRecalledStore,
   l1?: RecallL1Face,
+  feedback?: RecallFeedbackFace,
 ): void {
   ctx.inject(['sessionProjections'], (injected) => {
     const registry = (injected as unknown as { sessionProjections?: ProjectionRegistryLike }).sessionProjections;
     if (registry === undefined || typeof registry.register !== 'function') return;
+    const fbRev = () => feedback?.revision() ?? 0;
     // 双代平面（同 slots 投影）：0.1.0-rc.8 的 registry 走平面 schema/view，0.1.1+ 走 wire。
     const definition = {
       key: MEMORY_RECALL_KEY,
       stateSchema,
-      init: (header: unknown) => buildState(sessionIdOf(header), store),
-      apply: (state: RecallProjectionState) => buildState(state.sessionId, store, state),
-      wire: { viewSchema, view: (state: RecallProjectionState) => makeView(state, l1) },
+      init: (header: unknown) => buildState(sessionIdOf(header), store, fbRev()),
+      apply: (state: RecallProjectionState) => buildState(state.sessionId, store, fbRev(), state),
+      wire: { viewSchema, view: (state: RecallProjectionState) => makeView(state, l1, feedback) },
       schema: viewSchema,
-      view: (state: RecallProjectionState) => makeView(state, l1),
+      view: (state: RecallProjectionState) => makeView(state, l1, feedback),
       stateVersion: 0,
     } as unknown as Parameters<ProjectionRegistryLike['register']>[0];
     registry.register(definition);

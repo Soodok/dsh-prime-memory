@@ -31,10 +31,20 @@ export interface RecallItemView {
     priority: number;
     /** 使用场景（metadata.dsh_usage_scenario）；无则缺席（附加字段，旧帧没有也整条通过）。 */
     scenario?: string[];
+    /**
+     * 人给的最近一次打分(-1..5)；未标注则缺席。
+     * 卡片靠它把已打的那一笔显示成选中态；均值等细粒度数据走 `session-recalled` 端点。
+     */
+    rating?: number;
 }
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
 export interface RecallProjectionState {
     rev: number;
+    /**
+     * 反馈 sidecar 的序号（打分也会让 view 变：条目要显示已打的那一笔）。
+     * 可选：旧 checkpoint 帧里没这个字段，读侧必须容忍。
+     */
+    fb?: number;
     sessionId: string;
     /** 注入序（旧→新），由 store 保证。 */
     ids: string[];
@@ -64,11 +74,17 @@ export interface RecallL1Face {
         metadata?: Record<string, unknown>;
     }>;
 }
+/** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
+export interface RecallFeedbackFace {
+    revision(): number;
+    lastOf(id: string): number | undefined;
+}
 /**
  * 注册 memoryRecall 投影。
  *
  * 缺席降级同 slots 投影：`ctx.inject` 在服务未提供时不回调；形状不符静默不注册。
- * apply 是 O(1) 判脏（store.revision() 比对），任意已提交事件都会带进来看一眼。
+ * apply 是 O(1) 判脏（store.revision() 与反馈序号比对），任意已提交事件都会带进来看一眼。
+ * @param feedback - 相关度反馈只读面；缺席时 view 不带 rating（旧行为）。
  */
-export declare function registerRecallProjection(ctx: Context, store: SessionRecalledStore, l1?: RecallL1Face): void;
+export declare function registerRecallProjection(ctx: Context, store: SessionRecalledStore, l1?: RecallL1Face, feedback?: RecallFeedbackFace): void;
 export {};

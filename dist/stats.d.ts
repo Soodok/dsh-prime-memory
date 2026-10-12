@@ -19,6 +19,8 @@ import type { StateStore } from './store/state.js';
 import { type MemoryFamily, type MemoryLogger } from './types.js';
 import { type MemoryBackend } from './store/memory-backend.js';
 import type { SessionRecalledStore } from './store/session-recalled.js';
+import { type RecallFeedbackStore } from './store/recall-feedback.js';
+import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 export declare const PLUGIN_VERSION: string;
 /** 运行态来源(index.ts 注入):避免 stats 撒谎字段。 */
 export interface MemoryStatusSource {
@@ -133,6 +135,10 @@ export interface EndpointDeps {
         graph?: GraphStore;
         /** 会话“活召回集”累积器（G-live）；缺省 = 端点返回空。 */
         recalled?: SessionRecalledStore;
+        /** 召回相关度反馈 sidecar（未装配 = recall-feedback 不可用、列表不带 userRelevance）。 */
+        feedback?: RecallFeedbackStore;
+        /** 「已声明过时」待播报队列（与 feedback 同进退）。 */
+        notices?: ObsoleteNoticeStore;
     };
     status?: MemoryStatusSource;
     live?: LiveSettingsHandle;
@@ -179,4 +185,6 @@ export declare function hitToUiRecord(r: {
         lastAttemptAt: number | null;
         lastUsedAt: number | null;
     } | null;
+    /** 人给的相关度均值(0..5);未打分 = 不传(字段缺席,不是 0)。 */
+    userRelevance?: number | null;
 }): UiRecord;

@@ -42,6 +42,8 @@ interface CapturedDef {
 }
 interface State {
   rev: number;
+  /** 反馈 sidecar 序号(可选;旧帧没这个字段)。 */
+  fb?: number;
   sessionId: string;
   ids: string[];
 }
@@ -49,7 +51,7 @@ interface View {
   rev: number;
   sessionId: string;
   count: number;
-  items: Array<{ id: string; type: string; title: string; priority: number; scenario?: string[] }>;
+  items: Array<{ id: string; type: string; title: string; priority: number; scenario?: string[]; rating?: number }>;
 }
 
 async function newStore(): Promise<SessionRecalledStore> {
@@ -59,8 +61,11 @@ async function newStore(): Promise<SessionRecalledStore> {
   return store;
 }
 
-/** 捕获注册定义（可选喂 L1 面）。 */
-async function captured(l1?: RecallL1Face): Promise<{ def: CapturedDef; store: SessionRecalledStore }> {
+/** 捕获注册定义（可选喂 L1 面 / 反馈面）。 */
+async function captured(
+  l1?: RecallL1Face,
+  feedback?: { revision(): number; lastOf(id: string): number | undefined },
+): Promise<{ def: CapturedDef; store: SessionRecalledStore }> {
   const store = await newStore();
   const defs: CapturedDef[] = [];
   const ctx = {
@@ -75,7 +80,7 @@ async function captured(l1?: RecallL1Face): Promise<{ def: CapturedDef; store: S
       });
     },
   } as unknown as Context;
-  registerRecallProjection(ctx, store, l1);
+  registerRecallProjection(ctx, store, l1, feedback);
   const def = defs[0];
   if (!def) throw new Error('未捕获到 projection 定义');
   return { def, store };
@@ -257,5 +262,71 @@ describe('schema 校验闸', () => {
   it('附加字段缺席（旧 checkpoint 无 scenario）整条通过', () => {
     const view = { rev: 0, sessionId: 's', count: 1, items: [{ id: 'a', type: 't', title: 'x', priority: 1 }] };
     expect(() => viewSchema.parse(view)).not.toThrow();
+  });
+});
+
+describe('人打分（rating）进 view', () => {
+  /** 可变反馈面：set 会推 revision，模拟用户又打了一笔。 */
+  function fbStub(initial: Record<string, number> = {}) {
+    const map = new Map(Object.entries(initial));
+    let rev = 0;
+    return {
+      set: (id: string, v: number): void => { map.set(id, v); rev += 1; },
+      revision: (): number => rev,
+      lastOf: (id: string): number | undefined => map.get(id),
+    };
+  }
+
+  it('未装配反馈面 → 条目不带 rating（旧行为）', async () => {
+    const { def, store } = await captured(fakeL1({ a: { content: '甲' } }));
+    store.add('s', ['a']);
+    const v = def.wire.view(def.init(header('s')));
+    expect(v.items[0]).not.toHaveProperty('rating');
+  });
+
+  it('打过分的条目带 rating；-1 也如实透出（卡片要能显示选中态）', async () => {
+    const fb = fbStub({ a: 4, b: -1 });
+    const { def, store } = await captured(fakeL1({ a: { content: '甲' }, b: { content: '乙' } }), fb);
+    store.add('s', ['a', 'b']);
+    const v = def.wire.view(def.init(header('s')));
+    expect(v.items.find((i) => i.id === 'a')!.rating).toBe(4);
+    expect(v.items.find((i) => i.id === 'b')!.rating).toBe(-1);
+  });
+
+  it('只改打分不改集合 → 仍 republish（否则卡片停在旧的那一笔）', async () => {
+    const fb = fbStub();
+    const { def, store } = await captured(fakeL1({ a: { content: '甲' } }), fb);
+    store.add('s', ['a']);
+    const st0 = def.init(header('s'));
+    const st1 = def.apply(st0, { type: 'tool/result', data: {} });
+    expect(st1).toBe(st0); // 什么都没变 → 同引用
+    fb.set('a', 5);
+    const st2 = def.apply(st1, { type: 'tool/result', data: {} });
+    expect(st2).not.toBe(st1);
+    expect(st2.ids).toEqual(st1.ids); // 集合没变，只是 fb 序号动了
+    expect(def.wire.view(st2).items[0]!.rating).toBe(5);
+  });
+
+  it('别的会话打分 → 本会话 view 不因此 thrash（ids/fb 未变则同引用）', async () => {
+    let rev = 0;
+    const fb = { revision: () => rev, lastOf: (_id: string) => undefined };
+    const { def, store } = await captured(fakeL1({ a: { content: '甲' } }), fb);
+    store.add('s', ['a']);
+    const st0 = def.init(header('s'));
+    rev += 1; // 反馈动了，但本会话集合与打分结果不变
+    const st1 = def.apply(st0, { type: 'tool/result', data: {} });
+    expect(st1).not.toBe(st0); // fb 进了 state → 重建一次（可接受：下一帧就稳）
+    const st2 = def.apply(st1, { type: 'tool/result', data: {} });
+    expect(st2).toBe(st1); // 再动一次事件不重复重建
+  });
+
+  it('stateSchema 容忍旧帧（无 fb 字段）', () => {
+    expect(() => stateSchema.parse({ rev: 0, sessionId: 's', ids: ['a'] })).not.toThrow();
+  });
+
+  it('viewSchema 拒非数字 rating', () => {
+    expect(() => viewSchema.parse({
+      rev: 0, sessionId: 's', count: 1, items: [{ id: 'a', type: 't', title: 'x', priority: 1, rating: 'high' }],
+    })).toThrow();
   });
 });

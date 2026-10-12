@@ -109,6 +109,7 @@ const ENDPOINTS = [
   'dsh-memory/memport-scan',
   'dsh-memory/skills-list',
   'dsh-memory/session-recalled',
+  'dsh-memory/recall-feedback',
   'dsh-memory/skills-action',
 ] as const;
 
@@ -151,9 +152,9 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 53 contracted endpoints, records-delete and graph included', () => {
-    expect(ENDPOINTS.length).toBe(53);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(53);
+  it('exposes exactly the 54 contracted endpoints, records-delete and graph included', () => {
+    expect(ENDPOINTS.length).toBe(54);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(54);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {

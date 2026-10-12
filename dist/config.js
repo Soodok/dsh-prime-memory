@@ -162,6 +162,11 @@ export const memorySchema = Schema.object({
     narrativeTemplates: Schema.object({
         enabled: Schema.boolean().default(false),
     }),
+    // 召回相关度反馈：默认开（只新增写端点与播报，不改任何既有产物；播报需用户显式打 -1）。
+    recallFeedback: Schema.object({
+        enabled: Schema.boolean().default(true),
+        announce: Schema.boolean().default(true),
+    }),
     recall: Schema.object({
         enabled: Schema.boolean().default(true),
         maxResults: Schema.number().min(1).max(20).default(5),

@@ -35,6 +35,7 @@ import { startWingBackfill } from './wing-backfill.js';
 import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
 import { computeMaturity } from './util/maturity.js';
+import { isFeedbackScore } from './store/recall-feedback.js';
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = require('../package.json').version;
 /**
@@ -101,6 +102,7 @@ export const MEMORY_ENDPOINTS = [
     'dsh-memory/memport-scan',
     'dsh-memory/skills-list',
     'dsh-memory/session-recalled',
+    'dsh-memory/recall-feedback',
     'dsh-memory/skills-action',
 ];
 /** HTTP 路由前缀(客户端 fetch `/dsh-memory/rpc/<短方法名>`)。 */
@@ -402,7 +404,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
             return v;
         }
         case 'dsh-memory/session-recalled': {
-            // G-live：返回本会话（按 ownerId）已注入、尚未被压缩覆盖的召回记忆。
+            // G-live：返回本会话（按 sessionKey，与投影 header.id / pill sessionId 同源）已注入、
+            // 尚未被压缩覆盖的召回记忆。
             const p = (payload ?? {});
             const sessionId = expectSessionId(p.sessionId);
             const ids = stores.recalled?.list(sessionId) ?? [];
@@ -413,8 +416,58 @@ export async function handleEndpoint(endpoint, payload, deps) {
             const records = ids
                 .map((id) => byId.get(id))
                 .filter((r) => r !== undefined)
-                .map((r) => hitToUiRecord(r, { agingWeight: agingWeightOf(r.updatedAt, halfLife), usage: stores.usage?.get(r.id) ?? null }));
+                .map((r) => hitToUiRecord(r, {
+                agingWeight: agingWeightOf(r.updatedAt, halfLife),
+                usage: stores.usage?.get(r.id) ?? null,
+                userRelevance: stores.feedback?.meanOf(r.id) ?? null,
+            }));
             return { sessionId, records };
+        }
+        case 'dsh-memory/recall-feedback': {
+            // 人在召回卡上给一条召回记忆打分：0..5 = 相关度（只聚合，不改写任何排序分）；
+            // -1 = 声明过时，顺手做三件事：退场该记录（软删可恢复）+ 从本会话活召回集摘掉
+            // + 排一条下一轮向模型的播报（取走即离队，不常驻）。
+            if (cfg.recallFeedback?.enabled !== true)
+                throw new Error('召回反馈未开启（cfg.recallFeedback.enabled）');
+            const feedback = stores.feedback;
+            if (feedback === undefined)
+                throw new Error('召回反馈存储未装配');
+            const p = (payload ?? {});
+            const sessionId = expectSessionId(typeof p.sessionId === 'string' ? p.sessionId : undefined);
+            if (typeof p.id !== 'string' || p.id.length === 0)
+                throw new Error('id 缺失');
+            if (p.id.length > 512)
+                throw new Error('id 过长(≤512 字符)');
+            const id = p.id;
+            if (!isFeedbackScore(p.score))
+                throw new Error('score 必须是 -1 或 0..5');
+            // 结构性护栏（代替全局高权限模式）：只能给**本会话真召回过、且还活着**的记录打分。
+            // 否则一个面对 web 的写端点就能退场任意 id；而这张卡上本来也只列得出这些。
+            const alive = stores.recalled?.list(sessionId) ?? [];
+            if (!alive.includes(id))
+                throw new Error('该记忆不在本会话的召回集里（可能已被压缩覆盖）');
+            const entry = feedback.rate(id, p.score);
+            let retired = false;
+            let announced = false;
+            if (p.score === -1) {
+                const rec = stores.l1.getByIds([id])[0];
+                retired = stores.l1.retire([id], { at: new Date().toISOString(), reason: 'obsolete' }) > 0;
+                // 卡片立即不再列它（投影下一帧生效）；其余召回条目不受影响。
+                stores.recalled?.remove(sessionId, [id]);
+                if (cfg.recallFeedback?.announce !== false && stores.notices !== undefined && rec !== undefined) {
+                    const title = (rec.content.split('\n').find((l) => l.trim().length > 0) ?? rec.content).trim().slice(0, 120);
+                    stores.notices.push(sessionId, { id, title, at: Date.now() });
+                    announced = true;
+                }
+                deps.logger.info(`[memory] 用户声明记忆过时并退场(session=${sessionId}, ${retired ? '已退场' : '本已退场'}): ${id}`);
+            }
+            return {
+                id,
+                score: p.score,
+                rating: { last: entry.last, rated: entry.rated, mean: entry.mean, obsolete: entry.obsolete },
+                retired,
+                announced,
+            };
         }
         case 'dsh-memory/session-mode-set': {
             if (!modes)
@@ -1224,6 +1277,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     items: filtered.slice(offset, offset + limit).map((h) => hitToUiRecord({ ...h, metadata: metaById?.get(h.id) }, {
                         agingWeight: agingWeightOf(updatedById.get(h.id), stores.l1.decayHalfLife),
                         usage: stores.usage?.get(h.id) ?? null,
+                        userRelevance: stores.feedback?.meanOf(h.id) ?? null,
                     })),
                     hasMore: filtered.length > offset + limit,
                     total: null,
@@ -1241,6 +1295,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 items: items.map((r) => hitToUiRecord(r, {
                     agingWeight: agingWeightOf(r.updatedAt, stores.l1.decayHalfLife),
                     usage: stores.usage?.get(r.id) ?? null,
+                    userRelevance: stores.feedback?.meanOf(r.id) ?? null,
                 })),
                 hasMore: offset + items.length < total,
                 total,
@@ -1893,6 +1948,8 @@ export function hitToUiRecord(r, extra) {
         maturity: computeMaturity({ priority: r.priority ?? 60, usage: extra?.usage ?? null, agingWeight: extra?.agingWeight ?? null }),
         // G1 使用场景：从命名空间保留键读出（功能关/无键 → undefined）。
         usageScenario: Array.isArray(r.metadata?.dsh_usage_scenario) ? r.metadata?.dsh_usage_scenario : undefined,
+        // 人给相关度均值：读时从 sidecar 派生（不进存储/快照）；未打分 → 字段缺席。
+        userRelevance: extra?.userRelevance ?? undefined,
     };
 }
 /**

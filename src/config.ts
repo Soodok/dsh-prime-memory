@@ -137,6 +137,18 @@ export interface MemoryConfig {
   narrativeTemplates: {
     enabled: boolean;
   };
+  /**
+   * 召回相关度反馈（人在召回卡上打 -1..5）。
+   *
+   * 默认**开**，与 usageScenario/narrativeTemplates 的默认关不同——那两个改的是
+   * 已发布的蒸馏产物，本项只新增一个写端点与一张卡；而播报只在用户显式打 -1
+   * 之后才发生（动作即授权），不开这个开关不会凭空改变任何现有行为。
+   */
+  recallFeedback: {
+    enabled: boolean;
+    /** -1 之后下一轮向模型声明“这条已退场”(一次性注入，取走即离队)。 */
+    announce: boolean;
+  };
   recall: {
     enabled: boolean;
     /** 每步自动召回注入的 L1 条数。 */
@@ -412,6 +424,11 @@ export const memorySchema = Schema.object({
   // 类型叙述模板（G2）：默认关；开时抽取 prompt 追加分类型 content 骨架（off 逐字不变）。
   narrativeTemplates: Schema.object({
     enabled: Schema.boolean().default(false),
+  }),
+  // 召回相关度反馈：默认开（只新增写端点与播报，不改任何既有产物；播报需用户显式打 -1）。
+  recallFeedback: Schema.object({
+    enabled: Schema.boolean().default(true),
+    announce: Schema.boolean().default(true),
   }),
   recall: Schema.object({
     enabled: Schema.boolean().default(true),

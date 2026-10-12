@@ -56,6 +56,8 @@ export const viewSchema = {
                     invalid(at, 'scenario 必须是字符串数组');
                 item.scenario.forEach((s, j) => requireString(s, `${at}.scenario[${j}]`, 'scenario'));
             }
+            if (item.rating !== undefined && typeof item.rating !== 'number')
+                invalid(at, 'rating 必须是数字');
         });
         return value;
     },
@@ -67,13 +69,14 @@ function firstLine(content) {
     return trimmed.length > TITLE_MAX ? trimmed.slice(0, TITLE_MAX) : trimmed;
 }
 /** 读 store 建态；ids 与旧态一致时返回旧引用（避免无谓 republish）。 */
-function buildState(sessionId, store, prev) {
+function buildState(sessionId, store, feedbackRev, prev) {
     const ids = store.list(sessionId);
-    if (prev !== undefined && prev.rev === store.revision() && sameIds(prev.ids, ids))
+    const sameCounters = prev !== undefined && prev.rev === store.revision() && (prev.fb ?? 0) === feedbackRev;
+    if (sameCounters && sameIds(prev.ids, ids))
         return prev;
-    const next = { rev: store.revision(), sessionId, ids };
-    // rev 变了但本会话集合没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
-    if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids))
+    const next = { rev: store.revision(), fb: feedbackRev, sessionId, ids };
+    // rev 变了但本会话集合与反馈都没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
+    if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids) && (prev.fb ?? 0) === feedbackRev)
         return prev;
     return next;
 }
@@ -87,7 +90,7 @@ function sameIds(a, b) {
 }
 /** view 引用稳定：同一 state 恒返回同一对象（registry 按 Object.is 判发布）。 */
 const viewMemo = new WeakMap();
-function makeView(state, l1) {
+function makeView(state, l1, feedback) {
     const memoized = viewMemo.get(state);
     if (memoized !== undefined)
         return memoized;
@@ -102,12 +105,14 @@ function makeView(state, l1) {
         const scenario = Array.isArray(r.metadata?.dsh_usage_scenario)
             ? r.metadata?.dsh_usage_scenario
             : undefined;
+        const rating = feedback?.lastOf(id);
         items.push({
             id: r.id,
             type: r.type,
             title: firstLine(r.content),
             priority: r.priority,
             ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),
+            ...(typeof rating === 'number' ? { rating } : {}),
         });
     }
     const next = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };
@@ -125,22 +130,24 @@ function sessionIdOf(header) {
  * 注册 memoryRecall 投影。
  *
  * 缺席降级同 slots 投影：`ctx.inject` 在服务未提供时不回调；形状不符静默不注册。
- * apply 是 O(1) 判脏（store.revision() 比对），任意已提交事件都会带进来看一眼。
+ * apply 是 O(1) 判脏（store.revision() 与反馈序号比对），任意已提交事件都会带进来看一眼。
+ * @param feedback - 相关度反馈只读面；缺席时 view 不带 rating（旧行为）。
  */
-export function registerRecallProjection(ctx, store, l1) {
+export function registerRecallProjection(ctx, store, l1, feedback) {
     ctx.inject(['sessionProjections'], (injected) => {
         const registry = injected.sessionProjections;
         if (registry === undefined || typeof registry.register !== 'function')
             return;
+        const fbRev = () => feedback?.revision() ?? 0;
         // 双代平面（同 slots 投影）：0.1.0-rc.8 的 registry 走平面 schema/view，0.1.1+ 走 wire。
         const definition = {
             key: MEMORY_RECALL_KEY,
             stateSchema,
-            init: (header) => buildState(sessionIdOf(header), store),
-            apply: (state) => buildState(state.sessionId, store, state),
-            wire: { viewSchema, view: (state) => makeView(state, l1) },
+            init: (header) => buildState(sessionIdOf(header), store, fbRev()),
+            apply: (state) => buildState(state.sessionId, store, fbRev(), state),
+            wire: { viewSchema, view: (state) => makeView(state, l1, feedback) },
             schema: viewSchema,
-            view: (state) => makeView(state, l1),
+            view: (state) => makeView(state, l1, feedback),
             stateVersion: 0,
         };
         registry.register(definition);
