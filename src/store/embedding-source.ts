@@ -659,7 +659,13 @@ export class EmbeddingManager {
     const count = (kind: 'l1' | 'l0'): VectorCountView => {
       const skip = this.deps.db.getVecSkipSet(kind);
       const embedded = kind === 'l1' ? this.deps.db.countL1Vec() : this.deps.db.countL0Vec();
-      const total = kind === 'l1' ? this.deps.db.countL1() : this.deps.db.countL0();
+      // 相减法还有第二条前提，之前漏了：**分母必须是活跃行**。退场行按设计就合法地没有
+      // 向量（撤检索面时 vec 行被 detach），把它们算进 total 会让 missing 恒等于退场数、
+      // 永不归零；而真正驱动补齐的 `countVecMissing`/`getL1ForReindex` 都排除退场行，于是
+      // 界面上同时出现“待补 114 条”与“重建索引无事可做”。本机实测：1280 总 / 114 退场 /
+      // 1166 活跃且全部已嵌，正是这个形状。`countL1Retired` 失败给 -1，按 0 处理退回旧行为。
+      const retired = kind === 'l1' ? Math.max(0, this.deps.db.countL1Retired()) : 0;
+      const total = (kind === 'l1' ? this.deps.db.countL1() : this.deps.db.countL0()) - retired;
       // 缺失数走**相减**而非 LEFT JOIN:见下方 vectorsCached 上方的说明。
       const missing =
         embedded < 0 || total < 0 ? -1 : Math.max(0, total - embedded - skip.size);

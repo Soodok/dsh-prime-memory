@@ -797,7 +797,11 @@ export class MemoryDb {
             this.logger?.info(`${TAG} l1_fts 回灌 ${count} 行(跳过已退场 ${retiredSkipped < 0 ? '计数失败' : retiredSkipped} 行)`);
         }
     }
-    /** 已退场 L1 行数(回灌留痕用)。失败返回 -1——宁可日志写“未知”,也不假装 0 条。 */
+    /**
+     * 已退场 L1 行数。原本只给回灌留痕用，现在展示面也要它：
+     * `vectorCounts` 算“待补”时得分掉退场行（它们合法地无向量），否则那个数永远归不了零。
+     * 失败返回 -1——宁可日志写“未知”也不假装 0 条。
+     */
     countL1Retired() {
         try {
             const row = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records WHERE ${retiredL1Sql()}`).all()[0];

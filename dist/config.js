@@ -180,9 +180,9 @@ export const memorySchema = Schema.object({
         maxRecords: Schema.number().min(1).max(10_000).default(300),
         timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
     }),
-    // md 投射与外部存档：默认关。root 空串 = 用默认根（<dataDir>/memories），形状校验在投射器里做。
+    // md 投射与外部存档：**默认开**（写盘不影响检索，关掉只会让人看不到任何投影文件）。root 空串 = 用默认根（<dataDir>/memories），形状校验在投射器里做。
     memExport: Schema.object({
-        enabled: Schema.boolean().default(false),
+        enabled: Schema.boolean().default(true),
         root: Schema.string().default(''),
         maxRecords: Schema.number().min(1).max(10_000).default(300),
         timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),

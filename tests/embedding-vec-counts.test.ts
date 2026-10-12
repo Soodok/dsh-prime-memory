@@ -32,6 +32,38 @@ afterAll(async () => {
 
 const noopLogger: MemoryLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
+/**
+ * 退场行不得计入待补分母。
+ *
+ * 真机形状：1280 总 / 114 退场 / 1166 活跃且全部已嵌。旧算法给
+ * `missing = 1280 - 1166 = 114` → 面板永远报“待补 114”，而驱动补齐的 SQL 排除了
+ * 退场行、看到的是 0 → “重建索引无事可做”。两个口径分头写就是这个下场。
+ */
+describe('待补分母排除退场行', () => {
+  it('total 含退场时，展示面扣掉它并把 missing 归 0', async () => {
+    const { db } = makeDb({ total: 1_280, embedded: 1_166, retired: 114 });
+    const m = await makeManager(db);
+    try {
+      const v = (await m.snapshot()).vectors.l1;
+      expect(v.total).toBe(1_166);
+      expect(v.embedded).toBe(1_166);
+      expect(v.missing).toBe(0);
+    } finally {
+      m.dispose();
+    }
+  });
+
+  it('真有活跃行缺向量时仍报得出来（护栏不能把待补抹成恒 0）', async () => {
+    const { db } = makeDb({ total: 1_280, embedded: 1_150, retired: 114 });
+    const m = await makeManager(db);
+    try {
+      expect((await m.snapshot()).vectors.l1.missing).toBe(16);
+    } finally {
+      m.dispose();
+    }
+  });
+});
+
 function cfg(): MemoryConfig {
   return {
     dataDir: '', family: 'auto',
@@ -51,6 +83,8 @@ interface DbStubOpts {
   skip?: string[];
   /** 让 countLVec 返回 -1(向量能力不可用)。 */
   degraded?: boolean;
+  /** 退场行数：展示面的分母要扣掉它（它们合法地无向量）。 */
+  retired?: number;
 }
 
 function makeDb(opts: DbStubOpts = {}) {
@@ -58,6 +92,7 @@ function makeDb(opts: DbStubOpts = {}) {
   const skip = new Set(opts.skip ?? []);
   const total = opts.total ?? 100;
   const embedded = opts.degraded ? -1 : (opts.embedded ?? 0);
+  const retired = opts.retired ?? 0;
   return {
     calls,
     db: {
@@ -67,6 +102,7 @@ function makeDb(opts: DbStubOpts = {}) {
       countL1Vec: () => embedded,
       countL0Vec: () => embedded,
       countL1: () => { calls.countL1++; return total; },
+      countL1Retired: () => retired,
       countL0: () => { calls.countL0++; return total; },
       // 一旦被调用就说明退回慢路径了——本套件的判据就是它必须是 0
       countL1VecMissing: () => { calls.missing++; return 0; },

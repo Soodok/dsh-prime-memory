@@ -904,8 +904,12 @@ export class MemoryDb {
     }
   }
 
-  /** 已退场 L1 行数(回灌留痕用)。失败返回 -1——宁可日志写“未知”,也不假装 0 条。 */
-  private countL1Retired(): number {
+  /**
+   * 已退场 L1 行数。原本只给回灌留痕用，现在展示面也要它：
+   * `vectorCounts` 算“待补”时得分掉退场行（它们合法地无向量），否则那个数永远归不了零。
+   * 失败返回 -1——宁可日志写“未知”也不假装 0 条。
+   */
+  countL1Retired(): number {
     try {
       const row = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records WHERE ${retiredL1Sql()}`).all()[0] as { n: number };
       return row?.n ?? 0;

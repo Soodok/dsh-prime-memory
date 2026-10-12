@@ -119,8 +119,12 @@ export declare class MemoryDb {
      * (三处列清单:DDL / insert 语句 / 本函数),故在此留下警示。
      */
     private backfillL1Fts;
-    /** 已退场 L1 行数(回灌留痕用)。失败返回 -1——宁可日志写“未知”,也不假装 0 条。 */
-    private countL1Retired;
+    /**
+     * 已退场 L1 行数。原本只给回灌留痕用，现在展示面也要它：
+     * `vectorCounts` 算“待补”时得分掉退场行（它们合法地无向量），否则那个数永远归不了零。
+     * 失败返回 -1——宁可日志写“未知”也不假装 0 条。
+     */
+    countL1Retired(): number;
     /**
      * 清除“已退场但仍待在检索面”的残留行（FTS + 向量）。幂等：第二次跑命中 0 行。
      *

@@ -371,6 +371,7 @@ describe('embedding manager', () => {
       // `as never` 会绕过类型,漏掉哪个只会在跑的时候炸(2026-09-17 实测)
       getVecSkipSet: () => new Set<string>(),
       countL1Vec: () => 0,
+      countL1Retired: () => 0,
       countL1: () => 0,
       countL1VecMissing: () => 0,
       countL0Vec: () => 0,
@@ -440,6 +441,7 @@ describe('manual reindex (embedding-reindex)', () => {
       markEmbeddingSynced: vi.fn(),
       getVecSkipSet: () => new Set<string>(),
       countL1Vec: () => 3,
+      countL1Retired: () => 0,
       countL1: () => 5,
       countL1VecMissing: () => 2,
       countL0Vec: () => 7,

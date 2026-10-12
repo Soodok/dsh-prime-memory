@@ -14,6 +14,7 @@
  *    洗出一个没人认识的新目录）。
  */
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { isAbsolute, normalize, resolve, sep } from 'node:path';
 import { normText } from '../memport/format.js';
 import { deriveName } from '../util/md-name.js';
@@ -90,11 +91,36 @@ export function targetFor(r, cfgRoot, dataDir, logger) {
     const { relPath } = renderRecord(r);
     const ws = (r.workspaceId ?? '').trim();
     if (ws.length > 0 && isAbsolute(ws) && !ws.includes('..')) {
-        const root = resolve(ws, ...WORKSPACE_SUBDIR);
-        return { root, relPath, absPath: safeJoin(root, relPath), inWorkspace: true };
+        // 护栏（默认开，不给开关）：workspace 目录不存在时不往它下面写。worktree 被删、
+        // 盘符变了、或 `workspace_id` 是脏值时，写盘会凭空造出一棵
+        // `<已消失的项目>/.agents/memory/` 孤儿树——那比落回单根难查得多（单根里的文件
+        // 仍然可见、可导出、可同步；孤儿树没人知道它属于哪个项目）。
+        // 判据用 **workspace 根本身**而不是投射根：后者不存在是常态（首次导出会 mkdir）。
+        if (existsSync(ws)) {
+            const root = resolve(ws, ...WORKSPACE_SUBDIR);
+            return { root, relPath, absPath: safeJoin(root, relPath), inWorkspace: true };
+        }
+        warnMissingWorkspace(logger, ws);
     }
     const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
     return { root, relPath, absPath: safeJoin(root, relPath), inWorkspace: false };
+}
+/**
+ * 已提醒过的缺失 workspace（同一个根只 warn 一次）。
+ *
+ * 不设上限就会在 1280 条记录上刷屏；集子封到 64 个就不再记录新条目（宁可漏提醒，
+ * 也不让一个诊断集无限吃内存）。放在 `targetFor` 之后：函数声明提升，`const` 集子在
+ * 模块求值后才被调用，所以顺序不影响可用性——影响的是文档块跟谁。
+ */
+const warnedMissingWs = new Set();
+function warnMissingWorkspace(logger, ws) {
+    if (logger === undefined)
+        return;
+    if (warnedMissingWs.has(ws))
+        return;
+    if (warnedMissingWs.size < 64)
+        warnedMissingWs.add(ws);
+    logger.warn(`[memory] workspace 目录不存在，该条投射落点退回单根: ${ws}`);
 }
 /**
  * 投射文件的失效路径：`x.memory.md` → `x.memory.md.disable`。
