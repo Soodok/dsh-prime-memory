@@ -36,6 +36,7 @@ import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
 import { computeMaturity } from './util/maturity.js';
 import { isFeedbackScore } from './store/recall-feedback.js';
+import { relinkWorkspaces } from './pipeline/workspace-relink.js';
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = require('../package.json').version;
 /**
@@ -103,6 +104,7 @@ export const MEMORY_ENDPOINTS = [
     'dsh-memory/skills-list',
     'dsh-memory/session-recalled',
     'dsh-memory/recall-feedback',
+    'dsh-memory/workspace-relink',
     'dsh-memory/skills-action',
 ];
 /** HTTP 路由前缀(客户端 fetch `/dsh-memory/rpc/<短方法名>`)。 */
@@ -469,6 +471,28 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 retired,
                 announced,
             };
+        }
+        case 'dsh-memory/workspace-relink': {
+            // 存量记忆的 workspace 回填（内容路由）。**缺省干跑**：先看命中率与分布报告，再决定真写。
+            // 真写额外要求高权限门（它改的是库里的列，虽然只改 `workspace_id`）。
+            const hints = effectiveCfg(cfg, live).workspaceHints;
+            if (hints?.enabled !== true)
+                throw new Error('内容路由未开启（cfg.workspaceHints.enabled）');
+            const p = (payload ?? {});
+            const dryRun = p.dryRun !== false;
+            if (!dryRun && live?.get().memoryMutate !== true)
+                throw new Error('真写归属列需要高权限模式（memoryMutate）');
+            return relinkWorkspaces({
+                l1: {
+                    list: (o) => stores.l1.list(o),
+                    setWorkspaceIds: (items) => stores.l1.setWorkspaceIds(items),
+                },
+                routes: hints.routes,
+                dryRun,
+                maxRecords: hints.maxRecords,
+                timeBudgetMs: hints.timeBudgetMs,
+                logger: deps.logger,
+            });
         }
         case 'dsh-memory/session-mode-set': {
             if (!modes)

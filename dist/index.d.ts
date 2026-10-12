@@ -119,6 +119,33 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
     }>>, "plain">;
+    workspaceHints: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        routes: import("@deepseek-ai/schemastery").default<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            path: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+            anyOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+            noneOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+        }>>[], "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        routes: import("@deepseek-ai/schemastery").default<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            path: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+            anyOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+            noneOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+        }>>[], "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, "plain">;
     usageScenario: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
         enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
@@ -690,6 +717,33 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
         maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, "plain">;
+    workspaceHints: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        routes: import("@deepseek-ai/schemastery").default<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            path: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+            anyOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+            noneOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+        }>>[], "defined">;
+        maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+        timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "defined">;
+        routes: import("@deepseek-ai/schemastery").default<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            path: import("@deepseek-ai/schemastery").default<string, string, "defined">;
+            anyOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+            noneOf: import("@deepseek-ai/schemastery").default<string[], string[], "defined">;
+        }>>[], "defined">;
         maxRecords: import("@deepseek-ai/schemastery").default<number, number, "defined">;
         timeBudgetMs: import("@deepseek-ai/schemastery").default<number, number, "defined">;
     }>>, "plain">;

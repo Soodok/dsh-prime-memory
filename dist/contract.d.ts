@@ -1454,6 +1454,34 @@ export interface RecallFeedbackResponse {
     /** 退场后是否已排入下一轮向模型播报(仅 score=-1 且 cfg.recallFeedback.announce)。 */
     announced: boolean;
 }
+/**
+ * dsh-memory/workspace-relink：按内容路由把存量记忆归到 workspace。
+ *
+ * 只写 `workspace_id` 列——**不改 `scope`**，所以可见性今天一行不变
+ * （`isScopeVisible` 先看 scope，global 即全可见）；`workspace_id` 不在
+ * `canonicalRecords` 快照哈希字段表里，因此回填不会让旧快照失配。
+ */
+export interface WorkspaceRelinkRequest {
+    /** 缺省 true（干跑）：只看报告不写库。给 `false` 才真写（需高权限）。 */
+    dryRun?: boolean;
+}
+export interface WorkspaceRelinkResponse {
+    dryRun: boolean;
+    /** 本次扫过的记录数（含未命中）。 */
+    scanned: number;
+    /** 路由命中的记录数。 */
+    matched: number;
+    /** 归属已是目标值（幂等重跑时等于 matched）。 */
+    unchanged: number;
+    /** 干跑时“若真跑会写多少条”；真写时恒为 0。 */
+    toWrite: number;
+    /** 实际写入条数（干跑恒 0）。 */
+    written: number;
+    /** 未扫到、下次触发续扫的条数。 */
+    remaining: number;
+    /** 命中记录按归属分布——拿它判断路由表合不合口味。 */
+    byWorkspace: Record<string, number>;
+}
 export interface DshMemoryRequestMap {
     'dsh-memory/stats': Record<string, never>;
     'dsh-memory/token-cost': TokenCostRequest;
@@ -1508,6 +1536,7 @@ export interface DshMemoryRequestMap {
     'dsh-memory/skills-list': Record<string, never>;
     'dsh-memory/session-recalled': SessionRecalledRequest;
     'dsh-memory/recall-feedback': RecallFeedbackRequest;
+    'dsh-memory/workspace-relink': WorkspaceRelinkRequest;
     'dsh-memory/skills-action': SkillsActionRequest;
 }
 export interface DshMemoryResponseMap {
@@ -1564,6 +1593,7 @@ export interface DshMemoryResponseMap {
     'dsh-memory/skills-list': SkillsListResponse;
     'dsh-memory/session-recalled': SessionRecalledResponse;
     'dsh-memory/recall-feedback': RecallFeedbackResponse;
+    'dsh-memory/workspace-relink': WorkspaceRelinkResponse;
     'dsh-memory/skills-action': SkillsActionResponse;
 }
 /** 全部端点名(client 调用与 host case 表的共用字面量来源)。 */

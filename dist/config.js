@@ -154,6 +154,32 @@ export const memorySchema = Schema.object({
         maxRecords: Schema.number().min(1).max(10_000).default(300),
         timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
     }),
+    // 内容路由：默认关。默认路由表就是用户给的两条归类规则（路径可改，不需改码）。
+    workspaceHints: Schema.object({
+        enabled: Schema.boolean().default(false),
+        routes: Schema.array(Schema.object({
+            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            path: Schema.string().default(''),
+            /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
+            anyOf: Schema.array(Schema.string()).default([]),
+            /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
+            noneOf: Schema.array(Schema.string()).default([]),
+        })).default([
+            {
+                path: 'E:\\test\\rewrite-agently\\.agents',
+                anyOf: ['dsh', 'cordis', 'prime-memory', 'brief-sidebar', 'host farm', 'inferglow-dsh'],
+                noneOf: [],
+            },
+            {
+                path: 'E:\\test\\agent-no-dsh',
+                anyOf: ['hanako', 'hanaagent', 'openhanako', 'inferglow', 'pi-agent'],
+                // 同一段内容又谈到 dsh 时属于 dsh 生态（如 Hanako 逆向用于反推 dsh 机制），归 dsh 侧。
+                noneOf: ['dsh'],
+            },
+        ]),
+        maxRecords: Schema.number().min(1).max(10_000).default(300),
+        timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+    }),
     // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。
     usageScenario: Schema.object({
         enabled: Schema.boolean().default(false),

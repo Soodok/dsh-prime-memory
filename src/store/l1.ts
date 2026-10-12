@@ -201,6 +201,15 @@ export class L1Store {
   }
 
   /**
+   * 批量写内容路由得出的 workspace 归属（不触发场景重聚类——归属变化不影响场景划分，
+   * 与 repoKey 那条不一样）。具体约束（不碰 updated_time、同步改 l1_fts）在
+   * `store/sqlite.ts` 的 `setL1WorkspaceIds` 里，那里是硬约束的**唯一**落点。
+   */
+  setWorkspaceIds(items: ReadonlyArray<{ id: string; workspaceId: string }>): number {
+    return this.db.setL1WorkspaceIds(items);
+  }
+
+  /**
    * repo 归属变化 → 受影响场景的重聚类作业(治理 W3,repo-change 触发源)。
    * 归属变了,记忆对场景的归属度就变了——受影响场景的摘要必须由当前事实重算
    * (I-20 投影哲学)。反查各 id 的 scene_name 入队(消费器在 ruminate 空闲档,

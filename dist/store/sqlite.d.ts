@@ -238,6 +238,24 @@ export declare class MemoryDb {
         repoKeyName?: string;
         repoKeyOwner?: string;
     }, expectRepoKeyName?: string): number;
+    /**
+     * 批量写 `workspace_id`（内容路由 / 存量 re-link 用）。单事务，**刻意不碰 `updated_time`**。
+     *
+     * 为什么不碰 `updated_time`（三条都是硬约束）：
+     * ① 它在 `canonicalRecords` 的哈希字段表里——动了就是“静默改写”，会让改动前建的快照
+     *    永久 verify 不通过（`workspace_id` 本身不在表里，所以**只**写它才是快照安全的）；
+     * ② 它是时效衰减（agingWeight）与列表排序的输入，改一下归属顺手把记忆“刷陈旧”是意外副作用；
+     * ③ re-link 按固定序分页扫，不写它才不会边扫边漂。
+     *
+     * 为什么连 `l1_fts` 一起改：FTS 行**自带** `workspace_id`（UNINDEXED 随行），
+     * 而检索过滤 `(? = '' OR scope='global' OR workspace_id = ?)` 读的就是 FTS 行那一列。
+     * 只改主表 = 一旦启用围栏，关键词路按旧归属过滤、向量路按新归属过滤，两路结果不一致。
+     * 退场行不在 FTS 里，那条 UPDATE 自然命中 0 行，不是错误。
+     */
+    setL1WorkspaceIds(items: ReadonlyArray<{
+        id: string;
+        workspaceId: string;
+    }>): number;
     /** 入队一个重聚类作业(demote-to-wiki / repo 归属变化触发;source 区分来源)。 */
     enqueueSceneRecluster(family: string, sceneNames: readonly string[], batchId: string, source?: string): string;
     /** 取一个待处理作业(ruminate 空闲消费;按创建序)。 */

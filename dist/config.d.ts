@@ -8,6 +8,7 @@ import Schema from '@deepseek-ai/schemastery';
 import type { Volatile } from '@deepseek-ai/cordis';
 import type { LayerRouteKey, MemoryLiveSettings, StaticFallbackEntry } from './contract.js';
 import type { ExtractMode, ScopeMode } from './types.js';
+import type { WorkspaceRoute } from './workspace-route.js';
 /**
  * 蒸馏思考档位全词汇表(唯一事实源):'' = 自动(模型默认档 → high),
  * 其余为各适配器通用档位词汇(deepseek 认 'off',OpenAI 系是 'none')。
@@ -123,6 +124,26 @@ export interface MemoryConfig {
         /** 单次回填处理条数上限。 */
         maxRecords: number;
         /** 单次回填墙钟预算(ms)，超时剩留待再次触发。 */
+        timeBudgetMs: number;
+    };
+    /**
+     * 内容路由（workspace 归属）：按「这条记忆**谈到**哪个项目」给记录补 `workspace_id`。
+     *
+     * 为什么不用「产生它的会话」定位：实测 `l1_records.session_id` 恒为 `default`（废字段），
+     * 锚点里的 sessionId 能在磁盘会话树里找到目录的只占 7.3%（树会被清理/隔离），
+     * 而 L1 时间戳与 L0 两个时间列零命中——来路链不可依赖。内容路由不受锚点缺失影响。
+     *
+     * 默认关。开启后**只写 `workspace_id` 列、不改 `scope`**：可见性仍由 `scope` 决定
+     * （`resolveRecordScope` 规则③ 的零漂移不破），所以对现有部署零行为变化；
+     * 将来真启用 workspace 围栏时，这个列已经是现成的正确依据。
+     */
+    workspaceHints: {
+        enabled: boolean;
+        /** 路由表：按数组序取首个命中——dsh 侧在前，故双项目并存时归 dsh（用户口径）。 */
+        routes: WorkspaceRoute[];
+        /** 存量 re-link 的单次护栏。 */
+        maxRecords: number;
+        /** 存量 re-link 的墙钟预算(ms)。 */
         timeBudgetMs: number;
     };
     /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
@@ -604,6 +625,39 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    workspaceHints: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        routes: Schema<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            path: Schema<string, string, "defined">;
+            /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
+            anyOf: Schema<string[], string[], "defined">;
+            /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
+            noneOf: Schema<string[], string[], "defined">;
+        }>>[], "defined">;
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        routes: Schema<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            path: Schema<string, string, "defined">;
+            /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
+            anyOf: Schema<string[], string[], "defined">;
+            /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
+            noneOf: Schema<string[], string[], "defined">;
+        }>>[], "defined">;
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
@@ -1178,6 +1232,39 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, Schemastery.ObjectT<NoInfer<{
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    workspaceHints: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        routes: Schema<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            path: Schema<string, string, "defined">;
+            /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
+            anyOf: Schema<string[], string[], "defined">;
+            /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
+            noneOf: Schema<string[], string[], "defined">;
+        }>>[], "defined">;
+        maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        routes: Schema<({
+            path?: string | null | undefined;
+            anyOf?: string[] | null | undefined;
+            noneOf?: string[] | null | undefined;
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            path: Schema<string, string, "defined">;
+            /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
+            anyOf: Schema<string[], string[], "defined">;
+            /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
+            noneOf: Schema<string[], string[], "defined">;
+        }>>[], "defined">;
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;

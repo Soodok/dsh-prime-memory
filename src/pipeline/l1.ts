@@ -41,6 +41,7 @@ import type {
 } from '../types.js';
 import { familyForType, normPersistence, normScope, resolveRecordFamily, resolveRecordScope, WING_FALLBACK } from '../types.js';
 import { normApplicability, resolveRepoScope } from '../repo-scope.js';
+import { routeWorkspace } from '../workspace-route.js';
 
 /** 时间轴三元组(抽取产出 → 记录字段)。 */
 type Temporal = Pick<MemoryRecord, 'validFrom' | 'validTo' | 'persistence'>;
@@ -336,6 +337,12 @@ export async function runExtraction(
       for (const m of scene.memories ?? []) {
         if (!m || typeof m.content !== 'string' || !m.content.trim()) continue;
         const family = resolveRecordFamily(forcedFamily, m.family, m.type ?? '');
+        // 内容路由（`cfg.workspaceHints`，默认关）：按内容谈到哪个项目定归属。
+        // 不走「来源会话反查」：session_id 恒为 default、锚点仅 7.3% 能定位到会话树，
+        // 而内容自己说它属于哪个项目——不受这些缺失影响。见 `src/workspace-route.ts`。
+        const routed = cfg.workspaceHints?.enabled === true
+          ? routeWorkspace(`${m.content}\n${scene.scene_name}`, cfg.workspaceHints.routes)
+          : undefined;
         extracted.push({
           ...m,
           record_id: newId('mem'),
@@ -344,6 +351,11 @@ export async function runExtraction(
           // §E 归属在**进管线时**一次算定,下游(store / conflict / update / merge 各分支)
           // 一律复用它——四个分支各算一次是漏判的温床。
           ...resolveRecordScope(scopeMode, family, workspaceId),
+          // 路由值只覆盖 `workspaceId`、**不动 `scope`**：`resolveRecordScope` 规则③ 在
+          // cfg.scope='global' 时故意把归属清成 ''(零漂移保证)，这里在其后补一个事实列。
+          // 可见性判据 `isScopeVisible` 先看 scope，global 即全可见 → 今天一行行为不变；
+          // 将来启用 workspace 围栏时这列已经是现成的正确依据。
+          ...(routed === undefined ? {} : { workspaceId: routed }),
           // 治理归属(ADR-0015 T1.9/T1.10):repoKey 一次算定;applicability 由抽取
           // prompt 显式产出、经归一收窄——**绝不从 family 推导**(P0-7 四象限),
           // 未声明/非法 = ''(不围栏)。
@@ -611,6 +623,14 @@ export async function runExtraction(
         resolveSourceAnchors(m.source_message_ids, anchorMap ?? new Map<string, ConversationAnchor>()),
       ),
       family: m.family,
+      // 归属五字段必须带上：这里此前**一个都没写**，等于每次合并都把 scope/
+      // workspaceId/repoKey/applicability 打回默认——cfg.scope='global' 时看不出来，
+      // 一旦启用围栏，一条记忆归过哪个项目就在合并后静默丢了。
+      scope: m.scope,
+      workspaceId: m.workspaceId,
+      repoKeyName: m.repoKeyName,
+      repoKeyOwner: m.repoKeyOwner,
+      applicability: m.applicability,
       // 合并的有效期取并集:起 = 两侧最早;止 = 任一侧未闭合则仍未闭合(undefined)。
       ...mergeTemporal(
         temporalOf(m.metadata),

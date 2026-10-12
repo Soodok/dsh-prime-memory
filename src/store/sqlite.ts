@@ -1441,6 +1441,45 @@ export class MemoryDb {
     }
   }
 
+  /**
+   * 批量写 `workspace_id`（内容路由 / 存量 re-link 用）。单事务，**刻意不碰 `updated_time`**。
+   *
+   * 为什么不碰 `updated_time`（三条都是硬约束）：
+   * ① 它在 `canonicalRecords` 的哈希字段表里——动了就是“静默改写”，会让改动前建的快照
+   *    永久 verify 不通过（`workspace_id` 本身不在表里，所以**只**写它才是快照安全的）；
+   * ② 它是时效衰减（agingWeight）与列表排序的输入，改一下归属顺手把记忆“刷陈旧”是意外副作用；
+   * ③ re-link 按固定序分页扫，不写它才不会边扫边漂。
+   *
+   * 为什么连 `l1_fts` 一起改：FTS 行**自带** `workspace_id`（UNINDEXED 随行），
+   * 而检索过滤 `(? = '' OR scope='global' OR workspace_id = ?)` 读的就是 FTS 行那一列。
+   * 只改主表 = 一旦启用围栏，关键词路按旧归属过滤、向量路按新归属过滤，两路结果不一致。
+   * 退场行不在 FTS 里，那条 UPDATE 自然命中 0 行，不是错误。
+   */
+  setL1WorkspaceIds(items: ReadonlyArray<{ id: string; workspaceId: string }>): number {
+    if (this.degraded || items.length === 0) return 0;
+    try {
+      // 现值已等于目标值时不写：幂等（第二次跑零写入，不白刷 WAL）。
+      const upd = this.db.prepare(
+        "UPDATE l1_records SET workspace_id = ? WHERE record_id = ? AND COALESCE(workspace_id, '') <> ?",
+      );
+      const ftsReady = this.stmtL1FtsInsert !== undefined;
+      const ftsUpd = ftsReady ? this.db.prepare('UPDATE l1_fts SET workspace_id = ? WHERE record_id = ?') : null;
+      return this.withTransaction(() => {
+        let changed = 0;
+        for (const it of items) {
+          if (!it.id || !it.workspaceId) continue;
+          if (Number(upd.run(it.workspaceId, it.id, it.workspaceId).changes) === 0) continue;
+          changed++;
+          ftsUpd?.run(it.workspaceId, it.id);
+        }
+        return changed;
+      });
+    } catch (err) {
+      this.logger?.warn(`${TAG} 批量写 workspace_id 失败(${items.length} 条，本轮全量回退): ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
   // ── L2 场景重聚类作业队列(治理 W3,T3.10)──────────────────────────────
 
   /** 入队一个重聚类作业(demote-to-wiki / repo 归属变化触发;source 区分来源)。 */
