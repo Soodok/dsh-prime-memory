@@ -164,6 +164,18 @@ export interface MemoryConfig {
     /** 单次导出的墙钟预算(ms)。 */
     timeBudgetMs: number;
   };
+  /**
+   * P2 反向同步（md 文件 → 索引）：整面**默认关**。它与 `memExport` 分开开关是因为
+   * **风险不对称**——导出只写文件，同步会写库。裁决全靠账本：账本为空（从没导出过）
+   * 时同步什么都判不出来，所以必须先开 `memExport` 再开本项。
+   */
+  mdSync: {
+    enabled: boolean;
+    /** 单轮扫描文件数护栏。 */
+    maxFiles: number;
+    /** 单轮墙钟预算(ms)。 */
+    timeBudgetMs: number;
+  };
   /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
   usageScenario: {
     enabled: boolean;
@@ -493,6 +505,13 @@ export const memorySchema = Schema.object({
     enabled: Schema.boolean().default(false),
     root: Schema.string().default(''),
     maxRecords: Schema.number().min(1).max(10_000).default(300),
+    timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+  }),
+  // P2 反向同步：默认关。文件数护栏比导出的条数护栏宽一些——一次目录扫描的代价
+  // 低于一次全库渲染，但时间预算照同一口径（面板不能被卡住）。
+  mdSync: Schema.object({
+    enabled: Schema.boolean().default(false),
+    maxFiles: Schema.number().min(1).max(20_000).default(2_000),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
   }),
   // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。

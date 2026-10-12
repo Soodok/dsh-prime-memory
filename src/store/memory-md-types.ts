@@ -10,7 +10,10 @@
 
 /** 导出报告（库 → 文件 + 账本）。`skipped` 含"路径越界/写盘失败"两类，都各自留痕。 */
 export interface MemExportReport {
+  /** 单根（无 workspace 归属那批落这里）；workspace 优先的条目不反映在此字段。 */
   root: string;
+  /** 落在各 workspace 根下的条数（N10）。 */
+  inWorkspace: number;
   /** 本次真正遍历过的条数（含未命中/跳过）。 */
   scanned: number;
   written: number;
@@ -52,4 +55,42 @@ export interface ReconcileReport extends ReconcileCounts {
   capped: boolean;
   scanned: number;
   samples: ReconcileSample[];
+}
+
+/** 反向同步的单条挂账样本（只给路径与做了什么，不给内容——内容可能含敏感信息）。 */
+export interface MdSyncSample {
+  path: string;
+  action: string;
+}
+
+/**
+ * P2 反向同步报告（文件 → 库）。
+ *
+ * 与对账报告的区别：对账**只读**，同步会写。所以这里的每个计数都对应一次真实动作，
+ * `pending` 那批除外——那批是刻意什么都不做。
+ */
+export interface MdSyncReport {
+  /** 本轮遍历过的投射根数（workspace 根 + 单根，N10）。 */
+  roots: number;
+  scanned: number;
+  /** 只有文件变 → 已回灌入库。 */
+  imported: number;
+  /** 只有库变 → 已重写文件。 */
+  rendered: number;
+  /** 两边都没变。 */
+  same: number;
+  /** 跳过（读不出/形状不符/写库失败）。 */
+  skipped: number;
+  /** **两边都变 → 挂待裁决**：两侧保持原样，等人裁决。 */
+  pending: number;
+  /** `.disable` → 已退场。 */
+  retired: number;
+  /** 没有账本、也认不出记录的新文件：本轮**不入库**（导入必须过写入内核）。 */
+  newFiles: number;
+  /** `.disable` 文件但找不到对应记录（改名后的 id 也追不到）。 */
+  orphan: number;
+  /** 因护栏没扫完的剩余文件数。 */
+  remaining: number;
+  capped: boolean;
+  samples: MdSyncSample[];
 }

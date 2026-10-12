@@ -1,3 +1,4 @@
+import { type ArchiveFileOutcome, type FilesByRecord } from './memory-md-archive.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 import type { ConflictPair } from './conflicts.js';
 export declare const SNAPSHOT_VERSION = 1;
@@ -246,6 +247,30 @@ export interface ExportThenPurgeResult {
     purged: number;
     /** 校验差异(仅 aborted 时非空)。 */
     diffs: string[];
+    /**
+     * 本批之外发生漂移的记录数(仅计数、**不中止**)。
+     *
+     * 旧实现拿整库哈希当门禁：并发蒸馏/另一处写入改过任何一条与本批无关的记录，
+     * 本次清理就会永远中止（而它要删的那批逐字未动、完全可恢复）。漂移信息仍要报，
+     * 但它不是删除本批的安全障碍。
+     */
+    otherChanged: number;
+    /** 归档正文路径（未写 = 空串）。 */
+    archiveMd: string;
+    /** 投射文件搬运计数（N12）。 */
+    files: ArchiveFileOutcome;
+}
+/** 清理时的可选动作（P3）。 */
+export interface PurgeOptions {
+    /**
+     * 投射文件映射（由 `collectProjectionFiles` 产出）。
+     *
+     * **不传 = 只删库，行为与改动前逐字一致**——投射面默认关，归档搬运不能变成它的前置条
+     * 件。传了就在全部门禁通过后把文件搬进快照目录，失败只 warn。
+     */
+    files?: FilesByRecord;
+    /** 是否写 `retired.md` 归档正文（默认 true）。 */
+    archiveMd?: boolean;
 }
 /**
  * **先导出,后清理**——把这句话变成调用方绕不过去的一步。
@@ -263,4 +288,4 @@ export interface ExportThenPurgeResult {
 export declare function exportThenPurge(db: PurgeDbLike, dataDir: string, ids: readonly string[], reason: string, logger?: {
     info: (m: string) => void;
     warn: (m: string) => void;
-}, now?: Date): Promise<ExportThenPurgeResult>;
+}, now?: Date, opts?: PurgeOptions): Promise<ExportThenPurgeResult>;

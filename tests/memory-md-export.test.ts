@@ -68,9 +68,9 @@ const THREE = [
 
 describe('exportRecords', () => {
   it('每条记录一个文件，且导出一字不改库', async () => {
-    const { store, db, ledger, root } = await setup(THREE);
+    const { store, db, ledger, root, dataDir } = await setup(THREE);
     const before = hashRecords(store.all());
-    const report = await exportRecords({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const report = await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(report.written).toBe(3);
     expect(report.skipped).toBe(0);
     expect(report.remaining).toBe(0);
@@ -82,24 +82,24 @@ describe('exportRecords', () => {
   });
 
   it('第二次导出全 unchanged（渲染是纯函数，不刷 mtime）', async () => {
-    const { store, ledger, root } = await setup(THREE);
-    await exportRecords({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const { store, ledger, root, dataDir } = await setup(THREE);
+    await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     const target = join(root, 'work_fact', 'pnpm-hoisted.memory.md');
     const mtimeBefore = (await stat(target)).mtimeMs;
-    const second = await exportRecords({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const second = await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(second.written).toBe(0);
     expect(second.unchanged).toBe(3);
     expect((await stat(target)).mtimeMs).toBe(mtimeBefore);
   });
 
   it('frontmatter 键集**恰等于**白名单（防检索轴与派生评价泄漏进文件）', async () => {
-    const { store, ledger, root } = await setup([
+    const { store, ledger, root, dataDir } = await setup([
       rec('r1', '带轴带评价的记录', {
         name: 'with-axes',
         metadata: { hall: 'work', tags: ['npm-publish'], cogHall: 'facts', dsh_usage_scenario: ['发版前'] },
       }),
     ]);
-    await exportRecords({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     const text = await readFile(join(root, 'work_fact', 'with-axes.memory.md'), 'utf8');
     const block = text.split('---')[1] ?? '';
     const keys = block.split('\n').filter((l) => /^\w+:/.test(l)).map((l) => l.split(':')[0]);
@@ -112,11 +112,11 @@ describe('exportRecords', () => {
   });
 
   it('没名字的记录回落到 mem-<id8>，两条同内容也不崩', async () => {
-    const { store, ledger, root } = await setup([
+    const { store, ledger, root, dataDir } = await setup([
       rec('mem_aaaa1111', '同样的首行内容'),
       rec('mem_bbbb2222', '同样的首行内容'),
     ]);
-    const report = await exportRecords({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const report = await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(report.written).toBe(2);
     expect(report.skipped).toBe(0);
     // 回落名走的是 deriveName 之前的分支：两条正文一样 ⇒ 名字一样 ⇒ 由唯一索引/后写覆盖决定，
@@ -132,12 +132,12 @@ describe('exportRecords', () => {
 
   it('条数护栏：maxRecords 截断后如实回报 remaining，并提示再点一次', async () => {
     const many = Array.from({ length: 5 }, (_, i) => rec(`m${i}`, `记录 ${i} 号`, { name: `rec-${i}` }));
-    const { store, ledger, root } = await setup(many);
-    const first = await exportRecords({ records: store.all(), root, ledger, maxRecords: 2, timeBudgetMs: 60_000 });
+    const { store, ledger, dataDir } = await setup(many);
+    const first = await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 2, timeBudgetMs: 60_000 });
     expect(first.scanned).toBe(2);
     expect(first.capped).toBe(true);
     expect(first.remaining).toBe(3);
-    const second = await exportRecords({ records: store.all(), root, ledger, maxRecords: 10, timeBudgetMs: 60_000 });
+    const second = await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 10, timeBudgetMs: 60_000 });
     expect(second.remaining).toBe(0);
     expect(second.written + second.unchanged).toBe(5);
   });
@@ -166,24 +166,24 @@ describe('reconcileLedger 四态', () => {
       rec('r4', '会被删掉的记录', { name: 'gone-side' }),
       rec('r5', '没动过的记录', { name: 'same-side' }),
     ]);
-    await exportRecords({ records: ctx.store.all(), root: ctx.root, ledger: ctx.ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    await exportRecords({ records: ctx.store.all(), cfgRoot: undefined, dataDir: ctx.dataDir, ledger: ctx.ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     return ctx;
   }
   const fileOf = (root: string, stem: string): string => join(root, 'work_fact', `${stem}.memory.md`);
 
   it('首次导出前全是 firstTime', async () => {
-    const { store, ledger, root } = await setup(THREE);
-    const r = await reconcileLedger({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const { store, ledger, dataDir } = await setup(THREE);
+    const r = await reconcileLedger({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(r.firstTime).toBe(3);
     expect(r.same).toBe(0);
   });
 
   it('导出后全 same，且对账什么都不写（文件字节与账本都不动）', async () => {
-    const { store, db, ledger, root } = await seeded();
+    const { store, db, ledger, root, dataDir } = await seeded();
     const target = fileOf(root, 'file-side');
     const bytesBefore = await readFile(target, 'utf8');
     const ledgerBefore = ledger.all();
-    const r = await reconcileLedger({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const r = await reconcileLedger({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(r.same).toBe(5);
     expect(await readFile(target, 'utf8')).toBe(bytesBefore);
     expect(ledger.all().length).toBe(ledgerBefore.length);
@@ -192,7 +192,7 @@ describe('reconcileLedger 四态', () => {
   });
 
   it('四个象限各自命中：改库=dbOnly、改文件=fileOnly、都改=both、删文件=missingFile', async () => {
-    const { store, ledger, root } = await seeded();
+    const { store, ledger, root, dataDir } = await seeded();
     // 改库：直接写一条新内容（走 store 的正常路径）。
     const rows = store.all().map((x) => (x.id === 'r1' ? { ...x, content: '会被改库的记录（改过了）' } : x));
     await store.appendNew(rows);
@@ -205,7 +205,7 @@ describe('reconcileLedger 四态', () => {
     // 删文件。
     await rm(fileOf(root, 'gone-side'), { force: true });
 
-    const r = await reconcileLedger({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const r = await reconcileLedger({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(r.dbOnly).toBeGreaterThanOrEqual(1);
     expect(r.fileOnly).toBeGreaterThanOrEqual(1);
     expect(r.both).toBeGreaterThanOrEqual(1);
@@ -214,17 +214,17 @@ describe('reconcileLedger 四态', () => {
   });
 
   it('mtime 变、内容没变 ⇒ 仍算 same（判据是内容指纹，不是时间戳）', async () => {
-    const { store, ledger, root } = await seeded();
+    const { store, ledger, root, dataDir } = await seeded();
     const target = fileOf(root, 'same-side');
     const before = await stat(target);
     await utimes(target, new Date(before.atime.getTime() + 5000), new Date(before.mtime.getTime() + 5000));
-    const r = await reconcileLedger({ records: store.all(), root, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+    const r = await reconcileLedger({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
     expect(r.same).toBe(5);
     expect(r.fileOnly).toBe(0);
   });
 
-  it('renderRecord 的 relPath 落在 type 目录下，未知 type 归 unsorted', () => {
+  it('renderRecord 的 relPath 落在 type 目录下，未知 type 归默认类 unclassified', () => {
     expect(renderRecord(rec('x', '内容', { type: 'work_fact' })).relPath).toMatch(/^work_fact\/.+\.memory\.md$/);
-    expect(renderRecord(rec('y', '内容', { type: 'legacy_unknown' })).relPath).toMatch(/^unsorted\/.+\.memory\.md$/);
+    expect(renderRecord(rec('y', '内容', { type: 'legacy_unknown' })).relPath).toMatch(/^unclassified\/.+\.memory\.md$/);
   });
 });

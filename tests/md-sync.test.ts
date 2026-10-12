@@ -1,0 +1,201 @@
+/**
+ * P2 反向同步（文件 → 库）的四象限与两条边界。
+ *
+ * 真 L1Store + 真磁盘临时目录，全部走公开写路径。每条用例都对应一个会**静默坏掉**的地方：
+ *   - 回灌后不重渲染 → 账本停在旧基线 → 下一轮又判 fileOnly，写回环永远转不完；
+ *   - 两边都变时自动挑一边 → 人的编辑或库里的蒸馏产物被无声覆盖；
+ *   - `.disable` 直接删文件 → 归档链断裂（这里只退场，删除是 cleanup 的事）；
+ *   - 投射目录里的陌生 md 被猜成一条新记忆 → 绕过写入内核的判据面。
+ */
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { L1Store } from '../src/store/l1.js';
+import { MemoryDb } from '../src/store/sqlite.js';
+import { hashRecords } from '../src/store/l1-snapshot.js';
+import { MdLedgerStore } from '../src/store/memory-md-ledger.js';
+import { exportRecords } from '../src/store/memory-md-export.js';
+import { resolveMemoriesRoot } from '../src/store/memory-md.js';
+import { syncFromFiles } from '../src/pipeline/md-sync.js';
+import type { EmbeddingService } from '../src/store/embedding.js';
+import type { MemoryRecord } from '../src/types.js';
+
+const DIM = 16;
+const dirs: string[] = [];
+const dbs: MemoryDb[] = [];
+afterAll(async () => {
+  for (const db of dbs) db.close();
+  for (const d of dirs) await rm(d, { recursive: true, force: true });
+});
+
+function fakeEmbed(): EmbeddingService {
+  return {
+    getDimensions: () => DIM,
+    getProviderInfo: () => ({ provider: 'probe', model: 'probe', dimensions: DIM }),
+    isReady: () => true,
+    embed: async () => new Float32Array(DIM),
+    embedBatch: async (ts: string[]) => ts.map(() => new Float32Array(DIM)),
+  };
+}
+
+function rec(id: string, content: string, extra: Partial<MemoryRecord> = {}): MemoryRecord {
+  const t = Date.parse('2026-10-12T00:00:00Z');
+  return { id, content, type: 'work_fact', priority: 60, scene_name: 's', timestamps: [t], createdAt: t, updatedAt: t, ...extra };
+}
+
+const THREE = [
+  rec('r1', 'pnpm 需要 hoisted 平铺布局', { name: 'pnpm-hoisted' }),
+  rec('r2', '上行必须走官方地址', { name: '官方地址上行' }),
+  rec('r3', '发布要显式钉 registry'),
+];
+
+/** 建库 → 导出一次 → 账本有基线，这就是"同步前"的世界。 */
+async function setup(recordList: MemoryRecord[] = THREE) {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-mdsync-'));
+  dirs.push(dataDir);
+  const db = new MemoryDb(join(dataDir, 'm.db'), DIM);
+  db.init();
+  dbs.push(db);
+  const store = new L1Store(dataDir, db, fakeEmbed(), 'hybrid', undefined, 0);
+  await store.init();
+  await store.appendNew(recordList);
+  const ledger = new MdLedgerStore(dataDir);
+  await ledger.init();
+  const root = resolveMemoriesRoot(undefined, dataDir);
+  await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+  const sync = (over: { maxFiles?: number; timeBudgetMs?: number } = {}) =>
+    syncFromFiles({
+      store,
+      ledger,
+      cfgRoot: undefined,
+      dataDir,
+      maxFiles: over.maxFiles ?? 2000,
+      timeBudgetMs: over.timeBudgetMs ?? 60_000,
+    });
+  return { dataDir, db, store, ledger, root, sync };
+}
+
+const pathOf = (root: string, type: string, stem: string): string => join(root, type, `${stem}.memory.md`);
+
+describe('syncFromFiles 四象限', () => {
+  it('什么都没改 → 全 same，一次写动作都不做', async () => {
+    const { store, sync } = await setup();
+    const before = hashRecords(store.all());
+    const rep = await sync();
+    expect(rep.roots).toBeGreaterThan(0);
+    expect(rep.scanned).toBe(3);
+    expect(rep.same).toBe(3);
+    expect(rep.imported).toBe(0);
+    expect(rep.rendered).toBe(0);
+    expect(rep.pending).toBe(0);
+    expect(rep.skipped).toBe(0);
+    expect(hashRecords(store.all())).toBe(before);
+  });
+
+  it('只有文件变 → 回灌入库，并把文件重写成规范渲染（下一轮判 same，不转环）', async () => {
+    const { store, root, sync } = await setup();
+    const p = pathOf(root, 'work_fact', '官方地址上行');
+    const text = await readFile(p, 'utf8');
+    await writeFile(p, text.replace('上行必须走官方地址', '上行必须走官方地址（镜像有同步延迟，实测 404）'), 'utf8');
+
+    const rep = await sync();
+    expect(rep.imported).toBe(1);
+    expect(rep.pending).toBe(0);
+    expect(store.all().find((r) => r.id === 'r2')?.content).toContain('实测 404');
+
+    // 无写回环：文件已回到"库的规范渲染"，账本同步跟上，再跑一轮什么都不该发生。
+    const rep2 = await sync();
+    expect(rep2.imported).toBe(0);
+    expect(rep2.rendered).toBe(0);
+    expect(rep2.pending).toBe(0);
+    expect(rep2.same).toBe(3);
+    // 人的那段文字仍在文件里（重写只是归一 frontmatter，不是回滚正文）。
+    expect(await readFile(p, 'utf8')).toContain('实测 404');
+  });
+
+  it('只有库变 → 重写文件，不动库', async () => {
+    const { store, root, sync } = await setup();
+    const r1 = store.all().find((r) => r.id === 'r1');
+    expect(r1).toBeDefined();
+    await store.appendNew([{ ...r1!, content: 'pnpm 需要 hoisted 平铺布局（改过）' }]);
+    const before = hashRecords(store.all());
+
+    const rep = await sync();
+    expect(rep.rendered).toBe(1);
+    expect(rep.imported).toBe(0);
+    expect(hashRecords(store.all())).toBe(before);
+    expect(await readFile(pathOf(root, 'work_fact', 'pnpm-hoisted'), 'utf8')).toContain('（改过）');
+  });
+
+  it('两边都变 → 挂账，两侧都不动，而且下轮还报同样的 pending', async () => {
+    const { store, root, sync } = await setup();
+    const p = pathOf(root, 'work_fact', '官方地址上行');
+    await writeFile(p, (await readFile(p, 'utf8')).replace('上行必须走官方地址', '人手改的正文'), 'utf8');
+    const r2 = store.all().find((r) => r.id === 'r2');
+    await store.appendNew([{ ...r2!, content: '蒸馏侧改的正文' }]);
+
+    const rep = await sync();
+    expect(rep.pending).toBe(1);
+    expect(rep.imported).toBe(0);
+    expect(rep.rendered).toBe(0);
+    expect(store.all().find((r) => r.id === 'r2')?.content).toBe('蒸馏侧改的正文');
+    expect(await readFile(p, 'utf8')).toContain('人手改的正文');
+
+    // 账本没被推进 → 挂账是持久的，不会过一轮就"自动解决了"
+    expect((await sync()).pending).toBe(1);
+  });
+});
+
+describe('syncFromFiles 边界', () => {
+  it('.disable 文件 → 退场对应记录（不删文件，删除是 cleanup 的事）', async () => {
+    const { store, root, sync } = await setup();
+    const base = pathOf(root, 'work_fact', 'pnpm-hoisted');
+    const text = await readFile(base, 'utf8');
+    await writeFile(`${base}.disable`, text.replace('---\n', '---\nretired: true\n'), 'utf8');
+
+    const rep = await sync();
+    expect(rep.retired).toBe(1);
+    expect(store.all().find((r) => r.id === 'r1')?.validTo).toBeDefined();
+    // 原文件没被删、也没被"顺手"重写：退场只写 valid_to
+    expect(await readFile(base, 'utf8')).toBe(text);
+    // 再跑一轮：已退场 → 判 same，不重复退场
+    expect((await sync()).retired).toBe(0);
+  });
+
+  it('.disable 找不到记录 → orphan 计数，不抛也不瞎退场', async () => {
+    const { root, sync } = await setup([rec('r1', '只有这一条', { name: 'pnpm-hoisted' })]);
+    await writeFile(pathOf(root, 'work_fact', '陌生条目') + '.disable', '---\nname: "陌生条目"\n---\n正文\n', 'utf8');
+    const rep = await sync();
+    expect(rep.orphan).toBe(1);
+    expect(rep.retired).toBe(0);
+  });
+
+  it('没有账本也认不出记录的新文件 → 计数，绝不入库（导入须过写入内核）', async () => {
+    const { store, root, sync } = await setup();
+    const n = store.all().length;
+    await writeFile(pathOf(root, 'work_fact', '手写新记忆'), '---\nname: "手写新记忆"\ntype: "work_fact"\n---\n我自己写的一条\n', 'utf8');
+    const rep = await sync();
+    expect(rep.newFiles).toBe(1);
+    expect(rep.imported).toBe(0);
+    expect(store.all().length).toBe(n);
+  });
+
+  it('非投射格式的普通 md → skipped，库一个字不动', async () => {
+    const { store, root, sync } = await setup();
+    const before = hashRecords(store.all());
+    await writeFile(pathOf(root, 'work_fact', '随手笔记'), '# 随手笔记\n\n这不是投射文件\n', 'utf8');
+    const rep = await sync();
+    expect(rep.skipped).toBe(1);
+    expect(rep.imported).toBe(0);
+    expect(hashRecords(store.all())).toBe(before);
+  });
+
+  it('文件数护栏：掉过的那部分必须报成 capped + remaining', async () => {
+    const { sync } = await setup();
+    const rep = await sync({ maxFiles: 1 });
+    expect(rep.scanned).toBe(1);
+    expect(rep.capped).toBe(true);
+    expect(rep.remaining).toBe(2);
+  });
+});

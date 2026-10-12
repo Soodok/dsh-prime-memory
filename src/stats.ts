@@ -47,7 +47,7 @@ import type { SceneStore } from './store/scenes.js';
 import type { SessionModeStore } from './store/session-modes.js';
 import type { EmbeddingManager } from './store/embedding-source.js';
 import type { StateStore } from './store/state.js';
-import { WING_CATALOG, WING_FALLBACK, type MemoryFamily, type MemoryLogger, type MemoryMode } from './types.js';
+import { WING_CATALOG, WING_FALLBACK, type MemoryFamily, type MemoryLogger, type MemoryMode, type MemoryRecord } from './types.js';
 import { isRoomSlug } from './metadata-validators.js';
 import { InProcMemoryBackend, type MemoryBackend } from './store/memory-backend.js';
 import { isWingCorner } from './store/session-modes.js';
@@ -59,7 +59,10 @@ import type { SessionRecalledStore } from './store/session-recalled.js';
 import { isFeedbackScore, type RecallFeedbackStore } from './store/recall-feedback.js';
 import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
-import { exportRecords, reconcileLedger, resolveMemoriesRoot } from './store/memory-md-export.js';
+import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
+import { disableProjectionFile } from './store/memory-md-disable.js';
+import { collectProjectionFiles } from './store/memory-md-archive.js';
+import { syncFromFiles } from './pipeline/md-sync.js';
 
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = (require('../package.json') as { version: string }).version;
@@ -140,6 +143,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/workspace-relink',
   'dsh-memory/mem-export',
   'dsh-memory/mem-reconcile',
+  'dsh-memory/mem-sync',
   'dsh-memory/skills-action',
 ];
 
@@ -671,9 +675,14 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const entry = feedback.rate(id, p.score);
       let retired = false;
       let announced = false;
+      // 退场**前**的记录快照（带 workspaceId/name）——失效联动要靠它算落点，
+      // 而 `retire` 只改 `valid_to`，不会动这两列，所以取在退场前后等价，取在前更直白。
+      let rec: MemoryRecord | undefined;
+      let fileDisabled: string | undefined;
       if (p.score === -1) {
-        const rec = stores.l1.getByIds([id])[0];
-        retired = stores.l1.retire([id], { at: new Date().toISOString(), reason: 'obsolete' }) > 0;
+        rec = stores.l1.getByIds([id])[0];
+        const retiredAt = new Date().toISOString();
+        retired = stores.l1.retire([id], { at: retiredAt, reason: 'obsolete' }) > 0;
         // 不再摘除：条目要留在列表里显示删除线（文本仍在上下文，直到压缩）；
         // 检索侧已由 detachL1FromRetrieval 阻断再注入。
         if (cfg.recallFeedback?.announce !== false && stores.notices !== undefined && rec !== undefined) {
@@ -682,6 +691,19 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           announced = true;
         }
         deps.logger.info(`[memory] 用户声明记忆过时并退场(session=${sessionId}, ${retired ? '已退场' : '本已退场'}): ${id}`);
+        // 失效联动（N11）：退场成立后才去动投射文件；它失败只影响“磁盘凭证”，
+        // 绝不回滚退场、也绝不抛（`disableProjectionFile` 内部收敛成 'failed'）。
+        if (retired && rec !== undefined && cfg.memExport?.enabled === true && stores.mdLedger !== undefined) {
+          fileDisabled = await disableProjectionFile({
+            // 传退场**后**的快照：渲染出的 frontmatter 才带 `retired: true`，
+            // 凭证自己就能说清它为什么存在。
+            record: { ...rec, validTo: Date.parse(retiredAt) || Date.now() },
+            cfgRoot: cfg.memExport.root,
+            dataDir: deps.dataDir,
+            ledger: stores.mdLedger,
+            logger: deps.logger,
+          });
+        }
       }
       return {
         id,
@@ -689,6 +711,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         rating: { last: entry.last, rated: entry.rated, mean: entry.mean, obsolete: entry.obsolete },
         retired,
         announced,
+        ...(fileDisabled === undefined ? {} : { fileDisabled }),
       };
     }
 
@@ -720,10 +743,10 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
-      const root = resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger);
       return exportRecords({
         records: stores.l1.all(),
-        root,
+        cfgRoot: exp.root,
+        dataDir: deps.dataDir,
         ledger: md,
         maxRecords: exp.maxRecords,
         timeBudgetMs: exp.timeBudgetMs,
@@ -737,13 +760,33 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
-      const root = resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger);
       return reconcileLedger({
         records: stores.l1.all(),
-        root,
+        cfgRoot: exp.root,
+        dataDir: deps.dataDir,
         ledger: md,
         maxRecords: exp.maxRecords,
         timeBudgetMs: exp.timeBudgetMs,
+        logger: deps.logger,
+      });
+    }
+
+    case 'dsh-memory/mem-sync': {
+      // P2 反向同步：文件 → 库。与导出的**风险不对称**——导出只写文件，本项会写库，
+      // 所以多两道门：要先开投射（没导出过 = 账本为空 = 判不出“谁变了”），要高权限。
+      const syn = cfg.mdSync;
+      if (syn?.enabled !== true) throw new Error('md 反向同步未开启（cfg.mdSync.enabled）');
+      if (cfg.memExport?.enabled !== true) throw new Error('md 反向同步需先开启 md 投射（cfg.memExport.enabled）');
+      if (!live?.get().memoryMutate) throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能回灌文件侧修改。');
+      const md = stores.mdLedger;
+      if (md === undefined) throw new Error('md 投射账本未装配');
+      return syncFromFiles({
+        store: stores.l1,
+        ledger: md,
+        cfgRoot: cfg.memExport.root,
+        dataDir: deps.dataDir,
+        maxFiles: syn.maxFiles,
+        timeBudgetMs: syn.timeBudgetMs,
         logger: deps.logger,
       });
     }
@@ -1746,6 +1789,14 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         }
       }
       if (dryRun) {
+        // 待删清单要给人看：`targets` 只是计数，人无法从计数判断“这批是不是该删的那批”。
+        // 取前 50 条预览（全量列表会把面板撑爆，而判据只需抽看）。
+        const preview = stores.l1.getByIds(targets.slice(0, 50)).map((r) => ({
+          id: r.id,
+          name: r.name ?? '',
+          type: r.type,
+          retiredAt: r.validTo === undefined ? '' : new Date(r.validTo).toISOString(),
+        }));
         const resp: CleanupRetiredResponse = {
           dryRun: true,
           targets: targets.length,
@@ -1754,6 +1805,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           dir: '',
           name: '',
           diffs: [],
+          items: preview,
         };
         return resp;
       }
@@ -1761,7 +1813,18 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         const resp: CleanupRetiredResponse = { dryRun: false, targets: 0, purged: 0, aborted: false, dir: '', name: '', diffs: [] };
         return resp;
       }
-      const r = await stores.l1.purgeRetired(targets, 'cleanup-retired');
+      // 删前先把该批记录抓在手里：删完再读就什么都读不到了（归档正文与预览清单都要用它们）。
+      const purgeRecords = stores.l1.getByIds(targets);
+      // N12：投射面开着时把该批的投射文件（含 `.disable`）一并收进快照目录。
+      // 关着时 `files` 为 undefined ⇒ `exportThenPurge` 行为与改动前逐字一致。
+      const files = cfg.memExport?.enabled === true
+        ? await collectProjectionFiles(purgeRecords, cfg.memExport.root, deps.dataDir, deps.logger)
+        : undefined;
+      const r = await stores.l1.purgeRetired(targets, 'cleanup-retired', { files });
+      // F19：图投影的两张索引表全仓原本**只增不减**。记录行删了而投影行还在，
+      // 从快照恢复回来的记录会被当成“已投影”而永不重投影（检索图静默缺一条，不报错）。
+      // 只在真删成功时抹：干跑与中止都不动图——图是派生索引，不该因为一次预览被改。
+      const graphForgotten = !r.aborted && r.purged > 0 ? (stores.graph?.forgetRecords(targets) ?? 0) : 0;
       const resp: CleanupRetiredResponse = {
         dryRun: false,
         targets: targets.length,
@@ -1770,6 +1833,16 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         dir: r.dir,
         name: r.name,
         diffs: r.diffs,
+        otherChanged: r.otherChanged,
+        archiveMd: r.archiveMd,
+        files: r.files,
+        graphForgotten,
+        items: purgeRecords.slice(0, 50).map((x) => ({
+          id: x.id,
+          name: x.name ?? '',
+          type: x.type,
+          retiredAt: x.validTo === undefined ? '' : new Date(x.validTo).toISOString(),
+        })),
       };
       return resp;
     }

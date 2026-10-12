@@ -187,6 +187,13 @@ export const memorySchema = Schema.object({
         maxRecords: Schema.number().min(1).max(10_000).default(300),
         timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
     }),
+    // P2 反向同步：默认关。文件数护栏比导出的条数护栏宽一些——一次目录扫描的代价
+    // 低于一次全库渲染，但时间预算照同一口径（面板不能被卡住）。
+    mdSync: Schema.object({
+        enabled: Schema.boolean().default(false),
+        maxFiles: Schema.number().min(1).max(20_000).default(2_000),
+        timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+    }),
     // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。
     usageScenario: Schema.object({
         enabled: Schema.boolean().default(false),

@@ -15,7 +15,7 @@ import { graphHitRecordIds } from '../graph/search.js';
 import type { L1Receipt, ReceiptQuery } from './receipts.js';
 import type { ConflictClaimGroup, ConflictPair, ConflictRejected, ConflictResolution, ConflictType } from './conflicts.js';
 import { isRetired, type SupersedeInfo } from './supersede.js';
-import { exportThenPurge, readSnapshotManifest, readSnapshotRecords, restoreL1Snapshot, selectSnapshotTargets, snapshotDirFor, listSnapshots as listSnapshotsIn, type ExportThenPurgeResult, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
+import { exportThenPurge, readSnapshotManifest, readSnapshotRecords, restoreL1Snapshot, selectSnapshotTargets, snapshotDirFor, listSnapshots as listSnapshotsIn, type ExportThenPurgeResult, type PurgeOptions, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
 import { EmbedHelper, NoopEmbeddingService, type EmbeddingService } from './embedding.js';
 import { appendJsonl, dayKey, ensureDir, readJsonl } from '../util/io.js';
 import { applyDecayWeight, normalizeRrf, rrfMerge , markDedupPath } from './search-utils.js';
@@ -538,13 +538,13 @@ export class L1Store {
    * 门禁本体在 `l1-snapshot.exportThenPurge`(与"重建前必快照"同一套设施);
    * 这里只把 L1Store 已知的 dataDir 与 logger 接上去,避免端点层自己去推路径。
    */
-  async purgeRetired(ids: string[], reason: string): Promise<ExportThenPurgeResult> {
+  async purgeRetired(ids: string[], reason: string, opts: PurgeOptions = {}): Promise<ExportThenPurgeResult> {
     // **只清理确实处于退场态的记录**。这道复核必须在删除发生的地方(而不是调用方):
     // 否则任何调用方传一个 id 列表就能绕过软删、把活动记忆直接物理抹掉——
     // 那等于给"先导出后清理"留了一条硬删后门。
     const known = new Map(this.db.getL1ByIds(ids).map((r) => [r.id, r]));
     const retiredIds = ids.filter((id) => known.get(id)?.validTo !== undefined);
-    return exportThenPurge(this.db, this.dataDir, retiredIds, reason, this.logger);
+    return exportThenPurge(this.db, this.dataDir, retiredIds, reason, this.logger, new Date(), opts);
   }
 
   // ───────────────────────────────────────────────────────────────────────────

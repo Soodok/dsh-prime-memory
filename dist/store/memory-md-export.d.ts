@@ -1,26 +1,17 @@
+import { safeJoin, resolveMemoriesRoot } from './memory-md.js';
 import type { MdLedgerStore } from './memory-md-ledger.js';
 import type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample } from './memory-md-types.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 export type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample };
-/**
- * 解析投射根目录。
- *
- * 给了 `cfgRoot` 就用它（必须是绝对路径且不含 `..`），否则默认 `<dataDir>/memories`。
- * **不合法只回退默认并 warn，绝不抛错**：投射是旁路，旁路配置写错不能弄挂记忆本体。
- */
-export declare function resolveMemoriesRoot(cfgRoot: string | undefined, dataDir: string, logger?: MemoryLogger): string;
-/**
- * 把渲染出的相对路径安全地拼到根下。
- *
- * 越界（绝对路径、`..` 跳出、盘符切换）一律返回 `undefined` 由调用方跳过并 warn——
- * 记录内容是人/模型写的，它可能包含 `../../`，这里必须是结构性挡死而不是"应该不会有"。
- */
-export declare function safeJoin(root: string, relPath: string): string | undefined;
+export { resolveMemoriesRoot, safeJoin };
 /** 导出报告等形状见 `memory-md-types.ts`（与契约层共用）。 */
 export interface MemExportDeps {
     /** 待投射的记录（含退场行——退场也要有投影，否则文件树里看不到它）。 */
     records: readonly MemoryRecord[];
-    root: string;
+    /** `cfg.memExport.root`（空 = 默认单根）；workspace 优先时它只管无归属那批。 */
+    cfgRoot: string | undefined;
+    /** 插件数据目录：算默认单根用。 */
+    dataDir: string;
     ledger: MdLedgerStore;
     maxRecords: number;
     timeBudgetMs: number;
@@ -39,7 +30,9 @@ export declare function exportRecords(deps: MemExportDeps): Promise<MemExportRep
 /** 四态计数与报告形状见 `memory-md-types.ts`。 */
 export interface ReconcileDeps {
     records: readonly MemoryRecord[];
-    root: string;
+    /** `cfg.memExport.root`（空 = 默认单根）；与 `dataDir` 一起交给 `targetFor`。 */
+    cfgRoot: string | undefined;
+    dataDir: string;
     ledger: MdLedgerStore;
     maxRecords: number;
     timeBudgetMs: number;

@@ -897,6 +897,30 @@ export interface CleanupRetiredRequest {
 }
 export interface CleanupRetiredResponse {
     dryRun: boolean;
+    /**
+     * 待删/已删清单预览（最多 50 条）。
+     *
+     * `targets` 只是一个计数，人无法从计数判断“这批是不是该删的那批”——物理删除不可逆，
+     * 干跑报告必须能抽看内容。取前 50 条而不是全量：全量会把面板撑爆，而判据只需抽看。
+     */
+    items?: Array<{
+        id: string;
+        name: string;
+        type: string;
+        retiredAt: string;
+    }>;
+    /** 本批之外发生漂移的记录数（只计数、**不中止**）。 */
+    otherChanged?: number;
+    /** 归档正文 `retired.md` 路径（未写 = 空串）。 */
+    archiveMd?: string;
+    /** 投射文件搬运计数（N12；投射面关着时全 0）。 */
+    files?: {
+        moved: number;
+        failed: number;
+        absent: number;
+    };
+    /** 图投影索引表里一并抹掉的行数（F19；图面未装配或不该动时为 0）。 */
+    graphForgotten?: number;
     /** 本次涉及(干跑)或实际处理(真跑)的条数。 */
     targets: number;
     /** 真正物理删除的条数(干跑恒为 0;中止恒为 0)。 */
@@ -1453,6 +1477,13 @@ export interface RecallFeedbackResponse {
     retired: boolean;
     /** 退场后是否已排入下一轮向模型播报(仅 score=-1 且 cfg.recallFeedback.announce)。 */
     announced: boolean;
+    /**
+     * 失效联动（N11）的文件侧结果，仅当 `score === -1`、真退场且 `cfg.memExport.enabled` 时出现：
+     * `renamed`（投射文件已改名 `.memory.md.disable`）/ `created`（本来没导出过，新建了凭证）/
+     * `already`（早就是 `.disable`）/ `no-workspace`（归属不明，**没动任何文件**）/ `failed`。
+     * 缺席 = 本次未走文件联动（功能关着或账本未装配）；它不影响 `retired`，退场已成立。
+     */
+    fileDisabled?: string;
 }
 /**
  * dsh-memory/mem-export / mem-reconcile：md 投射的导出与对账（P1 + N8/N9）。
@@ -1464,6 +1495,15 @@ export type MemExportRequest = Record<string, never>;
 export type MemExportResponse = import('./store/memory-md-types.js').MemExportReport;
 export type MemReconcileRequest = Record<string, never>;
 export type MemReconcileResponse = import('./store/memory-md-types.js').ReconcileReport;
+/**
+ * dsh-memory/mem-sync：P2 反向同步（md 文件 → 索引）。
+ *
+ * 与 `mem-reconcile` 的区别是风险不对称：对账**什么都不写**，同步**会写库**（回灌
+ * 文件侧修改、把 `.disable` 对应的记录退场）。所以服务端除了配置门还要高权限门。
+ * 两边都变的那批**两侧都不动**，只在 `pending` 里挂账等人裁决。
+ */
+export type MemSyncRequest = Record<string, never>;
+export type MemSyncResponse = import('./store/memory-md-types.js').MdSyncReport;
 /**
  * dsh-memory/workspace-relink：按内容路由把存量记忆归到 workspace。
  *
@@ -1549,6 +1589,7 @@ export interface DshMemoryRequestMap {
     'dsh-memory/workspace-relink': WorkspaceRelinkRequest;
     'dsh-memory/mem-export': MemExportRequest;
     'dsh-memory/mem-reconcile': MemReconcileRequest;
+    'dsh-memory/mem-sync': MemSyncRequest;
     'dsh-memory/skills-action': SkillsActionRequest;
 }
 export interface DshMemoryResponseMap {
@@ -1608,6 +1649,7 @@ export interface DshMemoryResponseMap {
     'dsh-memory/workspace-relink': WorkspaceRelinkResponse;
     'dsh-memory/mem-export': MemExportResponse;
     'dsh-memory/mem-reconcile': MemReconcileResponse;
+    'dsh-memory/mem-sync': MemSyncResponse;
     'dsh-memory/skills-action': SkillsActionResponse;
 }
 /** 全部端点名(client 调用与 host case 表的共用字面量来源)。 */
