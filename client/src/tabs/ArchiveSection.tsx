@@ -18,11 +18,17 @@ import { S } from '../styles.js';
 import type { RpcFn } from '../rpc.js';
 import type { DshMemoryRequestMap, DshMemoryResponseMap } from '../../../src/contract.js';
 
-/** 本节会发的四个端点（导出 / 对账 / 反向同步 / 清理）。 */
-type ArchiveEndpoint = 'dsh-memory/mem-export' | 'dsh-memory/mem-reconcile' | 'dsh-memory/mem-sync' | 'dsh-memory/cleanup-retired';
+/** 本节会发的六个端点（导出 / 对账 / 同步 / 孤儿归档 / 清理预览 / 真清理）。 */
+type ArchiveEndpoint =
+  | 'dsh-memory/mem-export'
+  | 'dsh-memory/mem-reconcile'
+  | 'dsh-memory/mem-sync'
+  | 'dsh-memory/mem-orphans'
+  | 'dsh-memory/cleanup-retired';
 type ExportReport = DshMemoryResponseMap['dsh-memory/mem-export'];
 type ReconcileReport = DshMemoryResponseMap['dsh-memory/mem-reconcile'];
 type SyncReport = DshMemoryResponseMap['dsh-memory/mem-sync'];
+type OrphanReport = DshMemoryResponseMap['dsh-memory/mem-orphans'];
 type CleanupReport = DshMemoryResponseMap['dsh-memory/cleanup-retired'];
 
 const HINT_STYLE = { fontSize: 12, color: 'var(--dsh-mem-text-3)', lineHeight: '18px' } as const;
@@ -72,6 +78,14 @@ function lineOfSync(rep: SyncReport): string {
   return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
 }
 
+function lineOfOrphans(rep: OrphanReport): string {
+  const head = rep.dryRun
+    ? `账本共 ${rep.scanned} 条 · 仍被认领 ${rep.claimed} · 无人认领 ${rep.orphans}（未搬任何东西）`
+    : `已搬 ${rep.moved} · 失败 ${rep.failed} · 仍被认领 ${rep.claimed}`;
+  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 条，再点一次继续` : '';
+  return head + tail + (rep.dir.length > 0 ? ` · 归档到 ${rep.dir}` : '');
+}
+
 function lineOfCleanup(rep: CleanupReport): string {
   if (rep.aborted) return `清理已中止（未删任何记录）：${rep.diffs.join('；') || '门禁未通过'}`;
   if (rep.dryRun) return `待删 ${rep.targets} 条（预览了前 ${rep.items?.length ?? 0} 条）——未删除任何东西`;
@@ -87,9 +101,12 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
   const [exported, setExported] = useState<ExportReport | undefined>(undefined);
   const [recon, setRecon] = useState<ReconcileReport | undefined>(undefined);
   const [synced, setSynced] = useState<SyncReport | undefined>(undefined);
+  const [orphans, setOrphans] = useState<OrphanReport | undefined>(undefined);
   const [cleanup, setCleanup] = useState<CleanupReport | undefined>(undefined);
   // 物理删除不可逆，而本节已有“不弹框”纪律 ⇒ 用两步 arming 当确认门槛：
   // 必须先跑一次预览（否则连要删什么都不知道），再点两次才真删。
+  // 归档文件也是不可逆感动作：同样用两步 arming，且必须先看过预览。
+  const [orphanArmed, setOrphanArmed] = useState(false);
   const [armed, setArmed] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -138,6 +155,29 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
         </NButton>
         <NButton
           disabled={busy}
+          title="只读预览：扫账本，找出“我们写过但现在没记录认领它”的投射文件（改名/消歧留下的残片）。来路不明的文件一律不动，也不搬任何东西"
+          onClick={() => {
+            setOrphanArmed(false);
+            run('dsh-memory/mem-orphans', setOrphans, { dryRun: true });
+          }}
+        >
+          孤儿文件预览
+        </NButton>
+        <NButton
+          disabled={busy || orphans === undefined || !orphans.dryRun || orphans.orphans === 0}
+          title={orphanArmed
+            ? '再点一次就真的搬——文件会被移出投射目录（不删，进归档目录，可手动搬回）'
+            : '不删只搬：进 <数据目录>/memories-orphans/<批次时间戳>/；需要先跑预览，再点两次确认；服务端还要高权限模式'}
+          onClick={() => {
+            if (!orphanArmed) { setOrphanArmed(true); return; }
+            setOrphanArmed(false);
+            run('dsh-memory/mem-orphans', setOrphans, { dryRun: false });
+          }}
+        >
+          {orphanArmed ? '确认搬走孤儿文件' : '孤儿文件归档'}
+        </NButton>
+        <NButton
+          disabled={busy}
           title="只读预览：列出将被物理删除的退场记忆（前 50 条）与总数，不删任何东西"
           onClick={() => {
             setArmed(false);
@@ -165,13 +205,15 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
           ? `失败：${error}`
           : cleanup !== undefined
             ? lineOfCleanup(cleanup)
-            : synced !== undefined
-              ? lineOfSync(synced)
-              : exported !== undefined
-                ? lineOf(exported)
-                : recon !== undefined
-                  ? lineOfReconcile(recon)
-                  : '导出=库→文件；对账=只读比较；同步=文件→库；清理=物理删除（不可逆，需高权限模式）。'}
+            : orphans !== undefined
+              ? lineOfOrphans(orphans)
+              : synced !== undefined
+                ? lineOfSync(synced)
+                : exported !== undefined
+                  ? lineOf(exported)
+                  : recon !== undefined
+                    ? lineOfReconcile(recon)
+                    : '导出=库→文件；对账=只读比较；同步=文件→库；孤儿=搬走没人认领的残片；清理=物理删除（不可逆，需高权限模式）。'}
       </div>
       {recon !== undefined && error === undefined ? (
         <div style={HINT_STYLE}>最近差异样本：{recon.samples.map((s) => `${s.state}:${s.relPath}`).join('，') || '（无）'}</div>

@@ -128,6 +128,18 @@ export class MdLedgerStore {
     return [...this.entries.values()];
   }
 
+  /**
+   * 带键遍历：**账本的键（绝对路径）是唯一认身份的口径**，而 `all()` 把它抹掉了。
+   *
+   * 为什么需要这个口：孤儿扫描要回答“这个**路径**现在还有没有记录认领”，而条目里的
+   * `root`/`relPath` 只是归档时恢复相对形状用的——手工编辑过账本时两者可以不一致，
+   * 拿它们当路径就会把“键”与“内容”两套事实源弄混。只读，不暴露可变 Map。
+   */
+  allWithKeys(): Array<{ path: string; entry: MdLedgerEntry }> {
+    this.ensureLoaded();
+    return [...this.entries.entries()].map(([path, entry]) => ({ path, entry }));
+  }
+
   set(absPath: string, entry: MdLedgerEntry): void {
     this.ensureLoaded();
     this.entries.set(absPath, entry);

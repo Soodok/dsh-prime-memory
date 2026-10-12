@@ -38,6 +38,37 @@ export interface MemExportResponse extends MemExportReport {
     /** 起名算出来但落库失败的条数（下轮会重试）。 */
     nameFailed: number;
 }
+/**
+ * 孤儿投射文件扫描报告（P4.4）。
+ *
+ * “孤儿”只算**有账可查且没人认领**的路径：账本里没有的来路不明文件（人自己放进投射目录
+ * 等着被同步的输入）一律不报也不动，所以这里没有“陌生文件”这一项——那个计数在同步侧。
+ */
+export interface OrphanSample {
+    path: string;
+    /** `orphan`（干跑时只报这个）/ `moved` / `failed` / `unsafe-relPath`。 */
+    reason: string;
+}
+export interface OrphanReport {
+    /** 本次是不是干跑（面板要知道这段数字是哪个模式出的，与 cleanup 同一个理由）。 */
+    dryRun: boolean;
+    /** 扫过的账本条目数。 */
+    scanned: number;
+    /** 仍被某条记录（含它的 `.disable` 兄弟）认领的。 */
+    claimed: number;
+    /** 无人认领的总数（干跑时就等于“将要搬走的数”）。 */
+    orphans: number;
+    moved: number;
+    failed: number;
+    /** 账本说有、盘上没：那是“文件缺失”，对账已经在报，这里不重复处理也不删账本。 */
+    missing: number;
+    /** 因护栏没扫完的剩余条目数。 */
+    remaining: number;
+    capped: boolean;
+    /** 本批归档目录（干跑或什么都没做时为空串）。 */
+    dir: string;
+    samples: OrphanSample[];
+}
 /** 四态计数（外加两个边界态）。 */
 export interface ReconcileCounts {
     /** 账本里没有这条文件（首次导出前，或人新加了文件）。 */

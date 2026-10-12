@@ -39,6 +39,7 @@ import { isFeedbackScore } from './store/recall-feedback.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
 import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
 import { disableProjectionFile } from './store/memory-md-disable.js';
+import { sweepOrphanFiles } from './store/memory-md-orphan.js';
 import { collectProjectionFiles } from './store/memory-md-archive.js';
 import { syncFromFiles } from './pipeline/md-sync.js';
 const require = createRequire(import.meta.url);
@@ -112,6 +113,7 @@ export const MEMORY_ENDPOINTS = [
     'dsh-memory/mem-export',
     'dsh-memory/mem-reconcile',
     'dsh-memory/mem-sync',
+    'dsh-memory/mem-orphans',
     'dsh-memory/skills-action',
 ];
 /** HTTP 路由前缀(客户端 fetch `/dsh-memory/rpc/<短方法名>`)。 */
@@ -587,6 +589,32 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 dataDir: deps.dataDir,
                 maxFiles: syn.maxFiles,
                 timeBudgetMs: syn.timeBudgetMs,
+                logger: deps.logger,
+            });
+        }
+        case 'dsh-memory/mem-orphans': {
+            // P4.4 孤儿归档：只搬“账本记着我们写过、但现在没记录认领它”的投射文件。
+            // 门序与同步侧一致：配置门 → 装配门 → 高权限门（干跑不需要）。**默认干跑**：
+            // 搬文件在用户眼里和删文件差不离，必须显式要。
+            const exp = cfg.memExport;
+            if (exp?.enabled !== true)
+                throw new Error('md 投射未开启（cfg.memExport.enabled）');
+            const md = stores.mdLedger;
+            if (md === undefined)
+                throw new Error('md 投射账本未装配');
+            const p = (payload ?? {});
+            const dryRun = p.dryRun !== false;
+            if (!dryRun && live?.get().memoryMutate !== true) {
+                throw new Error('孤儿文件归档需要高权限模式（memoryMutate）');
+            }
+            return sweepOrphanFiles({
+                records: stores.l1.all(),
+                cfgRoot: exp.root,
+                dataDir: deps.dataDir,
+                ledger: md,
+                dryRun,
+                maxFiles: exp.maxRecords,
+                timeBudgetMs: exp.timeBudgetMs,
                 logger: deps.logger,
             });
         }

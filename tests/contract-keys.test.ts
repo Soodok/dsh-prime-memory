@@ -114,6 +114,7 @@ const ENDPOINTS = [
   'dsh-memory/mem-export',
   'dsh-memory/mem-reconcile',
   'dsh-memory/mem-sync',
+  'dsh-memory/mem-orphans',
   'dsh-memory/skills-action',
 ] as const;
 
@@ -156,9 +157,9 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 58 contracted endpoints, records-delete and graph included', () => {
-    expect(ENDPOINTS.length).toBe(58);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(58);
+  it('exposes exactly the 59 contracted endpoints, records-delete and graph included', () => {
+    expect(ENDPOINTS.length).toBe(59);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(59);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {

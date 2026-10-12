@@ -1572,6 +1572,11 @@ var __defProp = Object.defineProperty;
 		  const extra = rep.newFiles > 0 ? ` · 新文件 ${rep.newFiles} 个未入库（导入须走写入内核）` : "";
 		  return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
 		}
+		function lineOfOrphans(rep) {
+		  const head = rep.dryRun ? `账本共 ${rep.scanned} 条 · 仍被认领 ${rep.claimed} · 无人认领 ${rep.orphans}（未搬任何东西）` : `已搬 ${rep.moved} · 失败 ${rep.failed} · 仍被认领 ${rep.claimed}`;
+		  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 条，再点一次继续` : "";
+		  return head + tail + (rep.dir.length > 0 ? ` · 归档到 ${rep.dir}` : "");
+		}
 		function lineOfCleanup(rep) {
 		  if (rep.aborted) return `清理已中止（未删任何记录）：${rep.diffs.join("；") || "门禁未通过"}`;
 		  if (rep.dryRun) return `待删 ${rep.targets} 条（预览了前 ${rep.items?.length ?? 0} 条）——未删除任何东西`;
@@ -1585,7 +1590,9 @@ var __defProp = Object.defineProperty;
 		  const [exported, setExported] = (0, import_react7.useState)(void 0);
 		  const [recon, setRecon] = (0, import_react7.useState)(void 0);
 		  const [synced, setSynced] = (0, import_react7.useState)(void 0);
+		  const [orphans, setOrphans] = (0, import_react7.useState)(void 0);
 		  const [cleanup, setCleanup] = (0, import_react7.useState)(void 0);
+		  const [orphanArmed, setOrphanArmed] = (0, import_react7.useState)(false);
 		  const [armed, setArmed] = (0, import_react7.useState)(false);
 		  const [error, setError] = (0, import_react7.useState)(void 0);
 		  const run = (method, sink, payload) => {
@@ -1639,6 +1646,34 @@ var __defProp = Object.defineProperty;
 		        NButton,
 		        {
 		          disabled: busy,
+		          title: "只读预览：扫账本，找出“我们写过但现在没记录认领它”的投射文件（改名/消歧留下的残片）。来路不明的文件一律不动，也不搬任何东西",
+		          onClick: () => {
+		            setOrphanArmed(false);
+		            run("dsh-memory/mem-orphans", setOrphans, { dryRun: true });
+		          },
+		          children: "孤儿文件预览"
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+		        NButton,
+		        {
+		          disabled: busy || orphans === void 0 || !orphans.dryRun || orphans.orphans === 0,
+		          title: orphanArmed ? "再点一次就真的搬——文件会被移出投射目录（不删，进归档目录，可手动搬回）" : "不删只搬：进 <数据目录>/memories-orphans/<批次时间戳>/；需要先跑预览，再点两次确认；服务端还要高权限模式",
+		          onClick: () => {
+		            if (!orphanArmed) {
+		              setOrphanArmed(true);
+		              return;
+		            }
+		            setOrphanArmed(false);
+		            run("dsh-memory/mem-orphans", setOrphans, { dryRun: false });
+		          },
+		          children: orphanArmed ? "确认搬走孤儿文件" : "孤儿文件归档"
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+		        NButton,
+		        {
+		          disabled: busy,
 		          title: "只读预览：列出将被物理删除的退场记忆（前 50 条）与总数，不删任何东西",
 		          onClick: () => {
 		            setArmed(false);
@@ -1664,7 +1699,7 @@ var __defProp = Object.defineProperty;
 		        }
 		      )
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { ...HINT_STYLE, marginTop: 6 }, children: error !== void 0 ? `失败：${error}` : cleanup !== void 0 ? lineOfCleanup(cleanup) : synced !== void 0 ? lineOfSync(synced) : exported !== void 0 ? lineOf(exported) : recon !== void 0 ? lineOfReconcile(recon) : "导出=库→文件；对账=只读比较；同步=文件→库；清理=物理删除（不可逆，需高权限模式）。" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { ...HINT_STYLE, marginTop: 6 }, children: error !== void 0 ? `失败：${error}` : cleanup !== void 0 ? lineOfCleanup(cleanup) : orphans !== void 0 ? lineOfOrphans(orphans) : synced !== void 0 ? lineOfSync(synced) : exported !== void 0 ? lineOf(exported) : recon !== void 0 ? lineOfReconcile(recon) : "导出=库→文件；对账=只读比较；同步=文件→库；孤儿=搬走没人认领的残片；清理=物理删除（不可逆，需高权限模式）。" }),
 		    recon !== void 0 && error === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: HINT_STYLE, children: [
 		      "最近差异样本：",
 		      recon.samples.map((s) => `${s.state}:${s.relPath}`).join("，") || "（无）"

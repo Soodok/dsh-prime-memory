@@ -1510,6 +1510,19 @@ export type MemReconcileResponse = import('./store/memory-md-types.js').Reconcil
 export type MemSyncRequest = Record<string, never>;
 export type MemSyncResponse = import('./store/memory-md-types.js').MdSyncReport;
 /**
+ * dsh-memory/mem-orphans：P4.4 孤儿投射文件归档。
+ *
+ * 只搬“**账本记着我们写过、但现在没记录映射到这个路径**”的文件（改名/消歧/物理删除都会
+ * 留下这种残片）。账本里没有的来路不明文件**一律不动**——那可能是人放进投射目录等着
+ * 被同步进来的输入。
+ *
+ * `dryRun` **省略即 true**：搬文件在用户眼里与删文件差不离，必须显式要；真搬还需要高权限模式。
+ */
+export interface MemOrphansRequest {
+    dryRun?: boolean;
+}
+export type MemOrphansResponse = import('./store/memory-md-types.js').OrphanReport;
+/**
  * dsh-memory/workspace-relink：按内容路由把存量记忆归到 workspace。
  *
  * 只写 `workspace_id` 列——**不改 `scope`**，所以可见性今天一行不变
@@ -1595,6 +1608,7 @@ export interface DshMemoryRequestMap {
     'dsh-memory/mem-export': MemExportRequest;
     'dsh-memory/mem-reconcile': MemReconcileRequest;
     'dsh-memory/mem-sync': MemSyncRequest;
+    'dsh-memory/mem-orphans': MemOrphansRequest;
     'dsh-memory/skills-action': SkillsActionRequest;
 }
 export interface DshMemoryResponseMap {
@@ -1655,6 +1669,7 @@ export interface DshMemoryResponseMap {
     'dsh-memory/mem-export': MemExportResponse;
     'dsh-memory/mem-reconcile': MemReconcileResponse;
     'dsh-memory/mem-sync': MemSyncResponse;
+    'dsh-memory/mem-orphans': MemOrphansResponse;
     'dsh-memory/skills-action': SkillsActionResponse;
 }
 /** 全部端点名(client 调用与 host case 表的共用字面量来源)。 */
