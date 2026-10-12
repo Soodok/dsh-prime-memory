@@ -1453,6 +1453,13 @@ export interface RecallFeedbackResponse {
     retired: boolean;
     /** 退场后是否已排入下一轮向模型播报(仅 score=-1 且 cfg.recallFeedback.announce)。 */
     announced: boolean;
+    /**
+     * 失效联动（N11）的文件侧结果，仅当 `score === -1`、真退场且 `cfg.memExport.enabled` 时出现：
+     * `renamed`（投射文件已改名 `.memory.md.disable`）/ `created`（本来没导出过，新建了凭证）/
+     * `already`（早就是 `.disable`）/ `no-workspace`（归属不明，**没动任何文件**）/ `failed`。
+     * 缺席 = 本次未走文件联动（功能关着或账本未装配）；它不影响 `retired`，退场已成立。
+     */
+    fileDisabled?: string;
 }
 /**
  * dsh-memory/mem-export / mem-reconcile：md 投射的导出与对账（P1 + N8/N9）。

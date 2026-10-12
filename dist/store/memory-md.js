@@ -14,7 +14,7 @@
  *    洗出一个没人认识的新目录）。
  */
 import { createHash } from 'node:crypto';
-import { normalize } from 'node:path';
+import { isAbsolute, normalize, resolve, sep } from 'node:path';
 import { normText } from '../memport/format.js';
 import { deriveName } from '../util/md-name.js';
 import { sanitizeFilename } from './scenes.js';
@@ -30,6 +30,72 @@ export const FRONTMATTER_KEYS = [
 ];
 /** 内容指纹长度（12 hex ≈ 48 bit；账本只用来判"变没变"，不当身份用）。 */
 export const DIGEST_HEX = 12;
+/** 失效后缀（N11）：`x.memory.md` → `x.memory.md.disable`。用户定名，取代原设计的 `.outdated`。 */
+export const DISABLE_SUFFIX = '.disable';
+/** workspace 优先时的子目录（N10）：`<workspace>/.agents/memory/…`。 */
+export const WORKSPACE_SUBDIR = ['.agents', 'memory'];
+/**
+ * 解析单根（无 workspace 归属的记录落这里）。
+ *
+ * 给了 `cfgRoot` 就用它（必须绝对路径且不含 `..`），否则默认 `<dataDir>/memories`。
+ * **不合法只回退默认并 warn，绝不抛错**：投射是旁路，旁路配置写错不能弄挂记忆本体。
+ */
+export function resolveMemoriesRoot(cfgRoot, dataDir, logger) {
+    const raw = (cfgRoot ?? '').trim();
+    if (raw.length === 0)
+        return resolve(dataDir, 'memories');
+    if (!isAbsolute(raw) || raw.includes('..')) {
+        logger?.warn(`[memory] memExport.root 不是无 .. 的绝对路径，回退默认根: ${raw}`);
+        return resolve(dataDir, 'memories');
+    }
+    return resolve(raw);
+}
+/**
+ * 把渲染出的相对路径安全地拼到根下。
+ *
+ * 越界（绝对路径、`..` 跳出、盘符切换）一律返回 `undefined` 由调用方跳过并 warn——
+ * 记录内容是人/模型写的，它可能包含 `../../`，这里必须是结构性挡死而不是"应该不会有"。
+ */
+export function safeJoin(root, relPath) {
+    if (relPath.length === 0 || isAbsolute(relPath))
+        return undefined;
+    const parent = resolve(root);
+    const target = resolve(parent, relPath);
+    if (target === parent)
+        return undefined;
+    // 前缀判定必须带分隔符结尾，否则 `/a/memoriesX` 会被 `/a/memories` 误认包含。
+    const withSep = parent.endsWith('/') || parent.endsWith('\\') ? parent : `${parent}${sep}`;
+    return target.startsWith(withSep) ? target : undefined;
+}
+/**
+ * 投射落点（N10）：**workspace 优先**。
+ *
+ * 有 `workspaceId` ⇒ `<workspace>/.agents/memory/<type>/<stem>.memory.md`；
+ * 没有 ⇒ 单根（`cfg.memExport.root` 或 `<dataDir>/memories`）。
+ *
+ * ⚠️ **导出/对账/失效改名/归档四处必须共用本函数**。库里的 `workspace_id` 在 Windows 上是
+ * 小写形态（`normalizeWorkspacePath` 会 `.toLowerCase()`），任何一处自己拼路径、或者自己
+ * 转一下大小写，就会把“刚写进去的文件”算成另一个账本键 → 对账永远报“文件缺失”。
+ * 同理：**不**在这里做 `fs.realpath` 归一——那会让目录创建前后的键漂移，反而造出假缺失；
+ * Windows 路径大小写不敏感，同一逻辑路径的两种写法解析到同一个文件，键自洽即可。
+ */
+export function targetFor(r, cfgRoot, dataDir, logger) {
+    const { relPath } = renderRecord(r);
+    const ws = (r.workspaceId ?? '').trim();
+    if (ws.length > 0 && isAbsolute(ws) && !ws.includes('..')) {
+        const root = resolve(ws, ...WORKSPACE_SUBDIR);
+        return { root, relPath, absPath: safeJoin(root, relPath), inWorkspace: true };
+    }
+    const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
+    return { root, relPath, absPath: safeJoin(root, relPath), inWorkspace: false };
+}
+/**
+ * 投射文件的失效路径：`x.memory.md` → `x.memory.md.disable`。
+ * 已带后缀的原样返回（幂等靠这个性质，而不是靠调用方记住判重）。
+ */
+export function disablePathOf(absPath) {
+    return absPath.endsWith(DISABLE_SUFFIX) ? absPath : `${absPath}${DISABLE_SUFFIX}`;
+}
 /**
  * 内容指纹。
  *

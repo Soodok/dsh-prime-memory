@@ -47,7 +47,7 @@ import type { SceneStore } from './store/scenes.js';
 import type { SessionModeStore } from './store/session-modes.js';
 import type { EmbeddingManager } from './store/embedding-source.js';
 import type { StateStore } from './store/state.js';
-import { WING_CATALOG, WING_FALLBACK, type MemoryFamily, type MemoryLogger, type MemoryMode } from './types.js';
+import { WING_CATALOG, WING_FALLBACK, type MemoryFamily, type MemoryLogger, type MemoryMode, type MemoryRecord } from './types.js';
 import { isRoomSlug } from './metadata-validators.js';
 import { InProcMemoryBackend, type MemoryBackend } from './store/memory-backend.js';
 import { isWingCorner } from './store/session-modes.js';
@@ -59,7 +59,8 @@ import type { SessionRecalledStore } from './store/session-recalled.js';
 import { isFeedbackScore, type RecallFeedbackStore } from './store/recall-feedback.js';
 import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
-import { exportRecords, reconcileLedger, resolveMemoriesRoot } from './store/memory-md-export.js';
+import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
+import { disableProjectionFile } from './store/memory-md-disable.js';
 
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = (require('../package.json') as { version: string }).version;
@@ -671,9 +672,14 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const entry = feedback.rate(id, p.score);
       let retired = false;
       let announced = false;
+      // 退场**前**的记录快照（带 workspaceId/name）——失效联动要靠它算落点，
+      // 而 `retire` 只改 `valid_to`，不会动这两列，所以取在退场前后等价，取在前更直白。
+      let rec: MemoryRecord | undefined;
+      let fileDisabled: string | undefined;
       if (p.score === -1) {
-        const rec = stores.l1.getByIds([id])[0];
-        retired = stores.l1.retire([id], { at: new Date().toISOString(), reason: 'obsolete' }) > 0;
+        rec = stores.l1.getByIds([id])[0];
+        const retiredAt = new Date().toISOString();
+        retired = stores.l1.retire([id], { at: retiredAt, reason: 'obsolete' }) > 0;
         // 不再摘除：条目要留在列表里显示删除线（文本仍在上下文，直到压缩）；
         // 检索侧已由 detachL1FromRetrieval 阻断再注入。
         if (cfg.recallFeedback?.announce !== false && stores.notices !== undefined && rec !== undefined) {
@@ -682,6 +688,19 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           announced = true;
         }
         deps.logger.info(`[memory] 用户声明记忆过时并退场(session=${sessionId}, ${retired ? '已退场' : '本已退场'}): ${id}`);
+        // 失效联动（N11）：退场成立后才去动投射文件；它失败只影响“磁盘凭证”，
+        // 绝不回滚退场、也绝不抛（`disableProjectionFile` 内部收敛成 'failed'）。
+        if (retired && rec !== undefined && cfg.memExport?.enabled === true && stores.mdLedger !== undefined) {
+          fileDisabled = await disableProjectionFile({
+            // 传退场**后**的快照：渲染出的 frontmatter 才带 `retired: true`，
+            // 凭证自己就能说清它为什么存在。
+            record: { ...rec, validTo: Date.parse(retiredAt) || Date.now() },
+            cfgRoot: cfg.memExport.root,
+            dataDir: deps.dataDir,
+            ledger: stores.mdLedger,
+            logger: deps.logger,
+          });
+        }
       }
       return {
         id,
@@ -689,6 +708,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         rating: { last: entry.last, rated: entry.rated, mean: entry.mean, obsolete: entry.obsolete },
         retired,
         announced,
+        ...(fileDisabled === undefined ? {} : { fileDisabled }),
       };
     }
 
@@ -720,10 +740,10 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
-      const root = resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger);
       return exportRecords({
         records: stores.l1.all(),
-        root,
+        cfgRoot: exp.root,
+        dataDir: deps.dataDir,
         ledger: md,
         maxRecords: exp.maxRecords,
         timeBudgetMs: exp.timeBudgetMs,
@@ -737,10 +757,10 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
-      const root = resolveMemoriesRoot(exp.root, deps.dataDir, deps.logger);
       return reconcileLedger({
         records: stores.l1.all(),
-        root,
+        cfgRoot: exp.root,
+        dataDir: deps.dataDir,
         ledger: md,
         maxRecords: exp.maxRecords,
         timeBudgetMs: exp.timeBudgetMs,

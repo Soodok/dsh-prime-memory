@@ -10,7 +10,10 @@
 
 /** 导出报告（库 → 文件 + 账本）。`skipped` 含"路径越界/写盘失败"两类，都各自留痕。 */
 export interface MemExportReport {
+  /** 单根（无 workspace 归属那批落这里）；workspace 优先的条目不反映在此字段。 */
   root: string;
+  /** 落在各 workspace 根下的条数（N10）。 */
+  inWorkspace: number;
   /** 本次真正遍历过的条数（含未命中/跳过）。 */
   scanned: number;
   written: number;

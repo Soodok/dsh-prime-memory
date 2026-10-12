@@ -11,10 +11,9 @@
  * `timeBudgetMs` 双护栏，**扫描阶段也查墙钟**（只数条数不看时间，一条超大记录就能
  * 把一次点击挂死），剩余条数如实回报 `remaining`，由用户再点一次继续。
  */
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { digest, recordDigest, renderRecord } from './memory-md.js';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { digest, recordDigest, renderRecord, safeJoin, targetFor, resolveMemoriesRoot } from './memory-md.js';
 import type { MdLedgerEntry, MdLedgerStore } from './memory-md-ledger.js';
 // 报告形状住在纯类型文件里：`contract.ts` 也 import 它，但不能把 node 依赖拖进
 // client 编译程序（详见 `memory-md-types.ts` 的模块头）。
@@ -22,40 +21,13 @@ import type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 
 export type { MemExportReport, ReconcileCounts, ReconcileReport, ReconcileSample };
+// 路径纪律已收到 `memory-md.ts`（N10 后导出/对账/失效/归档四处共用）；这里再导一次
+// 只为不拆已有调用方（stats.ts 与用例都从本模块拿它们）。
+export { resolveMemoriesRoot, safeJoin };
 
 /** 让出事件循环一次：投射是长任务，不能独占 tick（面板会僵）。 */
 function tick(): Promise<void> {
   return new Promise((resolveTick) => { setImmediate(resolveTick); });
-}
-
-/**
- * 解析投射根目录。
- *
- * 给了 `cfgRoot` 就用它（必须是绝对路径且不含 `..`），否则默认 `<dataDir>/memories`。
- * **不合法只回退默认并 warn，绝不抛错**：投射是旁路，旁路配置写错不能弄挂记忆本体。
- */
-export function resolveMemoriesRoot(cfgRoot: string | undefined, dataDir: string, logger?: MemoryLogger): string {
-  const raw = (cfgRoot ?? '').trim();
-  if (raw.length === 0) return resolve(dataDir, 'memories');
-  if (!isAbsolute(raw) || raw.includes('..')) {
-    logger?.warn(`[memory] mdExport.root 不是无 .. 的绝对路径，回退默认根: ${raw}`);
-    return resolve(dataDir, 'memories');
-  }
-  return resolve(raw);
-}
-
-/**
- * 把渲染出的相对路径安全地拼到根下。
- *
- * 越界（绝对路径、`..` 跳出、盘符切换）一律返回 `undefined` 由调用方跳过并 warn——
- * 记录内容是人/模型写的，它可能包含 `../../`，这里必须是结构性挡死而不是"应该不会有"。
- */
-export function safeJoin(root: string, relPath: string): string | undefined {
-  if (relPath.length === 0 || isAbsolute(relPath)) return undefined;
-  const target = resolve(root, relPath);
-  const rel = relative(root, target);
-  if (rel.length === 0 || rel.startsWith('..') || isAbsolute(rel)) return undefined;
-  return target;
 }
 
 /** 导出报告等形状见 `memory-md-types.ts`（与契约层共用）。 */
@@ -63,7 +35,10 @@ export function safeJoin(root: string, relPath: string): string | undefined {
 export interface MemExportDeps {
   /** 待投射的记录（含退场行——退场也要有投影，否则文件树里看不到它）。 */
   records: readonly MemoryRecord[];
-  root: string;
+  /** `cfg.memExport.root`（空 = 默认单根）；workspace 优先时它只管无归属那批。 */
+  cfgRoot: string | undefined;
+  /** 插件数据目录：算默认单根用。 */
+  dataDir: string;
   ledger: MdLedgerStore;
   maxRecords: number;
   timeBudgetMs: number;
@@ -80,9 +55,10 @@ export interface MemExportDeps {
  * 对账把"我们没动过"误判成"文件被改过"。
  */
 export async function exportRecords(deps: MemExportDeps): Promise<MemExportReport> {
-  const { records, root, ledger, logger } = deps;
+  const { records, cfgRoot, dataDir, ledger, logger } = deps;
   const startedAt = (deps.now ?? Date.now)();
-  const report: MemExportReport = { root, scanned: 0, written: 0, unchanged: 0, skipped: 0, remaining: 0, capped: false };
+  const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
+  const report: MemExportReport = { root, inWorkspace: 0, scanned: 0, written: 0, unchanged: 0, skipped: 0, remaining: 0, capped: false };
 
   for (let i = 0; i < records.length; i++) {
     // 两条护栏都在**循环顶部**查：写在末尾会被 `continue` 跳过（自家测试抓过这个 bug）。
@@ -96,31 +72,34 @@ export async function exportRecords(deps: MemExportDeps): Promise<MemExportRepor
     // 下的 client 程序会把它当 `| undefined`——这里不猜，直接跳过。
     if (r === undefined) { report.skipped++; continue; }
     report.scanned++;
-    const { relPath, text } = renderRecord(r);
-    const target = safeJoin(root, relPath);
-    if (target === undefined) {
+    // N10：落点由 `targetFor` 一个函数定（workspace 优先），账本键 = 绝对路径。
+    const target = targetFor(r, cfgRoot, dataDir, logger);
+    if (target.absPath === undefined) {
       report.skipped++;
-      logger?.warn(`[memory] md 投射跳过（路径越界）: ${r.id} → ${relPath}`);
+      logger?.warn(`[memory] md 投射跳过（路径越界）: ${r.id} → ${target.relPath}`);
       continue;
     }
+    const { text } = renderRecord(r);
+    const abs = target.absPath;
+    if (target.inWorkspace) report.inWorkspace++;
     const dbDg = recordDigest(r);
     const fileDg = digest(text);
     try {
-      const existing = await readFile(target, 'utf8').catch(() => undefined);
+      const existing = await readFile(abs, 'utf8').catch(() => undefined);
       if (existing !== undefined && digest(existing) === fileDg) {
         report.unchanged++;
         // 内容没变也要补账：首轮导出前账本是空的，不补就永远判不出"文件被改过"。
-        if (ledger.get(relPath) === undefined) await stamp(ledger, r, relPath, dbDg, fileDg, target);
+        if (ledger.get(abs) === undefined) await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
         await tick();
         continue;
       }
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, text, 'utf8');
+      await mkdir(dirname(abs), { recursive: true });
+      await writeFile(abs, text, 'utf8');
       report.written++;
-      await stamp(ledger, r, relPath, dbDg, fileDg, target);
+      await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
     } catch (err) {
       report.skipped++;
-      logger?.warn(`[memory] md 投射单条失败(跳过，不影响其余): ${relPath} - ${err instanceof Error ? err.message : String(err)}`);
+      logger?.warn(`[memory] md 投射单条失败(跳过，不影响其余): ${abs} - ${err instanceof Error ? err.message : String(err)}`);
     }
     await tick();
   }
@@ -132,15 +111,17 @@ export async function exportRecords(deps: MemExportDeps): Promise<MemExportRepor
 async function stamp(
   ledger: MdLedgerStore,
   r: MemoryRecord,
+  root: string,
   relPath: string,
+  absPath: string,
   dbDg: string,
   fileDg: string,
-  target: string,
 ): Promise<void> {
-  const st = await stat(target).catch(() => undefined);
+  const st = await stat(absPath).catch(() => undefined);
   const entry: MdLedgerEntry = {
     id: r.id,
     extKey: r.extKey ?? '',
+    root,
     relPath,
     dbDigest: dbDg,
     fileDigest: fileDg,
@@ -148,14 +129,16 @@ async function stamp(
     fileSize: st?.size ?? 0,
     syncedAt: new Date().toISOString(),
   };
-  ledger.set(entry);
+  ledger.set(absPath, entry);
 }
 
 /** 四态计数与报告形状见 `memory-md-types.ts`。 */
 
 export interface ReconcileDeps {
   records: readonly MemoryRecord[];
-  root: string;
+  /** `cfg.memExport.root`（空 = 默认单根）；与 `dataDir` 一起交给 `targetFor`。 */
+  cfgRoot: string | undefined;
+  dataDir: string;
   ledger: MdLedgerStore;
   maxRecords: number;
   timeBudgetMs: number;
@@ -172,8 +155,9 @@ export interface ReconcileDeps {
  * 两方比较必吃一边，这就是账本要同时存两个 digest 的原因。
  */
 export async function reconcileLedger(deps: ReconcileDeps): Promise<ReconcileReport> {
-  const { records, root, ledger, logger } = deps;
+  const { records, cfgRoot, dataDir, ledger, logger } = deps;
   const startedAt = (deps.now ?? Date.now)();
+  const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
   const counts: ReconcileCounts = { firstTime: 0, same: 0, dbOnly: 0, fileOnly: 0, both: 0, missingFile: 0 };
   const samples: ReconcileSample[] = [];
   const sampleCap = deps.sampleCap ?? 10;
@@ -185,16 +169,18 @@ export async function reconcileLedger(deps: ReconcileDeps): Promise<ReconcileRep
     const r = records[i];
     scanned++;
     if (r === undefined) continue;
-    const { relPath } = renderRecord(r);
-    const entry = ledger.get(relPath);
+    // 与导出同一个 `targetFor`：否则“库侧算出的落点”与“导出时写的落点”会不一致，
+    // 对账就只会报“文件缺失”。
+    const target = targetFor(r, cfgRoot, dataDir, logger);
+    const abs = target.absPath;
+    const entry = abs === undefined ? undefined : ledger.get(abs);
     const push = (state: keyof ReconcileCounts): void => {
       counts[state]++;
-      if (samples.length < sampleCap) samples.push({ relPath, id: r.id, state });
+      if (samples.length < sampleCap) samples.push({ relPath: target.relPath, id: r.id, state });
     };
+    if (abs === undefined) { push('missingFile'); logger?.warn(`[memory] 对账遇到越界路径: ${target.relPath}`); await tick(); continue; }
     if (entry === undefined) { push('firstTime'); await tick(); continue; }
-    const target = safeJoin(root, relPath);
-    if (target === undefined) { push('missingFile'); logger?.warn(`[memory] 对账遇到越界路径: ${relPath}`); await tick(); continue; }
-    const existing = await readFile(target, 'utf8').catch(() => undefined);
+    const existing = await readFile(abs, 'utf8').catch(() => undefined);
     if (existing === undefined) { push('missingFile'); await tick(); continue; }
     // 两个“变了”都是**相对账本基线**判的，不能拿“与现在会渲染出的文本不同”当依据：
     // 库一变渲染就变，那会把纯粹的 dbOnly 误判成“文件也被人改了”，象限表全盘跑偏。

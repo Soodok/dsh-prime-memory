@@ -5,7 +5,9 @@ export interface MdLedgerEntry {
     id: string;
     /** 外部导入幂等键（有则可用于跨 id 认人）。 */
     extKey: string;
-    /** 相对投射根的路径（正斜杠），账本的键。 */
+    /** 投射根（workspace 根或单根），绝对路径。 */
+    root: string;
+    /** 相对根的路径（正斜杠），展示与归档分目录用。 */
     relPath: string;
     /** 上次投射时**库侧**的内容指纹。 */
     dbDigest: string;
@@ -29,10 +31,10 @@ export declare class MdLedgerStore {
     /** 逐条收窄：形状不符的条目丢弃，不让一条坏数据拖垮整表。 */
     private normalize;
     private ensureLoaded;
-    get(relPath: string): MdLedgerEntry | undefined;
+    get(absPath: string): MdLedgerEntry | undefined;
     all(): MdLedgerEntry[];
-    set(entry: MdLedgerEntry): void;
-    delete(relPath: string): boolean;
+    set(absPath: string, entry: MdLedgerEntry): void;
+    delete(absPath: string): boolean;
     /** 条目上限护栏：投射是"文件 ↔ 库"的一一对应，超量只可能是脏数据堆积。 */
     private prune;
     private schedulePersist;

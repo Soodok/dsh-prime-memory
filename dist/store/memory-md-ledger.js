@@ -7,8 +7,9 @@
  * 全部难点：两方比较必吃一边。
  *
  * 三条口径：
- * - **键是 `relPath` 不是 `name`**：账本记的是文件，relPath 才是文件的身份；name 只是
- *   它的一部分（同名不同 type 会落到两个不同文件里）。
+ * - **键是文件的绝对路径**（N10 后根不止一个：workspace 根 + 单根，同名不同 workspace 会
+ *   在 relPath 上撞车）。绝对路径由 `targetFor` 一函数算出，读写对账改名四处共用，
+ *   所以键是确定性的（Windows 下 `workspace_id` 是小写形态，这一点已写进 `memory-md.ts`）。
  * - **派生态**：删了这张表最坏是"下次全量重写一遍文件"，不会丢任何记忆。所以它
  *   **不进**快照哈希投影（`canonicalRecords` 不动），也不需要迁移。
  * - **写穿失败只降级为只读并 warn 一次**，绝不抛给调用方：投射是旁路，旁路不能弄挂主路。
@@ -60,6 +61,7 @@ export class MdLedgerStore {
         return {
             id: typeof raw.id === 'string' ? raw.id : '',
             extKey: typeof raw.extKey === 'string' ? raw.extKey : '',
+            root: typeof raw.root === 'string' ? raw.root : '',
             relPath: raw.relPath,
             dbDigest: raw.dbDigest,
             fileDigest: raw.fileDigest,
@@ -72,22 +74,22 @@ export class MdLedgerStore {
         if (!this.loaded)
             throw new Error('md 投射账本未初始化(先 await init())');
     }
-    get(relPath) {
+    get(absPath) {
         this.ensureLoaded();
-        return this.entries.get(relPath);
+        return this.entries.get(absPath);
     }
     all() {
         this.ensureLoaded();
         return [...this.entries.values()];
     }
-    set(entry) {
+    set(absPath, entry) {
         this.ensureLoaded();
-        this.entries.set(entry.relPath, entry);
+        this.entries.set(absPath, entry);
         this.schedulePersist();
     }
-    delete(relPath) {
+    delete(absPath) {
         this.ensureLoaded();
-        if (!this.entries.delete(relPath))
+        if (!this.entries.delete(absPath))
             return false;
         this.schedulePersist();
         return true;

@@ -11,44 +11,15 @@
  * `timeBudgetMs` 双护栏，**扫描阶段也查墙钟**（只数条数不看时间，一条超大记录就能
  * 把一次点击挂死），剩余条数如实回报 `remaining`，由用户再点一次继续。
  */
-import { isAbsolute, relative, resolve } from 'node:path';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { digest, recordDigest, renderRecord } from './memory-md.js';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { digest, recordDigest, renderRecord, safeJoin, targetFor, resolveMemoriesRoot } from './memory-md.js';
+// 路径纪律已收到 `memory-md.ts`（N10 后导出/对账/失效/归档四处共用）；这里再导一次
+// 只为不拆已有调用方（stats.ts 与用例都从本模块拿它们）。
+export { resolveMemoriesRoot, safeJoin };
 /** 让出事件循环一次：投射是长任务，不能独占 tick（面板会僵）。 */
 function tick() {
     return new Promise((resolveTick) => { setImmediate(resolveTick); });
-}
-/**
- * 解析投射根目录。
- *
- * 给了 `cfgRoot` 就用它（必须是绝对路径且不含 `..`），否则默认 `<dataDir>/memories`。
- * **不合法只回退默认并 warn，绝不抛错**：投射是旁路，旁路配置写错不能弄挂记忆本体。
- */
-export function resolveMemoriesRoot(cfgRoot, dataDir, logger) {
-    const raw = (cfgRoot ?? '').trim();
-    if (raw.length === 0)
-        return resolve(dataDir, 'memories');
-    if (!isAbsolute(raw) || raw.includes('..')) {
-        logger?.warn(`[memory] mdExport.root 不是无 .. 的绝对路径，回退默认根: ${raw}`);
-        return resolve(dataDir, 'memories');
-    }
-    return resolve(raw);
-}
-/**
- * 把渲染出的相对路径安全地拼到根下。
- *
- * 越界（绝对路径、`..` 跳出、盘符切换）一律返回 `undefined` 由调用方跳过并 warn——
- * 记录内容是人/模型写的，它可能包含 `../../`，这里必须是结构性挡死而不是"应该不会有"。
- */
-export function safeJoin(root, relPath) {
-    if (relPath.length === 0 || isAbsolute(relPath))
-        return undefined;
-    const target = resolve(root, relPath);
-    const rel = relative(root, target);
-    if (rel.length === 0 || rel.startsWith('..') || isAbsolute(rel))
-        return undefined;
-    return target;
 }
 /**
  * 单向导出：库 → 文件 + 账本。
@@ -58,9 +29,10 @@ export function safeJoin(root, relPath) {
  * 对账把"我们没动过"误判成"文件被改过"。
  */
 export async function exportRecords(deps) {
-    const { records, root, ledger, logger } = deps;
+    const { records, cfgRoot, dataDir, ledger, logger } = deps;
     const startedAt = (deps.now ?? Date.now)();
-    const report = { root, scanned: 0, written: 0, unchanged: 0, skipped: 0, remaining: 0, capped: false };
+    const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
+    const report = { root, inWorkspace: 0, scanned: 0, written: 0, unchanged: 0, skipped: 0, remaining: 0, capped: false };
     for (let i = 0; i < records.length; i++) {
         // 两条护栏都在**循环顶部**查：写在末尾会被 `continue` 跳过（自家测试抓过这个 bug）。
         if (report.scanned >= deps.maxRecords || (deps.now ?? Date.now)() - startedAt >= deps.timeBudgetMs) {
@@ -76,33 +48,37 @@ export async function exportRecords(deps) {
             continue;
         }
         report.scanned++;
-        const { relPath, text } = renderRecord(r);
-        const target = safeJoin(root, relPath);
-        if (target === undefined) {
+        // N10：落点由 `targetFor` 一个函数定（workspace 优先），账本键 = 绝对路径。
+        const target = targetFor(r, cfgRoot, dataDir, logger);
+        if (target.absPath === undefined) {
             report.skipped++;
-            logger?.warn(`[memory] md 投射跳过（路径越界）: ${r.id} → ${relPath}`);
+            logger?.warn(`[memory] md 投射跳过（路径越界）: ${r.id} → ${target.relPath}`);
             continue;
         }
+        const { text } = renderRecord(r);
+        const abs = target.absPath;
+        if (target.inWorkspace)
+            report.inWorkspace++;
         const dbDg = recordDigest(r);
         const fileDg = digest(text);
         try {
-            const existing = await readFile(target, 'utf8').catch(() => undefined);
+            const existing = await readFile(abs, 'utf8').catch(() => undefined);
             if (existing !== undefined && digest(existing) === fileDg) {
                 report.unchanged++;
                 // 内容没变也要补账：首轮导出前账本是空的，不补就永远判不出"文件被改过"。
-                if (ledger.get(relPath) === undefined)
-                    await stamp(ledger, r, relPath, dbDg, fileDg, target);
+                if (ledger.get(abs) === undefined)
+                    await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
                 await tick();
                 continue;
             }
-            await mkdir(dirname(target), { recursive: true });
-            await writeFile(target, text, 'utf8');
+            await mkdir(dirname(abs), { recursive: true });
+            await writeFile(abs, text, 'utf8');
             report.written++;
-            await stamp(ledger, r, relPath, dbDg, fileDg, target);
+            await stamp(ledger, r, target.root, target.relPath, abs, dbDg, fileDg);
         }
         catch (err) {
             report.skipped++;
-            logger?.warn(`[memory] md 投射单条失败(跳过，不影响其余): ${relPath} - ${err instanceof Error ? err.message : String(err)}`);
+            logger?.warn(`[memory] md 投射单条失败(跳过，不影响其余): ${abs} - ${err instanceof Error ? err.message : String(err)}`);
         }
         await tick();
     }
@@ -110,11 +86,12 @@ export async function exportRecords(deps) {
     return report;
 }
 /** 写账：文件侧字段取**落盘后**的真实 stat，不取内存值（否则对账基线就是假的）。 */
-async function stamp(ledger, r, relPath, dbDg, fileDg, target) {
-    const st = await stat(target).catch(() => undefined);
+async function stamp(ledger, r, root, relPath, absPath, dbDg, fileDg) {
+    const st = await stat(absPath).catch(() => undefined);
     const entry = {
         id: r.id,
         extKey: r.extKey ?? '',
+        root,
         relPath,
         dbDigest: dbDg,
         fileDigest: fileDg,
@@ -122,7 +99,7 @@ async function stamp(ledger, r, relPath, dbDg, fileDg, target) {
         fileSize: st?.size ?? 0,
         syncedAt: new Date().toISOString(),
     };
-    ledger.set(entry);
+    ledger.set(absPath, entry);
 }
 /**
  * 只读对账：按账本基线判每条记录落在哪个象限。
@@ -132,8 +109,9 @@ async function stamp(ledger, r, relPath, dbDg, fileDg, target) {
  * 两方比较必吃一边，这就是账本要同时存两个 digest 的原因。
  */
 export async function reconcileLedger(deps) {
-    const { records, root, ledger, logger } = deps;
+    const { records, cfgRoot, dataDir, ledger, logger } = deps;
     const startedAt = (deps.now ?? Date.now)();
+    const root = resolveMemoriesRoot(cfgRoot, dataDir, logger);
     const counts = { firstTime: 0, same: 0, dbOnly: 0, fileOnly: 0, both: 0, missingFile: 0 };
     const samples = [];
     const sampleCap = deps.sampleCap ?? 10;
@@ -148,26 +126,28 @@ export async function reconcileLedger(deps) {
         scanned++;
         if (r === undefined)
             continue;
-        const { relPath } = renderRecord(r);
-        const entry = ledger.get(relPath);
+        // 与导出同一个 `targetFor`：否则“库侧算出的落点”与“导出时写的落点”会不一致，
+        // 对账就只会报“文件缺失”。
+        const target = targetFor(r, cfgRoot, dataDir, logger);
+        const abs = target.absPath;
+        const entry = abs === undefined ? undefined : ledger.get(abs);
         const push = (state) => {
             counts[state]++;
             if (samples.length < sampleCap)
-                samples.push({ relPath, id: r.id, state });
+                samples.push({ relPath: target.relPath, id: r.id, state });
         };
+        if (abs === undefined) {
+            push('missingFile');
+            logger?.warn(`[memory] 对账遇到越界路径: ${target.relPath}`);
+            await tick();
+            continue;
+        }
         if (entry === undefined) {
             push('firstTime');
             await tick();
             continue;
         }
-        const target = safeJoin(root, relPath);
-        if (target === undefined) {
-            push('missingFile');
-            logger?.warn(`[memory] 对账遇到越界路径: ${relPath}`);
-            await tick();
-            continue;
-        }
-        const existing = await readFile(target, 'utf8').catch(() => undefined);
+        const existing = await readFile(abs, 'utf8').catch(() => undefined);
         if (existing === undefined) {
             push('missingFile');
             await tick();

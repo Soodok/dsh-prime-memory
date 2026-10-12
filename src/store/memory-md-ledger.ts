@@ -7,8 +7,9 @@
  * 全部难点：两方比较必吃一边。
  *
  * 三条口径：
- * - **键是 `relPath` 不是 `name`**：账本记的是文件，relPath 才是文件的身份；name 只是
- *   它的一部分（同名不同 type 会落到两个不同文件里）。
+ * - **键是文件的绝对路径**（N10 后根不止一个：workspace 根 + 单根，同名不同 workspace 会
+ *   在 relPath 上撞车）。绝对路径由 `targetFor` 一函数算出，读写对账改名四处共用，
+ *   所以键是确定性的（Windows 下 `workspace_id` 是小写形态，这一点已写进 `memory-md.ts`）。
  * - **派生态**：删了这张表最坏是"下次全量重写一遍文件"，不会丢任何记忆。所以它
  *   **不进**快照哈希投影（`canonicalRecords` 不动），也不需要迁移。
  * - **写穿失败只降级为只读并 warn 一次**，绝不抛给调用方：投射是旁路，旁路不能弄挂主路。
@@ -24,7 +25,9 @@ export interface MdLedgerEntry {
   id: string;
   /** 外部导入幂等键（有则可用于跨 id 认人）。 */
   extKey: string;
-  /** 相对投射根的路径（正斜杠），账本的键。 */
+  /** 投射根（workspace 根或单根），绝对路径。 */
+  root: string;
+  /** 相对根的路径（正斜杠），展示与归档分目录用。 */
   relPath: string;
   /** 上次投射时**库侧**的内容指纹。 */
   dbDigest: string;
@@ -85,6 +88,7 @@ export class MdLedgerStore {
     return {
       id: typeof raw.id === 'string' ? raw.id : '',
       extKey: typeof raw.extKey === 'string' ? raw.extKey : '',
+      root: typeof raw.root === 'string' ? raw.root : '',
       relPath: raw.relPath,
       dbDigest: raw.dbDigest,
       fileDigest: raw.fileDigest,
@@ -98,9 +102,9 @@ export class MdLedgerStore {
     if (!this.loaded) throw new Error('md 投射账本未初始化(先 await init())');
   }
 
-  get(relPath: string): MdLedgerEntry | undefined {
+  get(absPath: string): MdLedgerEntry | undefined {
     this.ensureLoaded();
-    return this.entries.get(relPath);
+    return this.entries.get(absPath);
   }
 
   all(): MdLedgerEntry[] {
@@ -108,15 +112,15 @@ export class MdLedgerStore {
     return [...this.entries.values()];
   }
 
-  set(entry: MdLedgerEntry): void {
+  set(absPath: string, entry: MdLedgerEntry): void {
     this.ensureLoaded();
-    this.entries.set(entry.relPath, entry);
+    this.entries.set(absPath, entry);
     this.schedulePersist();
   }
 
-  delete(relPath: string): boolean {
+  delete(absPath: string): boolean {
     this.ensureLoaded();
-    if (!this.entries.delete(relPath)) return false;
+    if (!this.entries.delete(absPath)) return false;
     this.schedulePersist();
     return true;
   }
