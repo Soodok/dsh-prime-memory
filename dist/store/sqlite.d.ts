@@ -119,6 +119,8 @@ export declare class MemoryDb {
      * (三处列清单:DDL / insert 语句 / 本函数),故在此留下警示。
      */
     private backfillL1Fts;
+    /** 已退场 L1 行数(回灌留痕用)。失败返回 -1——宁可日志写“未知”,也不假装 0 条。 */
+    private countL1Retired;
     /** 重建后的 l0_fts 从 l0_conversations 全量回灌(仅 drop 重建时调用;iterate 流式)。 */
     private backfillL0Fts;
     private readEmbeddingMeta;

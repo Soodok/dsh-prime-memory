@@ -34,6 +34,21 @@ const require = createRequire(import.meta.url);
 
 const TAG = '[memory][sqlite]';
 
+/**
+ * 退场判据的 **SQL 侧同口径表达**（与 `isRetired` / `upsertL1InTx` 里的 `retiredNow` 一一对应）：
+ * `valid_to` 非空 **或** `metadata_json` 带退场标记。
+ *
+ * 为什么仓内只能有一份：退场记录有**三条检索面写路径绕过 upsert 漏斗**——
+ * FTS 重建回灌、增量重嵌入取数、补齐判据计数。任一处漏了就是：
+ * ① 退场行被放回检索面（前两处；重嵌入是 30 分钟一轮，比 FTS 重建更易命中）；
+ * ② 补齐判据永不收敛（第三处：缺向量的退场行永远算“还差”，却永远不该被补）。
+ * 判据分头写，三处迟早各自漂移 —— 故集中成这一个函数。
+ */
+function retiredL1Sql(alias?: string): string {
+  const p = alias ? `${alias}.` : '';
+  return `COALESCE(${p}valid_to, '') <> '' OR ${p}metadata_json LIKE '%"${SUPERSEDE_METADATA_KEY}"%'`;
+}
+
 export interface StoreInitResult {
   /** embedding 配置(provider/model/维度)变化,需要后台全量重嵌入。 */
   needsReindex: boolean;
@@ -57,7 +72,7 @@ import { RECEIPTS_MAX_RUNS, RECEIPTS_QUERY_LIMIT_MAX } from './receipts.js';
 import type { L1Receipt, ReceiptQuery, ReceiptRetentionOptions } from './receipts.js';
 import type { ConflictClaimGroup, ConflictPair, ConflictRejected, ConflictResolution, ConflictType } from './conflicts.js';
 import { DEFER_MAX, groupConflictPairsByClaim, normalizeClaimKey, normalizeConflictType } from './conflicts.js';
-import { isRetired, readSupersedeMarker, stripSupersedeMarker, withSupersedeMarker, type SupersedeInfo } from './supersede.js';
+import { isRetired, readSupersedeMarker, stripSupersedeMarker, withSupersedeMarker, SUPERSEDE_METADATA_KEY, type SupersedeInfo } from './supersede.js';
 
 /** L1 检索命中(含 BM25/余弦归一分数)。 */
 export interface L1SearchHit {
@@ -831,11 +846,15 @@ export class MemoryDb {
    */
   private backfillL1Fts(): void {
     let count = 0;
+    // 退场行不回灌(理由见 `retiredL1Sql`)。跳过数单独数一次:重建是低频动作,
+    // 多一条 COUNT 换“运维看得见跳过了多少”比静默少灌划算。
+    const retiredSkipped = this.countL1Retired();
     const stmt = this.db
       .prepare(
         `SELECT record_id, content, type, priority, scene_name, session_id, version,
                 timestamp_str, timestamp_start, timestamp_end, metadata_json, family,
-                scope, workspace_id FROM l1_records`,
+                scope, workspace_id FROM l1_records
+         WHERE NOT (${retiredL1Sql()})`,
       );
     for (const r of stmt.iterate() as Iterable<Record<string, unknown>>) {
       try {
@@ -863,7 +882,19 @@ export class MemoryDb {
         /* 单行失败跳过(吞+计数:count 与总量比对可发现大面积失败) */
       }
     }
-    if (count > 0) this.logger?.info(`${TAG} l1_fts 回灌 ${count} 行`);
+    if (count > 0 || retiredSkipped !== 0) {
+      this.logger?.info(`${TAG} l1_fts 回灌 ${count} 行(跳过已退场 ${retiredSkipped < 0 ? '计数失败' : retiredSkipped} 行)`);
+    }
+  }
+
+  /** 已退场 L1 行数(回灌留痕用)。失败返回 -1——宁可日志写“未知”,也不假装 0 条。 */
+  private countL1Retired(): number {
+    try {
+      const row = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records WHERE ${retiredL1Sql()}`).all()[0] as { n: number };
+      return row?.n ?? 0;
+    } catch {
+      return -1;
+    }
   }
 
   /** 重建后的 l0_fts 从 l0_conversations 全量回灌(仅 drop 重建时调用;iterate 流式)。 */
@@ -2481,7 +2512,7 @@ export class MemoryDb {
         .prepare(
           `SELECT COUNT(*) AS n FROM ${srcTable} r
            LEFT JOIN ${vecTable} v ON v.record_id = r.record_id
-           WHERE v.record_id IS NULL${notInClause('r.record_id', exclude)}`,
+           WHERE v.record_id IS NULL${kind === 'l1' ? ` AND NOT (${retiredL1Sql('r')})` : ''}${notInClause('r.record_id', exclude)}`,
         )
         .all(...notInParams(exclude))[0] as { n: number };
       return row?.n ?? 0;
@@ -2504,7 +2535,7 @@ export class MemoryDb {
         .prepare(
           `SELECT r.record_id AS id, r.content FROM l1_records r
            LEFT JOIN l1_vec v ON v.record_id = r.record_id
-           WHERE v.record_id IS NULL${notInClause('r.record_id', exclude)}`,
+           WHERE v.record_id IS NULL AND NOT (${retiredL1Sql('r')})${notInClause('r.record_id', exclude)}`,
         )
         .all(...notInParams(exclude)) as Array<{ id: string; content: string }>;
     } catch (err) {
