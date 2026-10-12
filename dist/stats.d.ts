@@ -137,8 +137,10 @@ export interface EndpointDeps {
         recalled?: SessionRecalledStore;
         /** 召回相关度反馈 sidecar（未装配 = recall-feedback 不可用、列表不带 userRelevance）。 */
         feedback?: RecallFeedbackStore;
-        /** 「已声明过时」待播报队列（与 feedback 同进退）。 */
+        /** 「已声明过时」待播报队列（与 feedback 同进退）。*/
         notices?: ObsoleteNoticeStore;
+        /** md 投射指纹账本（N9；未装配 = mem-export / mem-reconcile 不可用）。*/
+        mdLedger?: import('./store/memory-md-ledger.js').MdLedgerStore;
     };
     status?: MemoryStatusSource;
     live?: LiveSettingsHandle;

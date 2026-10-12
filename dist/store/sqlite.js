@@ -1135,7 +1135,7 @@ export class MemoryDb {
                 .prepare("SELECT COUNT(*) AS n FROM l1_records WHERE COALESCE(valid_to, '') <> ''")
                 .get();
             const rows = this.db
-                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability
+                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name
            FROM l1_records WHERE COALESCE(valid_to, '') <> '' ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
                 .all(opts.limit, opts.offset);
             return { items: rows.map(rowToRecord), total: Number(totalRow?.n ?? 0) };
@@ -1456,7 +1456,7 @@ export class MemoryDb {
         if (this.degraded)
             return [];
         const rows = this.db
-            .prepare('SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability FROM l1_records')
+            .prepare('SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name FROM l1_records')
             .all();
         return rows.map(rowToRecord);
     }
@@ -1801,7 +1801,7 @@ export class MemoryDb {
             const whereSql = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
             const totalRow = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records${whereSql}`).get(...params);
             const rows = this.db
-                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability FROM l1_records${whereSql} ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
+                .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name FROM l1_records${whereSql} ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
                 .all(...params, opts.limit, opts.offset);
             return { items: rows.map(rowToRecord), total: totalRow?.n ?? 0 };
         }

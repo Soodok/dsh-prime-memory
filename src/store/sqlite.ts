@@ -1286,7 +1286,7 @@ export class MemoryDb {
         .get() as { n: number | bigint };
       const rows = this.db
         .prepare(
-          `SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability
+          `SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name
            FROM l1_records WHERE COALESCE(valid_to, '') <> '' ORDER BY updated_time DESC LIMIT ? OFFSET ?`,
         )
         .all(opts.limit, opts.offset) as unknown as L1MetaRow[];
@@ -1605,7 +1605,7 @@ export class MemoryDb {
     if (this.degraded) return [];
     const rows = this.db
       .prepare(
-        'SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability FROM l1_records',
+        'SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name FROM l1_records',
       )
       .all() as unknown as L1MetaRow[];
     return rows.map(rowToRecord);
@@ -2031,7 +2031,7 @@ export class MemoryDb {
       const totalRow = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records${whereSql}`).get(...params) as { n: number };
       const rows = this.db
         .prepare(
-          `SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability FROM l1_records${whereSql} ORDER BY updated_time DESC LIMIT ? OFFSET ?`,
+          `SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name FROM l1_records${whereSql} ORDER BY updated_time DESC LIMIT ? OFFSET ?`,
         )
         .all(...params, opts.limit, opts.offset) as unknown as L1MetaRow[];
       return { items: rows.map(rowToRecord), total: totalRow?.n ?? 0 };

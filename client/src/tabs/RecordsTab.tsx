@@ -6,6 +6,7 @@ import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NSel, type NSelOption } from '../ui/NSel.js';
 import { NButton, NInput } from '../ui/primitives.js';
+import { ArchiveSection } from './ArchiveSection.js';
 
 interface QueryConds {
   query: string;
@@ -675,6 +676,8 @@ export function RecordsTab(props: { rpc: RpcFn }) {
           </NButton>
         </div>
       ) : null}
+      {/* 外部存档节（N8）：导出/对账两个真动作 + 一枚标着“待 P2”的同步位。 */}
+      <ArchiveSection rpc={rpc} />
     </div>
   );
 }

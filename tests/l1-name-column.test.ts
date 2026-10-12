@@ -118,6 +118,24 @@ describe('l1_records.name 列', () => {
     expect(store.getByIds(['d1'])[0]!.updatedAt).toBe(before);
   });
 
+  it('name 在**每一条**读回路径上都在（新列最容易被某个 SELECT 清单漏掉）', async () => {
+    // 这一条不是凑数：实现时 `getAllL1`/`listL1`/已退场列表三处 SELECT 都没加 name，
+    // 导出测才把它抱出来——记录写进去有名字、读出来没名字，投射器就会给同一条
+    // 记忆反复换文件名（回落链看的是 name）。四张读口一起钉，漏一个就红。
+    const { db, store } = await setup();
+    await store.appendNew([rec('f1', '四条读口都要带名字', { name: 'four-read-paths' })]);
+    const byIds = store.getByIds(['f1'])[0]!;
+    const viaAll = store.all().find((r) => r.id === 'f1')!;
+    const viaList = store.list({ limit: 10, offset: 0 }).items.find((r) => r.id === 'f1')!;
+    expect(byIds.name).toBe('four-read-paths');
+    expect(viaAll.name).toBe('four-read-paths');
+    expect(viaList.name).toBe('four-read-paths');
+    // 退场后走“已退场列表”那条 SELECT，同样不能丢名字。
+    store.retire(['f1'], { at: new Date().toISOString(), reason: 'manual' });
+    const retired = db.listRetiredL1({ limit: 10, offset: 0 }).items.find((r) => r.id === 'f1')!;
+    expect(retired.name).toBe('four-read-paths');
+  });
+
   it('name 不进快照哈希投影：同一集合改名字前后 hashRecords 不变', async () => {
     const { store } = await setup();
     await store.appendNew([rec('e1', '要改名的记录'), rec('e2', '另一条记录')]);

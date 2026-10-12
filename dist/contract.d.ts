@@ -1455,6 +1455,16 @@ export interface RecallFeedbackResponse {
     announced: boolean;
 }
 /**
+ * dsh-memory/mem-export / mem-reconcile：md 投射的导出与对账（P1 + N8/N9）。
+ *
+ * 两个都无入参（护栏条数/墙钟来自 config），响应形状直接取存储层的报告类型
+ * ——同一事实源，避开“契约手抄一份然后与实现漂移”。导出**不写库**，对账**什么都不写**。
+ */
+export type MemExportRequest = Record<string, never>;
+export type MemExportResponse = import('./store/memory-md-types.js').MemExportReport;
+export type MemReconcileRequest = Record<string, never>;
+export type MemReconcileResponse = import('./store/memory-md-types.js').ReconcileReport;
+/**
  * dsh-memory/workspace-relink：按内容路由把存量记忆归到 workspace。
  *
  * 只写 `workspace_id` 列——**不改 `scope`**，所以可见性今天一行不变
@@ -1537,6 +1547,8 @@ export interface DshMemoryRequestMap {
     'dsh-memory/session-recalled': SessionRecalledRequest;
     'dsh-memory/recall-feedback': RecallFeedbackRequest;
     'dsh-memory/workspace-relink': WorkspaceRelinkRequest;
+    'dsh-memory/mem-export': MemExportRequest;
+    'dsh-memory/mem-reconcile': MemReconcileRequest;
     'dsh-memory/skills-action': SkillsActionRequest;
 }
 export interface DshMemoryResponseMap {
@@ -1594,6 +1606,8 @@ export interface DshMemoryResponseMap {
     'dsh-memory/session-recalled': SessionRecalledResponse;
     'dsh-memory/recall-feedback': RecallFeedbackResponse;
     'dsh-memory/workspace-relink': WorkspaceRelinkResponse;
+    'dsh-memory/mem-export': MemExportResponse;
+    'dsh-memory/mem-reconcile': MemReconcileResponse;
     'dsh-memory/skills-action': SkillsActionResponse;
 }
 /** 全部端点名(client 调用与 host case 表的共用字面量来源)。 */
