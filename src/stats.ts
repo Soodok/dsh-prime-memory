@@ -61,6 +61,7 @@ import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
 import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
 import { disableProjectionFile } from './store/memory-md-disable.js';
+import { syncFromFiles } from './pipeline/md-sync.js';
 
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = (require('../package.json') as { version: string }).version;
@@ -141,6 +142,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/workspace-relink',
   'dsh-memory/mem-export',
   'dsh-memory/mem-reconcile',
+  'dsh-memory/mem-sync',
   'dsh-memory/skills-action',
 ];
 
@@ -764,6 +766,26 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         ledger: md,
         maxRecords: exp.maxRecords,
         timeBudgetMs: exp.timeBudgetMs,
+        logger: deps.logger,
+      });
+    }
+
+    case 'dsh-memory/mem-sync': {
+      // P2 反向同步：文件 → 库。与导出的**风险不对称**——导出只写文件，本项会写库，
+      // 所以多两道门：要先开投射（没导出过 = 账本为空 = 判不出“谁变了”），要高权限。
+      const syn = cfg.mdSync;
+      if (syn?.enabled !== true) throw new Error('md 反向同步未开启（cfg.mdSync.enabled）');
+      if (cfg.memExport?.enabled !== true) throw new Error('md 反向同步需先开启 md 投射（cfg.memExport.enabled）');
+      if (!live?.get().memoryMutate) throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能回灌文件侧修改。');
+      const md = stores.mdLedger;
+      if (md === undefined) throw new Error('md 投射账本未装配');
+      return syncFromFiles({
+        store: stores.l1,
+        ledger: md,
+        cfgRoot: cfg.memExport.root,
+        dataDir: deps.dataDir,
+        maxFiles: syn.maxFiles,
+        timeBudgetMs: syn.timeBudgetMs,
         logger: deps.logger,
       });
     }

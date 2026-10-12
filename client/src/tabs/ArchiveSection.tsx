@@ -18,10 +18,11 @@ import { S } from '../styles.js';
 import type { RpcFn } from '../rpc.js';
 import type { DshMemoryResponseMap } from '../../../src/contract.js';
 
-/** 本节会发的两个端点（第三个属于 P2，现在只占位）。 */
-type ArchiveEndpoint = 'dsh-memory/mem-export' | 'dsh-memory/mem-reconcile';
+/** 本节会发的三个端点（导出 / 对账 / 反向同步）。 */
+type ArchiveEndpoint = 'dsh-memory/mem-export' | 'dsh-memory/mem-reconcile' | 'dsh-memory/mem-sync';
 type ExportReport = DshMemoryResponseMap['dsh-memory/mem-export'];
 type ReconcileReport = DshMemoryResponseMap['dsh-memory/mem-reconcile'];
+type SyncReport = DshMemoryResponseMap['dsh-memory/mem-sync'];
 
 const HINT_STYLE = { fontSize: 12, color: 'var(--dsh-mem-text-3)', lineHeight: '18px' } as const;
 const ROOT_STYLE = { fontSize: 11, color: 'var(--dsh-mem-text-3)', wordBreak: 'break-all' } as const;
@@ -55,12 +56,20 @@ function lineOfReconcile(rep: ReconcileReport): string {
   return parts.join(' · ') + (rep.capped ? `（本次只扫了 ${rep.scanned} 条，未扫全）` : '');
 }
 
+function lineOfSync(rep: SyncReport): string {
+  const head = `回灌 ${rep.imported} · 重写文件 ${rep.rendered} · 退场 ${rep.retired} · 一致 ${rep.same}`;
+  const tail = rep.pending > 0 ? ` · 两边都变 ${rep.pending} 条已挂账（两侧都没动）` : '';
+  const extra = rep.newFiles > 0 ? ` · 新文件 ${rep.newFiles} 个未入库（导入须走写入内核）` : '';
+  return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
+}
+
 /** 「外部存档」一节。 */
 export function ArchiveSection(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
   const [busy, setBusy] = useState(false);
   const [exported, setExported] = useState<ExportReport | undefined>(undefined);
   const [recon, setRecon] = useState<ReconcileReport | undefined>(undefined);
+  const [synced, setSynced] = useState<SyncReport | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
 
   const run = <K extends ArchiveEndpoint>(method: K, sink: (rep: DshMemoryResponseMap[K]) => void): void => {
@@ -96,18 +105,20 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
           与存档对账
         </NButton>
         <NButton
-          disabled
-          title="文件 → 库的反向同步属于 P2，尚未实装；届时需要高权限模式（memoryMutate）"
+          disabled={busy}
+          title="文件 → 库：只有文件变过的回灌入库，`.disable` 后缀的退场；两边都变的那些两侧都不动，只挂账。会写库，因此需要高权限模式"
+          onClick={() => { run('dsh-memory/mem-sync', setSynced); }}
         >
           从存档同步回库
         </NButton>
       </div>
       <div style={{ ...HINT_STYLE, marginTop: 6 }}>
         {error !== undefined ? `失败：${error}` : null}
-        {error === undefined && exported !== undefined ? lineOf(exported) : null}
-        {error === undefined && exported === undefined && recon !== undefined ? lineOfReconcile(recon) : null}
-        {error === undefined && exported === undefined && recon === undefined
-          ? '导出=库→文件；对账=只读比较；同步（文件→库）待 P2。'
+        {error === undefined && synced !== undefined ? lineOfSync(synced) : null}
+        {error === undefined && synced === undefined && exported !== undefined ? lineOf(exported) : null}
+        {error === undefined && synced === undefined && exported === undefined && recon !== undefined ? lineOfReconcile(recon) : null}
+        {error === undefined && synced === undefined && exported === undefined && recon === undefined
+          ? '导出=库→文件；对账=只读比较；同步=文件→库（需开启 md 投射与高权限模式）。'
           : null}
       </div>
       {recon !== undefined && error === undefined ? (

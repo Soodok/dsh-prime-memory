@@ -160,6 +160,18 @@ export interface MemoryConfig {
         /** 单次导出的墙钟预算(ms)。 */
         timeBudgetMs: number;
     };
+    /**
+     * P2 反向同步（md 文件 → 索引）：整面**默认关**。它与 `memExport` 分开开关是因为
+     * **风险不对称**——导出只写文件，同步会写库。裁决全靠账本：账本为空（从没导出过）
+     * 时同步什么都判不出来，所以必须先开 `memExport` 再开本项。
+     */
+    mdSync: {
+        enabled: boolean;
+        /** 单轮扫描文件数护栏。 */
+        maxFiles: number;
+        /** 单轮墙钟预算(ms)。 */
+        timeBudgetMs: number;
+    };
     /** 使用场景（G1）：抽取时产出“何时该浮现”数组落 metadata.dsh_usage_scenario。默认关，关时抽取产物逐字不变。 */
     usageScenario: {
         enabled: boolean;
@@ -684,6 +696,15 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         root: Schema<string, string, "defined">;
         maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    mdSync: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        maxFiles: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        maxFiles: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
     usageScenario: Schema<Schemastery.ObjectS<NoInfer<{
@@ -1302,6 +1323,15 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         root: Schema<string, string, "defined">;
         maxRecords: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, "plain">;
+    mdSync: Schema<Schemastery.ObjectS<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        maxFiles: Schema<number, number, "defined">;
+        timeBudgetMs: Schema<number, number, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: Schema<boolean, boolean, "defined">;
+        maxFiles: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
     usageScenario: Schema<Schemastery.ObjectS<NoInfer<{

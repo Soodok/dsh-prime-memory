@@ -1502,6 +1502,16 @@ export type MemReconcileRequest = Record<string, never>;
 export type MemReconcileResponse = import('./store/memory-md-types.js').ReconcileReport;
 
 /**
+ * dsh-memory/mem-sync：P2 反向同步（md 文件 → 索引）。
+ *
+ * 与 `mem-reconcile` 的区别是风险不对称：对账**什么都不写**，同步**会写库**（回灌
+ * 文件侧修改、把 `.disable` 对应的记录退场）。所以服务端除了配置门还要高权限门。
+ * 两边都变的那批**两侧都不动**，只在 `pending` 里挂账等人裁决。
+ */
+export type MemSyncRequest = Record<string, never>;
+export type MemSyncResponse = import('./store/memory-md-types.js').MdSyncReport;
+
+/**
  * dsh-memory/workspace-relink：按内容路由把存量记忆归到 workspace。
  *
  * 只写 `workspace_id` 列——**不改 `scope`**，所以可见性今天一行不变
@@ -1587,6 +1597,7 @@ export interface DshMemoryRequestMap {
   'dsh-memory/workspace-relink': WorkspaceRelinkRequest;
   'dsh-memory/mem-export': MemExportRequest;
   'dsh-memory/mem-reconcile': MemReconcileRequest;
+  'dsh-memory/mem-sync': MemSyncRequest;
   'dsh-memory/skills-action': SkillsActionRequest;
 }
 
@@ -1647,6 +1658,7 @@ export interface DshMemoryResponseMap {
   'dsh-memory/workspace-relink': WorkspaceRelinkResponse;
   'dsh-memory/mem-export': MemExportResponse;
   'dsh-memory/mem-reconcile': MemReconcileResponse;
+  'dsh-memory/mem-sync': MemSyncResponse;
   'dsh-memory/skills-action': SkillsActionResponse;
 }
 

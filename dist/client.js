@@ -3635,11 +3635,18 @@ var __defProp = Object.defineProperty;
 		  ];
 		  return parts.join(" · ") + (rep.capped ? `（本次只扫了 ${rep.scanned} 条，未扫全）` : "");
 		}
+		function lineOfSync(rep) {
+		  const head = `回灌 ${rep.imported} · 重写文件 ${rep.rendered} · 退场 ${rep.retired} · 一致 ${rep.same}`;
+		  const tail = rep.pending > 0 ? ` · 两边都变 ${rep.pending} 条已挂账（两侧都没动）` : "";
+		  const extra = rep.newFiles > 0 ? ` · 新文件 ${rep.newFiles} 个未入库（导入须走写入内核）` : "";
+		  return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
+		}
 		function ArchiveSection(props) {
 		  const rpc = props.rpc;
 		  const [busy, setBusy] = (0, import_react17.useState)(false);
 		  const [exported, setExported] = (0, import_react17.useState)(void 0);
 		  const [recon, setRecon] = (0, import_react17.useState)(void 0);
+		  const [synced, setSynced] = (0, import_react17.useState)(void 0);
 		  const [error, setError] = (0, import_react17.useState)(void 0);
 		  const run = (method, sink) => {
 		    if (busy) return;
@@ -3680,17 +3687,21 @@ var __defProp = Object.defineProperty;
 		      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
 		        NButton,
 		        {
-		          disabled: true,
-		          title: "文件 → 库的反向同步属于 P2，尚未实装；届时需要高权限模式（memoryMutate）",
+		          disabled: busy,
+		          title: "文件 → 库：只有文件变过的回灌入库，`.disable` 后缀的退场；两边都变的那些两侧都不动，只挂账。会写库，因此需要高权限模式",
+		          onClick: () => {
+		            run("dsh-memory/mem-sync", setSynced);
+		          },
 		          children: "从存档同步回库"
 		        }
 		      )
 		    ] }),
 		    /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { style: { ...HINT_STYLE, marginTop: 6 }, children: [
 		      error !== void 0 ? `失败：${error}` : null,
-		      error === void 0 && exported !== void 0 ? lineOf(exported) : null,
-		      error === void 0 && exported === void 0 && recon !== void 0 ? lineOfReconcile(recon) : null,
-		      error === void 0 && exported === void 0 && recon === void 0 ? "导出=库→文件；对账=只读比较；同步（文件→库）待 P2。" : null
+		      error === void 0 && synced !== void 0 ? lineOfSync(synced) : null,
+		      error === void 0 && synced === void 0 && exported !== void 0 ? lineOf(exported) : null,
+		      error === void 0 && synced === void 0 && exported === void 0 && recon !== void 0 ? lineOfReconcile(recon) : null,
+		      error === void 0 && synced === void 0 && exported === void 0 && recon === void 0 ? "导出=库→文件；对账=只读比较；同步=文件→库（需开启 md 投射与高权限模式）。" : null
 		    ] }),
 		    recon !== void 0 && error === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime17.jsxs)("div", { style: HINT_STYLE, children: [
 		      "最近差异样本：",
