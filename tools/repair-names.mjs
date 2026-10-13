@@ -821,17 +821,22 @@ export async function applyRenames(deps) {
 
 /** 在 `<dataDir>/memories-orphans/<批次>/[home|ws]/<relPath>` 里找被归档的旧文件（含数字尾巴）。 */
 async function findArchivedOld(deps, row) {
+  // hooks 必须在这里也兜底：`runCli` 调 revert 时不传 hooks，而本函数直接摸
+  // `deps.hooks.exists` —— 真机第一次跑 `--revert` 就是死在这句上
+  // （74 条全报 `restore-file:Cannot read properties of undefined (reading 'exists')`）。
+  // apply 侧有 `deps.hooks ?? defaultHooks`，revert 侧漏了——同一对函数必须同一条默认值纪律。
+  const hooks = deps.hooks ?? defaultHooks;
   const base = join(deps.dataDir, 'memories-orphans');
-  if (!deps.hooks.exists(base)) return undefined;
+  if (!hooks.exists(base)) return undefined;
   let stamps;
-  try { stamps = await deps.hooks.readdir(base); } catch { return undefined; }
+  try { stamps = await hooks.readdir(base); } catch { return undefined; }
   for (const st of stamps) {
     const cand0 = join(base, st, row.side, ...row.oldRelPath.split('/'));
-    if (deps.hooks.exists(cand0)) return cand0;
+    if (hooks.exists(cand0)) return cand0;
     // 归档落位撞名时的数字尾巴（孤儿扫描 freeSlot 的形状：x.memory.md.2 …）
     for (let n = 2; n <= 999; n++) {
       const candN = `${cand0}.${n}`;
-      if (deps.hooks.exists(candN)) return candN;
+      if (hooks.exists(candN)) return candN;
     }
   }
   return undefined;
