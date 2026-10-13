@@ -23,6 +23,7 @@ import type { MemoryLiveSettings } from '../src/contract.js';
 import type { MemoryConfig } from '../src/config.js';
 import type { LiveSettingsHandle } from '../src/settings.js';
 import type { MemoryLogger } from '../src/types.js';
+import { ANCHOR_METADATA_KEY } from '../src/pipeline/anchors.js';
 
 let dir: string;
 async function tmp(): Promise<string> {
@@ -328,6 +329,42 @@ describe('rpc: list-records / records-delete', () => {
     expect(browse.items[0].hall).toBe('work');
     const search = await h.call('dsh-memory/list-records', { query: '咖啡 记忆', hall: 'work' }) as { items: Array<{ id: string }> };
     expect(search.items.map((i) => i.id)).toEqual(['h1']);
+    h.db.close();
+  });
+
+  it('search path hydrates time/version/anchors like browse path (无过滤也必须补)', async () => {
+    // 旧缺陷:检索分支只送 L1SearchHit 的 7 个字段入 hitToUiRecord,卡片因此
+    // 把创建/活跃时间、版本、来源锚点全渲成占位值;而 metaById 只在勾了 Wing/tag
+    // 时才建——默认视图连 metadata 都不补。本例跑的就是默认视图(无任何过滤)。
+    type Card = { id: string; createdAt: string | null; updatedAt: string | null; timestamps: string[]; version: number; sourceAnchors: string[] };
+    const h = await harness();
+    const t = Date.now() - 60_000;
+    await h.stores.l1.appendNew([
+      {
+        id: 'w1',
+        content: '水合验证记忆',
+        type: 'work_fact',
+        priority: 60,
+        scene_name: '日常',
+        timestamps: [t, t + 10],
+        createdAt: t,
+        updatedAt: t + 10,
+        version: 7,
+        metadata: { [ANCHOR_METADATA_KEY]: [{ sessionId: 's1', turn: 12, step: 3 }] },
+      },
+    ]);
+    const browse = (await h.call('dsh-memory/list-records', {})) as { items: Card[] };
+    const search = (await h.call('dsh-memory/list-records', { query: '水合验证' })) as { items: Card[] };
+    const b = browse.items.find((i) => i.id === 'w1');
+    const s = search.items.find((i) => i.id === 'w1');
+    expect(b).toBeDefined();
+    expect(s).toBeDefined();
+    // 两路必须同口径:检索结果不得比浏览结果少字段(占位值就是 bug 的形状)
+    expect(s?.createdAt).toBe(b?.createdAt);
+    expect(s?.updatedAt).toBe(b?.updatedAt);
+    expect(s?.timestamps).toEqual(b?.timestamps);
+    expect(s?.version).toBe(7);
+    expect(s?.sourceAnchors).toEqual(['t12 s3']);
     h.db.close();
   });
 

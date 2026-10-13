@@ -1671,20 +1671,37 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
             return true;
           });
         }
-        const pageIds = filtered.slice(offset, offset + limit).map((h) => h.id);
-        const updatedById = new Map(stores.l1.getByIds(pageIds).map((r) => [r.id, r.updatedAt]));
+        const page = filtered.slice(offset, offset + limit);
+        const pageIds = page.map((h) => h.id);
+        // 检索命中(`L1SearchHit`)只带 7 个字段,不含 createdAt/timestamps/version/
+        // metadata/validTo——卡片上的「创建/活跃时间」与 R7 来源锚点因此恒为占位值。
+        // 旧缺陷有两层:① 这些字段从未补过;② `metaById` 只在勾了 Wing/tag 过滤时才建,
+        // 于是连 metadata 都不补——锚点在默认视图下永远显示 `-`。这里按 id 回查主表
+        // 做完整水合,与浏览路径同口径;正文/得分仍以命中为准(FTS 可能给的是摘要)。
+        const fullById = new Map(stores.l1.getByIds(pageIds).map((r) => [r.id, r]));
         const resp: ListRecordsResponse = {
-          items: filtered.slice(offset, offset + limit).map((h) =>
-            hitToUiRecord(
-              { ...h, metadata: metaById?.get(h.id) },
+          items: page.map((h) => {
+            const full = fullById.get(h.id);
+            return hitToUiRecord(
               {
-                agingWeight: agingWeightOf(updatedById.get(h.id), stores.l1.decayHalfLife),
+                ...full,
+                id: h.id,
+                content: h.content,
+                type: h.type,
+                priority: h.priority,
+                scene_name: h.scene_name,
+                family: h.family,
+                score: h.score,
+                metadata: full?.metadata ?? metaById?.get(h.id),
+              },
+              {
+                agingWeight: agingWeightOf(full?.updatedAt, stores.l1.decayHalfLife),
                 usage: stores.usage?.get(h.id) ?? null,
                 userRelevance: stores.feedback?.meanOf(h.id) ?? null,
                 userMark: stores.feedback?.lastOf(h.id) ?? null,
               },
-            ),
-          ),
+            );
+          }),
           hasMore: filtered.length > offset + limit,
           total: null,
           truncated: wanted > SEARCH_CAP,
