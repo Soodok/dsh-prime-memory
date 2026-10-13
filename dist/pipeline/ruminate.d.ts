@@ -7,15 +7,18 @@
  * - 蒸馏完成后按族强制 L2(把未整合的残余记录全部落进场景);
  * - L3 画像冷启动更新(hasPersona=false 时自动触发,已有人格则轻量刷新);
  * - 若有图谱投影,新记录自动入队(由 runner 的图谱泵接管)。
+ * - 收尾再跑一次 md 投射的**增量导出**（task_2.8）：只导本轮新增/变更的记录，
+ *   门是既有的 `cfg.memExport.enabled`；它是旁路，抛错只 warn + 计数，绝不让反刍失败。
  * - 支持中途取消:已蒸馏部分保留,pending 切片中未被消费的维持原状。
  *
  * 调度:任务入队走 runner 的优先级队列(live 任务优先于 ruminate 任务),
  * 不阻塞宿主正常对话。
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { MemoryConfig } from '../config.js';
+import { type MemoryConfig } from '../config.js';
 import type { L1Store } from '../store/l1.js';
 import { type MemoryBackend } from '../store/memory-backend.js';
+import type { MdLedgerStore } from '../store/memory-md-ledger.js';
 import type { PersonaStore } from '../store/persona.js';
 import type { SceneStore } from '../store/scenes.js';
 import type { StateStore } from '../store/state.js';
@@ -69,6 +72,13 @@ export declare class RuminateController {
     private pendingFile;
     /** Room 注册表(可选;孤儿候选预标记的合并词表来源)。 */
     private readonly roomRegistry;
+    /**
+     * 本轮起始时的库快照（id → updatedAt），供收尾算「本轮新增/变更」增量集（task_2.8）。
+     * `undefined` = 本轮没拍（投射门未开或拍失败）→ 收尾一律不做全库重导。
+     */
+    private mdBaseline;
+    /** 投射旁路失败累计次数（只 warn 不抛，计数供诊断/测试读取）。 */
+    private mdFailures;
     /** 记忆后端:未注入时包 l1(进程内,行为与改造前等价)。 */
     private backend;
     constructor(ctx: Context, cfg: MemoryConfig, runner: Pick<MemoryRunner, 'enqueue' | 'states'>, stores: {
@@ -80,6 +90,12 @@ export declare class RuminateController {
         state: StateStore;
         /** 常驻槽位面（仅 cfg.slots.migrateLegacy 开启时读/写，缺省不碰）。 */
         slots?: SlotMigrateStoreFace;
+        /**
+         * md 投射指纹账本（task_2.8）。装配层与 `stats.ts` 的 mem-export 端点共用同一个
+         * `stores` 对象，`index.ts` 在构造本控制器之后才把 `mdLedger` 挂上去——引用共享，
+         * 运行时读得到；缺席 = 投射面没装配 → 收尾零动作。
+         */
+        mdLedger?: MdLedgerStore;
     }, logger: MemoryLogger, live: LiveSettingsHandle, pendingFile: string, 
     /** Room 注册表(可选;孤儿候选预标记的合并词表来源)。 */
     roomRegistry?: {
@@ -112,5 +128,31 @@ export declare class RuminateController {
      * 现在:先把步骤数登记为 total、每完成一步自增 done,并给出当前动作描述(detail)。
      */
     private doLightRefresh;
+    /**
+     * 投射侧诊断计数（只增不减；不进任何端点，避开契约五处齐改的面）。
+     */
+    getMdFailures(): number;
+    /**
+     * 拍本轮起始基线（id → updatedAt）。三道门任一不满足就**一个动作都不做**：
+     * 连 `l1.all()` 都不调，这样“投射关着”时的产物与改动前逐字一致（本仓红线）。
+     *
+     * 为什么用基线 diff 而不是 `updatedAt >= startedAt`：relabel / 退场等改写走的是
+     * `patchMetadata` 那类最小写回，**不碰 `updated_time`**（它在快照哈希字段表里），
+     * 按时间戳筛会把这批真变了的记录漏掉。
+     */
+    private snapshotMdBaseline;
+    /**
+     * 反刍收尾的增量 md 投射（task_2.8）：库 → 文件 + 账本，**只碰本轮新增/变更的那批**。
+     *
+     * 与手动的 `dsh-memory/mem-export` 端点的区别：
+     * - 不跑命名回填（`assignMissingNames` 会写库，反刍是只读旁路，不能在那里改库）；
+     *   本轮新记录的 `name` 已在写入前由管线单一真源分配，未命名的按 `fileStemFor` 回落。
+     * - 不建类型目录骨架（`ensureTypeSkeleton`），那是面板显式触发的动作。
+     * 护栏全部复用 `cfg.memExport` 既有值（`maxRecords`/`timeBudgetMs`），**不新增配置项**。
+     *
+     * 失败面：整个方法自吞异常，只 warn + 计数，绝不抛给调用方、绝不改变反刍结果。
+     * @param stage - 日志里的路径名（区分 finalize 与轻量刷新两条挂载点）。
+     */
+    private projectMd;
     private finish;
 }

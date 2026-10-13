@@ -7,15 +7,19 @@
  * - 蒸馏完成后按族强制 L2(把未整合的残余记录全部落进场景);
  * - L3 画像冷启动更新(hasPersona=false 时自动触发,已有人格则轻量刷新);
  * - 若有图谱投影,新记录自动入队(由 runner 的图谱泵接管)。
+ * - 收尾再跑一次 md 投射的**增量导出**（task_2.8）：只导本轮新增/变更的记录，
+ *   门是既有的 `cfg.memExport.enabled`；它是旁路，抛错只 warn + 计数，绝不让反刍失败。
  * - 支持中途取消:已蒸馏部分保留,pending 切片中未被消费的维持原状。
  *
  * 调度:任务入队走 runner 的优先级队列(live 任务优先于 ruminate 任务),
  * 不阻塞宿主正常对话。
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { MemoryConfig } from '../config.js';
+import { resolveDataDir, type MemoryConfig } from '../config.js';
 import type { L1Store } from '../store/l1.js';
 import { InProcMemoryBackend, type MemoryBackend } from '../store/memory-backend.js';
+import { exportRecords } from '../store/memory-md-export.js';
+import type { MdLedgerStore } from '../store/memory-md-ledger.js';
 import type { PersonaStore } from '../store/persona.js';
 import type { SceneStore } from '../store/scenes.js';
 import type { StateStore } from '../store/state.js';
@@ -25,7 +29,7 @@ import {
   loadPending,
   type PendingBuckets,
 } from '../store/pending.js';
-import type { ConversationMessage, ExtractMode, MemoryFamily, MemoryLogger } from '../types.js';
+import type { ConversationMessage, ExtractMode, MemoryFamily, MemoryLogger, MemoryRecord } from '../types.js';
 import { errDetail } from '../util/filelog.js';
 import { runSceneConsolidation } from './l2.js';
 import { migrateLegacySlots, type SlotMigrateStoreFace } from './slot-migrate.js';
@@ -105,6 +109,13 @@ export class RuminateController {
   private pendingFile: string;
   /** Room 注册表(可选;孤儿候选预标记的合并词表来源)。 */
   private readonly roomRegistry: { listActive(): Array<{ slug: string; label?: string; description?: string }> } | undefined;
+  /**
+   * 本轮起始时的库快照（id → updatedAt），供收尾算「本轮新增/变更」增量集（task_2.8）。
+   * `undefined` = 本轮没拍（投射门未开或拍失败）→ 收尾一律不做全库重导。
+   */
+  private mdBaseline: Map<string, number> | undefined;
+  /** 投射旁路失败累计次数（只 warn 不抛，计数供诊断/测试读取）。 */
+  private mdFailures = 0;
 
   /** 记忆后端:未注入时包 l1(进程内,行为与改造前等价)。 */
   private backend(): MemoryBackend {
@@ -124,6 +135,12 @@ export class RuminateController {
       state: StateStore;
       /** 常驻槽位面（仅 cfg.slots.migrateLegacy 开启时读/写，缺省不碰）。 */
       slots?: SlotMigrateStoreFace;
+      /**
+       * md 投射指纹账本（task_2.8）。装配层与 `stats.ts` 的 mem-export 端点共用同一个
+       * `stores` 对象，`index.ts` 在构造本控制器之后才把 `mdLedger` 挂上去——引用共享，
+       * 运行时读得到；缺席 = 投射面没装配 → 收尾零动作。
+       */
+      mdLedger?: MdLedgerStore;
     },
     private readonly logger: MemoryLogger,
     private readonly live: LiveSettingsHandle,
@@ -162,6 +179,9 @@ export class RuminateController {
 
       this.cancelRequested = false;
       this.totalL1 = 0;
+      // md 投射基线（task_2.8）：两条收尾路径（finalize / doLightRefresh）共用同一份起点，
+      // 所以必须在这里拍——放在 `sessions.length === 0` 分支之前，轻量刷新才覆盖得到。
+      this.snapshotMdBaseline();
 
       if (this.sessions.length === 0) {
         // 没有 pending 切片 → 做 L2/L3 轻量刷新
@@ -355,6 +375,9 @@ export class RuminateController {
         this.logger.warn(`[memory] 孤儿候选预标记失败(忽略): ${errDetail(err)}`);
       }
 
+      // md 投射收尾（task_2.8）：只导本轮新增/变更的记录；旁路，失败不影响本次产物。
+      await this.projectMd('反刍收尾');
+
       this.status.phase = 'done';
       this.finish(null);
     } catch (err) {
@@ -491,6 +514,10 @@ export class RuminateController {
       await migrateLegacySlots(this.stores.slots, this.stores.l1, this.cfg.slots.migrateLegacy === true, this.logger);
     }
 
+    // md 投射收尾（task_2.8）：与 finalize 同一动作的两个挂载点之一——历史教训是
+    // `sessions.length === 0` 走本路径，只挂 finalize 等于没挂。
+    await this.projectMd('轻量刷新');
+
     this.status.running = false;
     this.status.detail = null;
     this.status.phase = this.cancelRequested ? 'cancelled' : 'done';
@@ -500,6 +527,84 @@ export class RuminateController {
       `[memory] 反刍轻量刷新结束(${this.status.phase}):${this.status.done}/${this.status.total} 步,耗时 ${Math.round(cost / 1000)}s`,
     );
     return this.getStatus();
+  }
+
+  /**
+   * 投射侧诊断计数（只增不减；不进任何端点，避开契约五处齐改的面）。
+   */
+  getMdFailures(): number {
+    return this.mdFailures;
+  }
+
+  /**
+   * 拍本轮起始基线（id → updatedAt）。三道门任一不满足就**一个动作都不做**：
+   * 连 `l1.all()` 都不调，这样“投射关着”时的产物与改动前逐字一致（本仓红线）。
+   *
+   * 为什么用基线 diff 而不是 `updatedAt >= startedAt`：relabel / 退场等改写走的是
+   * `patchMetadata` 那类最小写回，**不碰 `updated_time`**（它在快照哈希字段表里），
+   * 按时间戳筛会把这批真变了的记录漏掉。
+   */
+  private snapshotMdBaseline(): void {
+    this.mdBaseline = undefined;
+    const exp = this.cfg.memExport;
+    if (exp === undefined || exp.enabled !== true) return;
+    if (this.stores.mdLedger === undefined) return;
+    try {
+      const map = new Map<string, number>();
+      for (const r of this.stores.l1.all()) map.set(r.id, r.updatedAt);
+      this.mdBaseline = map;
+    } catch (err) {
+      // 拍不上基线 = 本轮不投射（而不是退回全库重导）；旁路失败不拖垮反刍。
+      this.mdFailures++;
+      this.logger.warn(`[memory] 反刍 md 投射基线失败(本次不做投射): ${errDetail(err)}`);
+    }
+  }
+
+  /**
+   * 反刍收尾的增量 md 投射（task_2.8）：库 → 文件 + 账本，**只碰本轮新增/变更的那批**。
+   *
+   * 与手动的 `dsh-memory/mem-export` 端点的区别：
+   * - 不跑命名回填（`assignMissingNames` 会写库，反刍是只读旁路，不能在那里改库）；
+   *   本轮新记录的 `name` 已在写入前由管线单一真源分配，未命名的按 `fileStemFor` 回落。
+   * - 不建类型目录骨架（`ensureTypeSkeleton`），那是面板显式触发的动作。
+   * 护栏全部复用 `cfg.memExport` 既有值（`maxRecords`/`timeBudgetMs`），**不新增配置项**。
+   *
+   * 失败面：整个方法自吞异常，只 warn + 计数，绝不抛给调用方、绝不改变反刍结果。
+   * @param stage - 日志里的路径名（区分 finalize 与轻量刷新两条挂载点）。
+   */
+  private async projectMd(stage: string): Promise<void> {
+    const baseline = this.mdBaseline;
+    if (baseline === undefined) return;
+    const exp = this.cfg.memExport;
+    const ledger = this.stores.mdLedger;
+    if (exp === undefined || exp.enabled !== true || ledger === undefined) return;
+    try {
+      const changed: MemoryRecord[] = [];
+      for (const r of this.stores.l1.all()) {
+        const prev = baseline.get(r.id);
+        // 新 id（本轮蒸馏产出）或 updatedAt 变了（合并/改写）才算变更；其余不重导。
+        if (prev === undefined || prev !== r.updatedAt) changed.push(r);
+      }
+      if (changed.length === 0) return;
+      const rep = await exportRecords({
+        records: changed,
+        cfgRoot: exp.root,
+        dataDir: resolveDataDir(this.cfg),
+        ledger,
+        maxRecords: exp.maxRecords,
+        timeBudgetMs: exp.timeBudgetMs,
+        logger: this.logger,
+      });
+      this.logger.info(
+        `[memory] 反刍 md 投射(${stage}):增量 ${changed.length} 条,写 ${rep.written},未变 ${rep.unchanged},跳过 ${rep.skipped},落点 ${rep.root}${rep.capped ? `,护栏截断剩 ${rep.remaining} 条(下轮反刍继续)` : ''}`,
+      );
+    } catch (err) {
+      this.mdFailures++;
+      this.logger.warn(`[memory] 反刍 md 投射失败(旁路忽略,不影响本次产物,累计 ${this.mdFailures} 次): ${errDetail(err)}`);
+    } finally {
+      // 基线一次性消费：同一次运行不重投射同一批（两条挂载点互斥，这里只防异常复用）。
+      this.mdBaseline = undefined;
+    }
   }
 
   private finish(error: string | null): void {

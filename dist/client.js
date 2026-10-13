@@ -1693,7 +1693,8 @@ var __defProp = Object.defineProperty;
 		  const head = `回灌 ${rep.imported} · 重写文件 ${rep.rendered} · 退场 ${rep.retired} · 一致 ${rep.same}`;
 		  const tail = rep.pending > 0 ? ` · 两边都变 ${rep.pending} 条已挂账（两侧都没动）` : "";
 		  const extra = rep.newFiles > 0 ? ` · 新文件 ${rep.newFiles} 个未入库（导入须走写入内核）` : "";
-		  return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
+		  const links = rep.skippedLinks > 0 ? ` · 防护拦下 ${rep.skippedLinks} 个链接/越界条目（未读）` : "";
+		  return head + tail + extra + links + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
 		}
 		function lineOfOrphans(rep) {
 		  const head = rep.dryRun ? `账本共 ${rep.scanned} 条 · 仍被认领 ${rep.claimed} · 无人认领 ${rep.orphans}（未搬任何东西）` : `已搬 ${rep.moved} · 失败 ${rep.failed} · 仍被认领 ${rep.claimed}`;

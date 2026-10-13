@@ -128,6 +128,13 @@ export interface MdSyncReport {
     newFiles: number;
     /** `.disable` 文件但找不到对应记录（改名后的 id 也追不到）。 */
     orphan: number;
+    /**
+     * 遍历防护拦下的条目数（task_3.7）：dirent 报链接的条目、真实路径落在投射根外的目录、
+     * 以及 realpath 解析失败因而无法验证的目录（含整根划不出边界那一种）。
+     * 与 `skipped` 的区别：那是“进来了但不合格式”，这里是**根本没进**——两者混在一个数里
+     * 就分不清“文件写得不对”和“目录拓扑越界”，而后者的代价是扫描被链接吞掉整棵外部树。
+     */
+    skippedLinks: number;
     /** 因护栏没扫完的剩余文件数。 */
     remaining: number;
     capped: boolean;

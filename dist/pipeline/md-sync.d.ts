@@ -22,6 +22,13 @@
  *   的判据面（归一/长度/预算/去重），在这里手搓一条等于绕过那些不变量。只计数。
  * - 遍历范围 = 从记录算出的落点根 ∪ 账本里记过的根。所以"没有任何记录指向的全新 workspace"
  *   不在本轮范围内——它还没有投射根，等它的第一条记忆落进去才可见。
+ *
+ * 另有一条遍历防护（P2 缺口 task_3.7）：投射根下的"链接"在 win32 上不止 symlink 一种形状，
+ * junction（目录联接，reparse point）也算，而 `Dirent.isSymbolicLink()` 对它的判定随 Node 版本
+ * 与文件系统漂移。所以进任何子目录前再加一道 `realpath` 判据：解析出的真实路径必须仍在该投射根
+ * 内，界外的一律不进并计入 `skippedLinks`。⚠️ 这个 realpath **只服务划界**——不参与账本键，也不
+ * 参与落点计算（那边刻意不做 realpath，理由见 `store/memory-md.ts::targetFor` 的注释）。两处不一致
+ * 是有意的，不是 bug。
  */
 import type { MdLedgerStore } from '../store/memory-md-ledger.js';
 import type { MdSyncReport } from '../store/memory-md-types.js';
@@ -40,9 +47,19 @@ export interface MdSyncDeps {
     now?: () => number;
 }
 /**
+ * 越界判据：`resolved` 必须就是根，或者是根的子目录。
+ *
+ * 前缀比较带 `sep`：少了那个分隔符，兄弟目录 `<root>2` 会被判成界内（经典越界陷阱）。
+ * 两侧都出自 `realpath`，同一卷上大小写与 8.3 短名都已归一，所以这里做**严格字符串**比较；
+ * win32 上再折叠大小写只会放松判据（把真越界说成合法），不做。
+ * 导出只为把判据本身钉成用例：造不出链接的机器上，判据仍要有测试可跑。
+ */
+export declare function isWithinRoot(rootReal: string, resolved: string): boolean;
+/**
  * 反向同步一轮。
  *
  * @param deps - 见 `MdSyncDeps`。
- * @returns 同步报告（含挂账样本与剩余量）。任何单条失败只计数并留痕，绝不抛挂整轮。
+ * @returns 同步报告（含挂账样本、剩余量、以及遍历防护拦下的条目数 `skippedLinks`）。
+ *   任何单条失败只计数并留痕，绝不抛挂整轮。
  */
 export declare function syncFromFiles(deps: MdSyncDeps): Promise<MdSyncReport>;

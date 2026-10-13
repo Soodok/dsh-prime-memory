@@ -22,9 +22,16 @@
  *   的判据面（归一/长度/预算/去重），在这里手搓一条等于绕过那些不变量。只计数。
  * - 遍历范围 = 从记录算出的落点根 ∪ 账本里记过的根。所以"没有任何记录指向的全新 workspace"
  *   不在本轮范围内——它还没有投射根，等它的第一条记忆落进去才可见。
+ *
+ * 另有一条遍历防护（P2 缺口 task_3.7）：投射根下的"链接"在 win32 上不止 symlink 一种形状，
+ * junction（目录联接，reparse point）也算，而 `Dirent.isSymbolicLink()` 对它的判定随 Node 版本
+ * 与文件系统漂移。所以进任何子目录前再加一道 `realpath` 判据：解析出的真实路径必须仍在该投射根
+ * 内，界外的一律不进并计入 `skippedLinks`。⚠️ 这个 realpath **只服务划界**——不参与账本键，也不
+ * 参与落点计算（那边刻意不做 realpath，理由见 `store/memory-md.ts::targetFor` 的注释）。两处不一致
+ * 是有意的，不是 bug。
  */
-import { opendir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { opendir, readFile, realpath, stat } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 import { DISABLE_SUFFIX, digest, recordDigest, targetFor } from '../store/memory-md.js';
 import { exportRecords } from '../store/memory-md-export.js';
 import { parseMdFile } from '../store/memory-md-parse.js';
@@ -33,10 +40,48 @@ import { normalizeContentMd } from '../util/md-normalize.js';
 const MAX_DEPTH = 3;
 /** 样本上限：报告要进面板，全量路径会把面板撑爆；计数才是判据。 */
 const SAMPLE_CAP = 12;
+/**
+ * 越界判据：`resolved` 必须就是根，或者是根的子目录。
+ *
+ * 前缀比较带 `sep`：少了那个分隔符，兄弟目录 `<root>2` 会被判成界内（经典越界陷阱）。
+ * 两侧都出自 `realpath`，同一卷上大小写与 8.3 短名都已归一，所以这里做**严格字符串**比较；
+ * win32 上再折叠大小写只会放松判据（把真越界说成合法），不做。
+ * 导出只为把判据本身钉成用例：造不出链接的机器上，判据仍要有测试可跑。
+ */
+export function isWithinRoot(rootReal, resolved) {
+    return resolved === rootReal || resolved.startsWith(rootReal + sep);
+}
+/** 记一笔拦截：计数、样本、日志三样都要有——只给数字，人分不清是"外面真有东西"还是"边界划错了"。 */
+function noteLink(guard, path, reason) {
+    guard.links += 1;
+    if (guard.linkSamples.length < SAMPLE_CAP)
+        guard.linkSamples.push({ path, action: `link: ${reason}` });
+    guard.logger?.warn(`[memory] md 同步遍历防护拦下: ${path} - ${reason}`);
+}
+/** errno 取码（Node 把系统错误码挂在 `code` 上）。 */
+function errCode(err) {
+    return err?.code;
+}
 /** 列出一个根下的投射文件（含 `.disable`）。根不存在/没权限 → 空数组，不抛。 */
-async function listProjectionFiles(root, budget) {
+async function listProjectionFiles(root, guard) {
     const out = [];
+    // 边界基线 = 投射根自己的真实路径，一轮只解析一次。
+    // ⚠️ 与 `targetFor` 的刻意不对称：落点/账本键那边**不**做 realpath（目录创建前后结果会变 →
+    // 键漂移 → 对账永远报"文件缺失"，见 memory-md.ts::targetFor 注释）；这里的 realpath 只用来
+    // 判断"还在不在根内"，往下记进 `out` 和账本的路径仍然是拼出来的 `abs`。别把它当成同一件事。
+    // '' = 根本来不存在（走下面 opendir 同语义的正常缺席）；undefined = 解析失败但根并非缺席。
+    const resolvedRoot = await realpath(root).catch((err) => (errCode(err) === 'ENOENT' ? '' : undefined));
+    if (resolvedRoot === undefined) {
+        // 划不出边界 = 无法判断界内界外 = 整根不进（安全方向），并计数留痕——静默少扫一整个根等于谎报。
+        noteLink(guard, root, '根的真实路径解析失败，无法划界，整根未扫');
+        return out;
+    }
+    if (resolvedRoot.length === 0)
+        return out;
+    const rootReal = resolvedRoot; // 显式落成 string，闭包里取值不靠推断运气
     const walk = async (dir, depth) => {
+        // 深度护栏是**结构边界**（投射只有 `<type>/<stem>.memory.md` 两层），不是资源截断，
+        // 所以它不动 `capped`/`remaining`——那两个只归 maxFiles 与墙钟算账，两条护栏各记各的。
         if (depth > MAX_DEPTH)
             return;
         let dh;
@@ -47,24 +92,39 @@ async function listProjectionFiles(root, budget) {
             return; // 根不存在或不可读：范围本来就按已知根枚举，缺一个根不是错误
         }
         for await (const de of dh) {
-            // 链接一律不跟随：越界防护不靠"事后检查解析结果"，靠根本不进链接。
-            if (de.isSymbolicLink())
-                continue;
             const abs = join(dir, de.name);
+            // 第一道（零额外 syscall）：dirent 报链接就不进。
+            if (de.isSymbolicLink()) {
+                noteLink(guard, abs, 'dirent 报链接，未进入');
+                continue;
+            }
             if (de.isDirectory()) {
-                // 护栏耗完也要继续走目录：否则"还剩多少个"就没人知道，静默截断等于谎报。
-                await walk(abs, depth + 1);
+                // 第二道：win32 的链接形状不止 symlink，junction/目录联接是 reparse point，而它的 dirent
+                // 判定随 Node 版本与文件系统漂移（本机 Node 22.22.1 实测报 true，但不能把边界押在一个
+                // 会漂移的布尔上）。一次漏掉的目录链接就能把整棵外部树吞进扫描，或让遍历顺着链接绕出根。
+                // 拦下来的那个目录里的文件**不**计入 `remaining`：那是"本来就不在范围内"，不是护栏截断。
+                const resolved = await realpath(abs).catch(() => undefined);
+                if (resolved === undefined) {
+                    noteLink(guard, abs, '真实路径解析失败，无法划界，未进入');
+                }
+                else if (!isWithinRoot(rootReal, resolved)) {
+                    noteLink(guard, abs, `真实路径在投射根外，未进入: ${resolved}`);
+                }
+                else {
+                    // 护栏耗完也要继续走目录：否则"还剩多少个"就没人知道，静默截断等于谎报。
+                    await walk(abs, depth + 1);
+                }
                 continue;
             }
             if (!de.isFile())
                 continue;
             if (!de.name.endsWith('.memory.md') && !de.name.endsWith(DISABLE_SUFFIX))
                 continue;
-            if (budget.files <= 0) {
-                budget.dropped += 1;
+            if (guard.files <= 0) {
+                guard.dropped += 1;
                 continue;
             }
-            budget.files -= 1;
+            guard.files -= 1;
             out.push(abs);
         }
     };
@@ -110,7 +170,8 @@ async function stampDisabled(ledger, rec, abs, text) {
  * 反向同步一轮。
  *
  * @param deps - 见 `MdSyncDeps`。
- * @returns 同步报告（含挂账样本与剩余量）。任何单条失败只计数并留痕，绝不抛挂整轮。
+ * @returns 同步报告（含挂账样本、剩余量、以及遍历防护拦下的条目数 `skippedLinks`）。
+ *   任何单条失败只计数并留痕，绝不抛挂整轮。
  */
 export async function syncFromFiles(deps) {
     const { store, ledger, cfgRoot, dataDir, logger } = deps;
@@ -129,6 +190,7 @@ export async function syncFromFiles(deps) {
         orphan: 0,
         remaining: 0,
         capped: false,
+        skippedLinks: 0,
         samples: [],
     };
     const sample = (path, action) => {
@@ -144,16 +206,24 @@ export async function syncFromFiles(deps) {
         if (e.root.length > 0)
             roots.add(e.root);
     report.roots = roots.size;
-    const budget = { files: Math.max(0, Math.trunc(deps.maxFiles)), dropped: 0 };
+    const guard = {
+        files: Math.max(0, Math.trunc(deps.maxFiles)),
+        dropped: 0,
+        links: 0,
+        linkSamples: [],
+        logger,
+    };
     const files = [];
     for (const root of roots) {
-        for (const f of await listProjectionFiles(root, budget))
+        for (const f of await listProjectionFiles(root, guard))
             files.push(f);
     }
+    report.skippedLinks = guard.links;
     // 护栏掉过文件 = 本轮结论只覆盖一部分，必须说出去（和墙钟截断同一个口径）。
-    if (budget.dropped > 0) {
+    // 链接拦截不算在这里：那些文件本就在投射根外，不是"被护栏截断的范围内文件"。
+    if (guard.dropped > 0) {
         report.capped = true;
-        report.remaining = budget.dropped;
+        report.remaining = guard.dropped;
     }
     for (const abs of files) {
         // 两条护栏都在循环顶部查：写在末尾会被 continue 跳过（导出侧的测试抓过这个 bug）。
@@ -265,6 +335,10 @@ export async function syncFromFiles(deps) {
         report.imported += 1;
         sample(abs, '文件侧更新 → 回灌入库');
     }
+    // 链接拦截样本压到最后挂：`pending`/`orphan` 那批是等人裁决的，优先占面板那 12 个样本位；
+    // 但它们仍要出现——只有计数没有路径，人无法判断该去查哪个目录。
+    for (const s of guard.linkSamples)
+        sample(s.path, s.action);
     await ledger.flush();
     return report;
 }

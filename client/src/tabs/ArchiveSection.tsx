@@ -75,7 +75,10 @@ function lineOfSync(rep: SyncReport): string {
   const head = `回灌 ${rep.imported} · 重写文件 ${rep.rendered} · 退场 ${rep.retired} · 一致 ${rep.same}`;
   const tail = rep.pending > 0 ? ` · 两边都变 ${rep.pending} 条已挂账（两侧都没动）` : '';
   const extra = rep.newFiles > 0 ? ` · 新文件 ${rep.newFiles} 个未入库（导入须走写入内核）` : '';
-  return head + tail + extra + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
+  // 遍历防护拦下的条目必须说出来：它们落在投射根以外（链接/越界目录），不说就等于静默丢弃，
+  // 而“报告说一致”与“实际根本没看那批目录”在人眼里长得一样。
+  const links = rep.skippedLinks > 0 ? ` · 防护拦下 ${rep.skippedLinks} 个链接/越界条目（未读）` : '';
+  return head + tail + extra + links + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
 }
 
 function lineOfOrphans(rep: OrphanReport): string {

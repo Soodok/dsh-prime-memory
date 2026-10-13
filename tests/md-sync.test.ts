@@ -6,6 +6,9 @@
  *   - 两边都变时自动挑一边 → 人的编辑或库里的蒸馏产物被无声覆盖；
  *   - `.disable` 直接删文件 → 归档链断裂（这里只退场，删除是 cleanup 的事）；
  *   - 投射目录里的陌生 md 被猜成一条新记忆 → 绕过写入内核的判据面。
+ *
+ * 遍历防护（junction / 目录符号链接不得把根外的树吞进来）另见 `md-sync-junction.test.ts`
+ * （task_3.7）；这里只钉"干净树里那个计数保持 0"，别让它虚高。
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -90,6 +93,8 @@ describe('syncFromFiles 四象限', () => {
     expect(rep.rendered).toBe(0);
     expect(rep.pending).toBe(0);
     expect(rep.skipped).toBe(0);
+    // 链接计数：干净投射树里一个链接都没有，这个数就该是 0。
+    expect(rep.skippedLinks).toBe(0);
     expect(hashRecords(store.all())).toBe(before);
   });
 
