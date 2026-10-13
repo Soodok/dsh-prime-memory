@@ -116,3 +116,88 @@ describe('判过时的条目受保护', () => {
     expect(store.revision()).toBe(2); // 重复保护幂等，不再推序号
   });
 });
+
+/**
+ * 「正文已被摘要取代」这一维（2026-10-13：brief 无法区分旧召回与当前召回）。
+ *
+ * 压缩只改「正文还在不在上下文」：当时在列表里的一律打取代标记，**不删条目**
+ * （已判过时的条目还要靠它留在列表里挂删除线）；重新注入则撤销标记。
+ */
+describe('压缩把当时在列表里的那批标成已被摘要取代', () => {
+  it('compact 打标记但不动列表；重新注入撤销该条的标记', async () => {
+    const { store } = await fresh();
+    store.add('c1', ['a', 'b']);
+    store.reset('c1', 'compact');
+    await store.flush();
+    expect(store.list('c1')).toEqual(['a', 'b']); // 条目一个不少
+    expect([...store.supersededOf('c1')].sort()).toEqual(['a', 'b']);
+
+    // 重新注入 = 正文又回到上下文 → 该条的标记必须撤销（否则只能被取代一次）。
+    store.add('c1', ['b']);
+    await store.flush();
+    expect([...store.supersededOf('c1')]).toEqual(['a']);
+
+    store.add('c1', ['c']);
+    await store.flush();
+    expect([...store.supersededOf('c1')]).toEqual(['a']); // 新注入的不带标记
+  });
+
+  it('与保护正交：判过时的条目两个标记同时在，且仍不被淘汰', async () => {
+    const { store } = await fresh();
+    store.add('c2', ['keep', 'plain']);
+    store.protect('c2', ['keep']);
+    store.reset('c2', 'compact');
+    await store.flush();
+    expect([...store.supersededOf('c2')].sort()).toEqual(['keep', 'plain']);
+
+    const pad = Array.from({ length: RECALL_DEDUPE_IDS_CAP }, (_, i) => `p-${i}`);
+    store.add('c2', pad);
+    await store.flush();
+    expect(store.list('c2')).toContain('keep'); // 保护仍然生效
+  });
+
+  it('取代标记落盘，重启后仍在（不落 = 只活在内存里）', async () => {
+    const { store, dataDir, file } = await fresh();
+    store.add('c3', ['a', 'b']);
+    store.reset('c3', 'compact');
+    await store.flush();
+    const disk = JSON.parse(await readFile(file, 'utf8')) as {
+      sessions: Record<string, Record<string, unknown>>;
+    };
+    expect(disk.sessions.c3?.supersededIds).toEqual(['a', 'b']);
+    expect(Object.keys(disk.sessions.c3 ?? {})).toEqual(['recordIds', 'supersededIds', 'updatedAt']);
+
+    const again = new SessionRecalledStore(dataDir);
+    await again.flush();
+    expect([...again.supersededOf('c3')].sort()).toEqual(['a', 'b']);
+  });
+
+  it('clear 把取代集一起清；重复 compact 幂等（不推序号、不白写盘）', async () => {
+    const { store } = await fresh();
+    store.add('c4', ['a']);
+    await store.flush();
+    const afterAdd = store.revision();
+    store.reset('c4', 'compact');
+    await store.flush();
+    expect(store.revision()).toBe(afterAdd + 1);
+    store.reset('c4', 'compact'); // 同一个集合再压一次：无新标记
+    await store.flush();
+    expect(store.revision()).toBe(afterAdd + 1);
+
+    store.reset('c4', 'clear');
+    await store.flush();
+    expect(store.list('c4')).toEqual([]);
+    expect([...store.supersededOf('c4')]).toEqual([]);
+  });
+
+  it('没有任何取代时不写 supersededIds 键（与改动前文件形状逐字一致）', async () => {
+    const { store, file } = await fresh();
+    store.add('c5', ['a']);
+    await store.flush();
+    const disk = JSON.parse(await readFile(file, 'utf8')) as {
+      sessions: Record<string, Record<string, unknown>>;
+    };
+    expect(Object.keys(disk.sessions.c5 ?? {})).toEqual(['recordIds', 'updatedAt']);
+    expect([...store.supersededOf('c5')]).toEqual([]);
+  });
+});

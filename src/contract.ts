@@ -822,6 +822,12 @@ export interface UiRecord {
   /** 退场原因:`conflict`(裁决) / `superseded`(取代) / `manual`(人工) / `unknown`。未退场为 null。 */
   retiredReason?: string | null;
   /**
+   * 「正文已被摘要取代」：压缩发生时这条还在本会话召回列表里，它的正文已不在模型上下文。
+   * 与 `retired` **正交**——退场讲“人有没有对它下过裁决”，取代讲“正文还在不在上下文”。
+   * 只在 `dsh-memory/session-recalled` 这条路径上有意义；缺省 = 无此概念（旧服务端）。
+   */
+  superseded?: boolean;
+  /**
    * 成熟度(G3 读时派生):priority + 被用次数 + 老化权重合成。
    * 可选字段——旧 client 忽略=向后兼容；不参与存储/快照（纯投影）。
    */

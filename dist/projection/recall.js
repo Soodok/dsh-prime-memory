@@ -34,6 +34,11 @@ export const stateSchema = {
         if (!Array.isArray(root.ids))
             invalid(what, 'ids 必须是字符串数组');
         root.ids.forEach((id, i) => requireString(id, `${what}.ids[${i}]`, 'id'));
+        if (root.superseded !== undefined) {
+            if (!Array.isArray(root.superseded))
+                invalid(what, 'superseded 必须是字符串数组');
+            root.superseded.forEach((id, i) => requireString(id, `${what}.superseded[${i}]`, 'id'));
+        }
         return value;
     },
 };
@@ -66,6 +71,8 @@ export const viewSchema = {
                 requireString(item.body, at, 'body');
             if (item.retired !== undefined && item.retired !== true)
                 invalid(at, 'retired 只能是 true 或缺席');
+            if (item.superseded !== undefined && item.superseded !== true)
+                invalid(at, 'superseded 只能是 true 或缺席');
         });
         return value;
     },
@@ -84,12 +91,14 @@ function clampBody(content) {
 /** 读 store 建态；ids 与旧态一致时返回旧引用（避免无谓 republish）。 */
 function buildState(sessionId, store, feedbackRev, prev) {
     const ids = store.list(sessionId);
+    const superseded = [...store.supersededOf(sessionId)];
     const sameCounters = prev !== undefined && prev.rev === store.revision() && (prev.fb ?? 0) === feedbackRev;
-    if (sameCounters && sameIds(prev.ids, ids))
+    if (sameCounters && sameIds(prev.ids, ids) && sameIds(prev.superseded ?? [], superseded))
         return prev;
-    const next = { rev: store.revision(), fb: feedbackRev, sessionId, ids };
-    // rev 变了但本会话集合与反馈都没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
-    if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids) && (prev.fb ?? 0) === feedbackRev)
+    const next = { rev: store.revision(), fb: feedbackRev, sessionId, ids, superseded };
+    // rev 变了但本会话集合、取代集与反馈都没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
+    if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids)
+        && sameIds(prev.superseded ?? [], superseded) && (prev.fb ?? 0) === feedbackRev)
         return prev;
     return next;
 }
@@ -110,6 +119,7 @@ function makeView(state, l1, feedback) {
     const recentFirst = [...state.ids].reverse();
     const picked = recentFirst.slice(0, RECALL_VIEW_CAP);
     const byId = new Map((l1?.getByIds(picked) ?? []).map((r) => [r.id, r]));
+    const superseded = new Set(state.superseded ?? []);
     const items = [];
     for (const id of picked) {
         const r = byId.get(id);
@@ -127,8 +137,10 @@ function makeView(state, l1, feedback) {
             body: clampBody(r.content),
             ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),
             ...(typeof rating === 'number' ? { rating } : {}),
-            // 退场记录仍留在列表里（文本还在上下文，直到压缩），只是该打上删除线。
+            // 退场记录仍留在列表里（文本曾是上下文的一部分，且判过时是人的裁决凭证），只是该打上删除线。
             ...(isRetired(r) ? { retired: true } : {}),
+            // 已被摘要取代：正文已不在上下文里。与 retired 正交，两者可同时在。
+            ...(superseded.has(id) ? { superseded: true } : {}),
         });
     }
     const next = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };

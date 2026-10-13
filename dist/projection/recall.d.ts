@@ -1,9 +1,14 @@
 /**
  * 会话「活召回集」服务端投影(memoryRecall)。
  *
- * 语义：本会话**已注入、且目前仍在上下文里**的记忆（= 模型此刻真正看到的几条）。
- * 上下文被压缩/清空时注入内容离开模型，集合随之清空——数据源是
- * `SessionRecalledStore`（sessionKey 键、写穿持久化），所以**旧会话重开也读得到**。
+ * 语义：本会话**已注入**的记忆，以及其中「此刻仍在上下文里」的那部分。
+ * 数据源是 `SessionRecalledStore`（sessionKey 键、写穿持久化），所以**旧会话重开也读得到**。
+ *
+ * 压缩/清空对这张表的作用不同（2026-10-13 用户口径）：
+ * - `clear`（主动清空）整表清，view 随之空；
+ * - `compact`（摘要替换）**不删条目**，只把当时在列表里的那批标成 `superseded`（正文已被
+ *   摘要取代、已不在上下文里）。读侧据此把旧召回与当前召回区分开，而不是继续谎报“还在”。
+ *   已退场（`retired`）的条目必须留在列表里（人的裁决凭证），取代标记与它正交。
  *
  * 与 memorySlots 的分工（两条轴，互不替代）：
  * - `memorySlots` = 用户手动 pin 的**常驻约定**（每轮硬注入，注册表语义）；
@@ -47,6 +52,12 @@ export interface RecallItemView {
      * 读侧按「缺席即活跃」处理，旧帧自然兼容。
      */
     retired?: true;
+    /**
+     * 该条目的正文**已被摘要取代**（压缩发生时时它就在列表里），即不在模型上下文里了。
+     * 只写 true（同 `retired` 的兼容手法）；与 `retired` 正交，两者可共存。
+     * 读侧据此把「已被摘要取代的旧召回」与「此刻仍在上下文里的召回」区分开。
+     */
+    superseded?: true;
 }
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
 export interface RecallProjectionState {
@@ -59,6 +70,11 @@ export interface RecallProjectionState {
     sessionId: string;
     /** 注入序（旧→新），由 store 保证。 */
     ids: string[];
+    /**
+     * 已被摘要取代的 id（压缩水位之上的那批）。可选：旧 checkpoint 没有这个字段，
+     * 读侧必须容忍（缺席 = 无取代，与改动前逐字一致）。
+     */
+    superseded?: string[];
 }
 /** wire view：count 是总数，items 是**最近在上**的截断视图。 */
 export interface RecallView {

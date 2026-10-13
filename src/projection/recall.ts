@@ -1,9 +1,14 @@
 /**
  * 会话「活召回集」服务端投影(memoryRecall)。
  *
- * 语义：本会话**已注入、且目前仍在上下文里**的记忆（= 模型此刻真正看到的几条）。
- * 上下文被压缩/清空时注入内容离开模型，集合随之清空——数据源是
- * `SessionRecalledStore`（sessionKey 键、写穿持久化），所以**旧会话重开也读得到**。
+ * 语义：本会话**已注入**的记忆，以及其中「此刻仍在上下文里」的那部分。
+ * 数据源是 `SessionRecalledStore`（sessionKey 键、写穿持久化），所以**旧会话重开也读得到**。
+ *
+ * 压缩/清空对这张表的作用不同（2026-10-13 用户口径）：
+ * - `clear`（主动清空）整表清，view 随之空；
+ * - `compact`（摘要替换）**不删条目**，只把当时在列表里的那批标成 `superseded`（正文已被
+ *   摘要取代、已不在上下文里）。读侧据此把旧召回与当前召回区分开，而不是继续谎报“还在”。
+ *   已退场（`retired`）的条目必须留在列表里（人的裁决凭证），取代标记与它正交。
  *
  * 与 memorySlots 的分工（两条轴，互不替代）：
  * - `memorySlots` = 用户手动 pin 的**常驻约定**（每轮硬注入，注册表语义）；
@@ -55,6 +60,12 @@ export interface RecallItemView {
    * 读侧按「缺席即活跃」处理，旧帧自然兼容。
    */
   retired?: true;
+  /**
+   * 该条目的正文**已被摘要取代**（压缩发生时时它就在列表里），即不在模型上下文里了。
+   * 只写 true（同 `retired` 的兼容手法）；与 `retired` 正交，两者可共存。
+   * 读侧据此把「已被摘要取代的旧召回」与「此刻仍在上下文里的召回」区分开。
+   */
+  superseded?: true;
 }
 
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
@@ -68,6 +79,11 @@ export interface RecallProjectionState {
   sessionId: string;
   /** 注入序（旧→新），由 store 保证。 */
   ids: string[];
+  /**
+   * 已被摘要取代的 id（压缩水位之上的那批）。可选：旧 checkpoint 没有这个字段，
+   * 读侧必须容忍（缺席 = 无取代，与改动前逐字一致）。
+   */
+  superseded?: string[];
 }
 
 /** wire view：count 是总数，items 是**最近在上**的截断视图。 */
@@ -113,6 +129,10 @@ export const stateSchema: SchemaLike<RecallProjectionState> = {
     requireString(root.sessionId, what, 'sessionId');
     if (!Array.isArray(root.ids)) invalid(what, 'ids 必须是字符串数组');
     (root.ids as unknown[]).forEach((id, i) => requireString(id, `${what}.ids[${i}]`, 'id'));
+    if (root.superseded !== undefined) {
+      if (!Array.isArray(root.superseded)) invalid(what, 'superseded 必须是字符串数组');
+      (root.superseded as unknown[]).forEach((id, i) => requireString(id, `${what}.superseded[${i}]`, 'id'));
+    }
     return value as RecallProjectionState;
   },
 };
@@ -141,6 +161,7 @@ export const viewSchema: SchemaLike<RecallView> = {
       // 附加字段：旧帧没有 → 容忍；有 → 必须成形状。retired 只认 true，false 视为脏帧。
       if (item.body !== undefined) requireString(item.body, at, 'body');
       if (item.retired !== undefined && item.retired !== true) invalid(at, 'retired 只能是 true 或缺席');
+      if (item.superseded !== undefined && item.superseded !== true) invalid(at, 'superseded 只能是 true 或缺席');
     });
     return value as RecallView;
   },
@@ -179,11 +200,13 @@ function buildState(
   prev?: RecallProjectionState,
 ): RecallProjectionState {
   const ids = store.list(sessionId);
+  const superseded = [...store.supersededOf(sessionId)];
   const sameCounters = prev !== undefined && prev.rev === store.revision() && (prev.fb ?? 0) === feedbackRev;
-  if (sameCounters && sameIds(prev.ids, ids)) return prev;
-  const next: RecallProjectionState = { rev: store.revision(), fb: feedbackRev, sessionId, ids };
-  // rev 变了但本会话集合与反馈都没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
-  if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids) && (prev.fb ?? 0) === feedbackRev) return prev;
+  if (sameCounters && sameIds(prev.ids, ids) && sameIds(prev.superseded ?? [], superseded)) return prev;
+  const next: RecallProjectionState = { rev: store.revision(), fb: feedbackRev, sessionId, ids, superseded };
+  // rev 变了但本会话集合、取代集与反馈都没变（别的会话写了）→ 仍复用旧引用，防跨会话 thrash。
+  if (prev !== undefined && prev.sessionId === sessionId && sameIds(prev.ids, ids)
+    && sameIds(prev.superseded ?? [], superseded) && (prev.fb ?? 0) === feedbackRev) return prev;
   return next;
 }
 
@@ -202,6 +225,7 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, fe
   const recentFirst = [...state.ids].reverse();
   const picked = recentFirst.slice(0, RECALL_VIEW_CAP);
   const byId = new Map((l1?.getByIds(picked) ?? []).map((r) => [r.id, r] as const));
+  const superseded = new Set(state.superseded ?? []);
   const items: RecallItemView[] = [];
   for (const id of picked) {
     const r = byId.get(id);
@@ -218,8 +242,10 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, fe
       body: clampBody(r.content),
       ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),
       ...(typeof rating === 'number' ? { rating } : {}),
-      // 退场记录仍留在列表里（文本还在上下文，直到压缩），只是该打上删除线。
+      // 退场记录仍留在列表里（文本曾是上下文的一部分，且判过时是人的裁决凭证），只是该打上删除线。
       ...(isRetired(r) ? { retired: true as const } : {}),
+      // 已被摘要取代：正文已不在上下文里。与 retired 正交，两者可同时在。
+      ...(superseded.has(id) ? { superseded: true as const } : {}),
     });
   }
   const next: RecallView = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };

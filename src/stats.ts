@@ -646,17 +646,22 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const sessionId = expectSessionId(p.sessionId);
       const ids = stores.recalled?.list(sessionId) ?? [];
       if (ids.length === 0) return { sessionId, records: [], typeCatalog: typeCatalogEntries() };
+      // 压缩水位之上的那批：正文已被摘要取代。与 retired 正交（真实实现见 session-recalled.ts）。
+      const superseded = stores.recalled?.supersededOf(sessionId);
       const halfLife = effectiveCfg(cfg, live).recall?.decayHalfLifeDays ?? 0;
       const byId = new Map(stores.l1.getByIds(ids).map((r) => [r.id, r] as const));
       const records = ids
         .map((id) => byId.get(id))
         .filter((r): r is NonNullable<typeof r> => r !== undefined)
-        .map((r) => hitToUiRecord(r, {
-          agingWeight: agingWeightOf(r.updatedAt, halfLife),
-          usage: stores.usage?.get(r.id) ?? null,
-          userRelevance: stores.feedback?.meanOf(r.id) ?? null,
-          userMark: stores.feedback?.lastOf(r.id) ?? null,
-        }));
+        .map((r) => {
+          const ui = hitToUiRecord(r, {
+            agingWeight: agingWeightOf(r.updatedAt, halfLife),
+            usage: stores.usage?.get(r.id) ?? null,
+            userRelevance: stores.feedback?.meanOf(r.id) ?? null,
+            userMark: stores.feedback?.lastOf(r.id) ?? null,
+          });
+          return superseded?.has(r.id) === true ? { ...ui, superseded: true } : ui;
+        });
       return { sessionId, records, typeCatalog: typeCatalogEntries() };
     }
 

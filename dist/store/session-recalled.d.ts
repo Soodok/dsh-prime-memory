@@ -21,13 +21,19 @@ export declare class SessionRecalledStore {
     protect(sessionKey: string, recordIds: readonly string[]): void;
     list(sessionKey: string): string[];
     /**
-     * 上下文事件：按原因区分。`'clear'`（用户主动清空）整表清；`'compact'`（摘要替换）**不动**。
+     * 上下文事件：按原因区分。`'clear'`（用户主动清空）整表清；`'compact'`（摘要替换）**只打取代标记**。
      *
-     * 旧实现两种都整表清，于是“压缩过一次”就把本会话召回历史（含已判过时的裁决凭证）抹平，
-     * 而列表上那些条目本来就是为了让人看见“这条我判过”才保留删除线的。
+     * 旧实现两种都整表清，于是“压缩过一次”就把本会话召回历史（含已判过时的裁决凭证）抹平；
+     * 改成“压缩什么都不做”又让列表谎报“这些正文还在上下文里”。现在压缩只动一维：
+     * 把**此刻在列表里的**标为「已被摘要取代」（已在标记里的不再推序号）。
      * 压缩仍然重置**去重与占用账本**（那两者关心的是“能不能重新注入”，与这张展示表无关）。
      */
     reset(sessionKey: string, reason?: 'compact' | 'clear'): void;
+    /**
+     * 本会话「正文已被摘要取代」的 id 集（投影与端点用；只读共享。
+     * 未出现过取代的会话返回共享空集，不每次新建）。
+     */
+    supersededOf(sessionKey: string): ReadonlySet<string>;
     /**
      * 注：曾有 `remove(sessionKey, recordIds)` 供「声明过时」单条摘除，已删。
      * 理由：用户判过时后条目得留在召回列表里显示删除线，所以**只有** `reset(…, 'clear')`
