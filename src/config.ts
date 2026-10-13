@@ -188,6 +188,21 @@ export interface MemoryConfig {
     enabled: boolean;
   };
   /**
+   * 名称蒸馏（pm-name-distill Phase 3）：让抽取当场就产出 `title`（与 content 分离定义），
+   * 而不是事后拿正则从正文剪。默认关——关时抽取/去重 prompt 与产物**逐字不变**
+   * （两条指令段都是追加式的，off 是 on 的前缀，所以五条 prompt sha1 金标准不必重锚）。
+   */
+  naming: {
+    /** 开=抽取与去重 merge 都要求产出 title，并把它当文件身份名候选入库（过不了闸仍交给起名器）。 */
+    enabled: boolean;
+    /**
+     * 开=在系统提示尾部追加标准格式示例集。**单独一个开关**是因为它的代价不对称：
+     * 示例每轮蒸馏都要付（约 1.2–1.4k 字的固定 prompt 开销），而“加了示例就质变”
+     * 目前只是假设，要等 A/B（`tools/ab-naming.mjs`）拿出 fallback 率对比后再定默认值。
+     */
+    fewShot: boolean;
+  };
+  /**
    * 召回相关度反馈（人在召回卡上打 -1..5）。
    *
    * 默认**开**，与 usageScenario/narrativeTemplates 的默认关不同——那两个改的是
@@ -524,6 +539,13 @@ export const memorySchema = Schema.object({
   // 类型叙述模板（G2）：默认关；开时抽取 prompt 追加分类型 content 骨架（off 逐字不变）。
   narrativeTemplates: Schema.object({
     enabled: Schema.boolean().default(false),
+  }),
+  // 名称蒸馏（Phase 3）：两个开关都默认关。开关的粒度不是改错而是**代价不同**：
+  // `enabled` 只多一个输出字段（几乎免费），`fewShot` 每轮都多付 1.2-1.4k 字的固定提示，
+  // 所以两者必须能分别开关（否则想只要字段就得连带买示例，或想关示例就得连功能一起关）。
+  naming: Schema.object({
+    enabled: Schema.boolean().default(false),
+    fewShot: Schema.boolean().default(false),
   }),
   // 召回相关度反馈：默认开（只新增写端点与播报，不改任何既有产物；播报需用户显式打 -1）。
   recallFeedback: Schema.object({

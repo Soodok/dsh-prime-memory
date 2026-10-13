@@ -249,6 +249,41 @@ function isBareCodeIdentifier(s) {
     return /[a-z][A-Z]/.test(s); // 词中大写翻转 = 驼峰标识符
 }
 /**
+ * 剥一个**模型给的** title 的形状噪声：空白（含全角空格）→ `-`、连字折叠、首尾点/横线剔掉。
+ *
+ * 为什么需要它：不是语义不对，只是字符形状不对——直接拿原文过形状闸会把
+ * “尾部多一个点”这种一律打进 fallback（真机旧行为：16/20 条白归规则名）。
+ * 导出是为了**只有一个整形函数**：管线与临时改名脚本共用，两套迟早漂。
+ */
+export function reshapeTitle(raw) {
+    return raw.replace(/[\s\u3000]+/g, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+}
+/**
+ * 收下模型产出的 title：先整形再入闸，**只超长**时按词元边界再收一刀。
+ *
+ * 返回落名或 `undefined`（不合格）。刻意**不回落规则名**：那是调用方的决定，
+ * 因为两条路的可观测要求不同（管线要“没名字就交给起名器”，脚本要“记 fallback+reason”）。
+ * 闸仍是 {@link validateTitle} 那一个，不开第二套判据。
+ *
+ * @param raw - 模型给的原文（故意收 `unknown`：模型输出是不可信输入）。
+ * @returns 可用的落名，或 `undefined`。
+ */
+export function acceptTitle(raw) {
+    if (typeof raw !== 'string')
+        return undefined;
+    const shaped = reshapeTitle(raw.trim());
+    if (shaped.length === 0)
+        return undefined;
+    // 两轮：原形状→若仅因超长被拒则按词元边界收到 NAME_MAX 再试。其他拒因（句子、路径、
+    // 叙述引子开头）收短也不会变合格，重试只会把垃圾洗成“看起来干净”的垃圾。
+    for (const cand of [shaped, clipAtTokenBoundary(shaped, NAME_MAX)]) {
+        const g = validateTitle(cand);
+        if (g.ok)
+            return g.name;
+    }
+    return undefined;
+}
+/**
  * 校验一个**人给的**名字是否可用（形状，不含唯一性）。
  *
  * 人从面板或 md 文件里改名字时，先过这道形状闸再谈唯一性：形状不合就拒，

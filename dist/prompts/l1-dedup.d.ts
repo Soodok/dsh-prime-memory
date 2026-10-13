@@ -35,6 +35,12 @@ export declare const CONFLICT_TYPE_CLAUSE = "## conflict \u7684\u7C7B\u578B\u4E0
 export interface DedupPromptOptions {
     /** §C 矛盾冻结总开关。**默认关**：关闭时 prompt 与改动前逐字一致。 */
     conflictFreeze?: boolean;
+    /**
+     * 名称蒸馏（Phase 3）：merge/update 时要一并产出 `merged_title`。
+     * **默认关**。不开就等于“合并一次就丢名字”：合并产物的正文是重写过的，
+     * 旧 title 不再描述它，而规则兜底名又会回到句子残片那条老路。
+     */
+    title?: boolean;
 }
 /**
  * 把注入词表后的 prompt 交给调用方。

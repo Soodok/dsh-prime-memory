@@ -202,6 +202,13 @@ export const memorySchema = Schema.object({
     narrativeTemplates: Schema.object({
         enabled: Schema.boolean().default(false),
     }),
+    // 名称蒸馏（Phase 3）：两个开关都默认关。开关的粒度不是改错而是**代价不同**：
+    // `enabled` 只多一个输出字段（几乎免费），`fewShot` 每轮都多付 1.2-1.4k 字的固定提示，
+    // 所以两者必须能分别开关（否则想只要字段就得连带买示例，或想关示例就得连功能一起关）。
+    naming: Schema.object({
+        enabled: Schema.boolean().default(false),
+        fewShot: Schema.boolean().default(false),
+    }),
     // 召回相关度反馈：默认开（只新增写端点与播报，不改任何既有产物；播报需用户显式打 -1）。
     recallFeedback: Schema.object({
         enabled: Schema.boolean().default(true),

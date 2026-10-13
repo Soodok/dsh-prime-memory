@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { MemoryConfig } from '../config.js';
 import type { L1Store } from '../store/l1.js';
 import type { MemoryState } from '../store/state.js';
-import type { ConversationAnchor, ConversationMessage, ExtractMode, MemoryFamily, MemoryLogger, MemoryRecord } from '../types.js';
+import type { ConversationAnchor, ConversationMessage, ExtractedMemory, ExtractMode, MemoryFamily, MemoryLogger, MemoryRecord, MemoryScope } from '../types.js';
 export interface ExtractionResult {
     stored: number;
     skipped: boolean;
@@ -15,6 +15,19 @@ export interface ExtractionResult {
 }
 /** 分族 checkpoint 桶(活引用,改动由调用方 save 落盘)。 */
 export type FamilyStates = Record<MemoryFamily, MemoryState>;
+/** 抽取产出 + 管线补上的五个字段(与 Step 1 的 `extracted` 元素同形)。 */
+export type PendingMemory = ExtractedMemory & {
+    record_id: string;
+    scene_name: string;
+    family: MemoryFamily;
+    /** §E 归属:write 侧已按 `resolveRecordScope` 算好,`toStoreRecord` 原样带出 */
+    scope: MemoryScope;
+    workspaceId: string;
+    /** 治理归属(ADR-0015 T1.9/T1.10):进管线时一次算定(I-21),写时随 store 行落盘。 */
+    repoKeyName: string;
+    repoKeyOwner: string;
+    applicability: string;
+};
 /**
  * 合并时的检索轴并集（P0-c）。
  *
@@ -33,6 +46,11 @@ export declare function mergeAxes(self: Record<string, unknown> | undefined, tar
     metadata: Record<string, unknown>;
     notes: string[];
 };
+/**
+ * 导出仅供用例：`title → name` 这一跳是本计划的风隙（模型给的名字能不能落成合法身份名），
+ * 而驱动整条 LLM 管线会把断言埋进抽取/去重两段的噪声里。与 `mergeAxes` 同一先例。
+ */
+export declare function toStoreRecord(m: PendingMemory, now: number, ts: number, anchorMap?: ReadonlyMap<string, ConversationAnchor>): MemoryRecord;
 /**
  * 按字符预算把消息切成多块(保持顺序,单条超预算独占一块,由 callLLM 兜底截断)。
  * 每条消息按 content 长度 + 64 字符脚手架开销(id/时间戳行)计。

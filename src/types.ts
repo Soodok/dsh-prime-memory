@@ -166,6 +166,13 @@ export interface ExtractedMemory {
   metadata: Record<string, unknown>;
   /** 所属情境名(L1 抽取的情境切分结果)。 */
   scene_name: string;
+  /**
+   * 名称蒸馏（Phase 3）：模型**当场**给的短标题（名词短语，回答“这条讲的是什么”），
+   * 与 `content`（完整叙述正文）分离。只在 `cfg.naming.enabled` 时被要求产出；
+   * 缺省或过不了 `validateTitle` 形状闸就**不写成名字**，仍由 `L1Store.assignMissingNames`
+   * 兜底——名字的唯一真源不因多一个来源就分两套判据。
+   */
+  title?: string;
   /** auto 档抽取输出的显式族判定(chat|work;纯档 Prompt 无此字段)。
    *  语境归族、形状不归族——避免"个人计划性事实被 work_* 形状吸走"的族错标。 */
   family?: string;

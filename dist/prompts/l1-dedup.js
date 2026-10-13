@@ -301,13 +301,26 @@ export function getConflictDetectionSystemPrompt(mode, opts) {
         : mode === 'work'
             ? WORK_CONFLICT_DETECTION_SYSTEM_PROMPT
             : CONFLICT_DETECTION_SYSTEM_PROMPT;
-    if (!opts?.conflictFreeze)
-        return base;
-    const withEnum = base.includes(ACTION_ENUM_BASE)
-        ? base.replace(ACTION_ENUM_BASE, ACTION_ENUM_FROZEN)
-        : base;
-    return `${withEnum}\n\n${CONFLICT_ACTION_CLAUSE}\n\n${CONFLICT_TYPE_CLAUSE}`;
+    let out = base;
+    if (opts?.conflictFreeze) {
+        const withEnum = base.includes(ACTION_ENUM_BASE)
+            ? base.replace(ACTION_ENUM_BASE, ACTION_ENUM_FROZEN)
+            : base;
+        out = `${withEnum}\n\n${CONFLICT_ACTION_CLAUSE}\n\n${CONFLICT_TYPE_CLAUSE}`;
+    }
+    // 追加而不改三处 schema：`merged_content` 在 chat/work/all 三份提示里各写一遍，
+    // 逐份改会让关闭态不再与旧行为逐字相同，并逼着五条 sha1 金标准重锚。
+    if (opts?.title)
+        out += MERGED_TITLE_CLAUSE;
+    return out;
 }
+/** 名称蒸馏（Phase 3）的 merge 侧指令段：仅在 cfg.naming.enabled 时追加。 */
+const MERGED_TITLE_CLAUSE = `
+
+【合并后的标题】action 为 merge 或 update 时，必须额外输出 "merged_title"：
+它是合并后那条记忆的 title，定义与单条记忆相同——8 个字左右的名词短语，回答“合并后这条讲的是什么”；
+不得是句子、不得以句末标点结尾、不得含路径/URL/session id/连续长 hex、不得以叙述引子开头、不得照抄 merged_content 的开头。
+action 为 store/skip 时省略。不合格时系统会丢弃它并另行命名。`;
 /**
  * 格式化批量冲突检测 prompt（统一候选池）。
  */

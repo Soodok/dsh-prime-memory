@@ -39,7 +39,12 @@ import { MdLedgerStore } from '../dist/store/memory-md-ledger.js';
 import { reconcileLedger } from '../dist/store/memory-md-export.js';
 import { sweepOrphanFiles } from '../dist/store/memory-md-orphan.js';
 import { digest, recordDigest, renderRecord, resolveMemoriesRoot, targetFor } from '../dist/store/memory-md.js';
-import { NAME_CLIP_MAX, NAME_MAX, allocUniqueName, clipAtTokenBoundary, deriveName, normalizeName, validateTitle } from '../dist/util/md-name.js';
+import { NAME_CLIP_MAX, acceptTitle, allocUniqueName, deriveName, reshapeTitle, validateTitle } from '../dist/util/md-name.js';
+
+// 整形函数不再本地养一份：`reshapeTitle` / `acceptTitle` 的真源是 `src/util/md-name.ts`，
+// 管线（toStoreRecord）与本脚本写进库的名字必须过同一套形状清洗。两套迟早漂，
+// 而这里漂了不报错——只会让“脚本认为合法、管线不认”的名字轮流出现。仍然导出给旧调用方。
+export { reshapeTitle };
 
 /** 计划里的默认端点（用户指定，与插件 direct 配置同形状）。 */
 export const DEFAULT_ENDPOINT = 'http://192.168.100.25:8203/v1/chat/completions';
@@ -206,13 +211,10 @@ export function validateTitleLike(raw) {
 }
 
 /**
- * LLM 标题整形：空白→`-`、连字折叠、首尾点/字清掉，再过 normalizeName。
+ * LLM 标题整形：已上收到 `md-name.ts::reshapeTitle`（上方重导出）。
  * 旧行为直接拿原文过形状闸，空格/尾点一律 `illegal-chars` 打进 fallback
  * （真机 16/20）；这些字符本来就不是语义问题，洗一下就能用。
  */
-export function reshapeTitle(t) {
-  return t.replace(/[\s\u3000]+/g, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '');
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // task_5.2 LLM 批量
@@ -329,22 +331,21 @@ export async function titleBatch(candidates, endpoint, apiKey, model, fetchImpl,
   for (const r of candidates) {
     const raw = map.get(r.id);
     if (raw === undefined) { out.push({ rec: r, cand: deriveName(r.content), source: 'fallback', reason: 'missing-item', raw: '' }); continue; }
-    let gate = validateTitleLike(raw);
-    let finalTitle = gate.ok ? gate.title : '';
-    // 模型只是给了个**超长**的名词短语：按词元边界收一刀仍是好名字，直接回落规则名
-    // 等于把已经拿到的语义扔掉重算（真机 3/176 属此类）。收梢用与 deriveName 同一个函数。
-    if (!gate.ok && gate.reason === 'too-long') {
-      const reshaped = normalizeName(reshapeTitle(raw));
-      if (reshaped.ok) {
-        const clipped = clipAtTokenBoundary(reshaped.name, NAME_MAX);
-        const again = validateTitleLike(clipped);
-        if (again.ok) { gate = again; finalTitle = again.title; }
-      }
+    // 整形与“只超长时按词元边界收一刀”都在 `acceptTitle`（真源）里，本地不再拼一套；
+    // 本函数只负责把**拒因**留痕（人审时要能看出模型给了什么、为什么没收）。
+    const gate = validateTitleLike(raw);
+    const accepted = acceptTitle(raw);
+    if (accepted === undefined) {
+      out.push({
+        rec: r,
+        cand: deriveName(r.content),
+        source: 'fallback',
+        reason: gate.ok ? 'name-shape' : `title-gate:${gate.reason}`,
+        raw,
+      });
+      continue;
     }
-    if (!gate.ok) { out.push({ rec: r, cand: deriveName(r.content), source: 'fallback', reason: `title-gate:${gate.reason}`, raw }); continue; }
-    const shape = normalizeName(reshapeTitle(finalTitle));
-    if (!shape.ok) { out.push({ rec: r, cand: deriveName(r.content), source: 'fallback', reason: `name-shape:${shape.reason}`, raw }); continue; }
-    out.push({ rec: r, cand: shape.name, source: 'llm', raw });
+    out.push({ rec: r, cand: accepted, source: 'llm', raw });
   }
   return { ok: true, rows: out };
 }

@@ -7,6 +7,7 @@
  */
 import { HOST_MEMORY_TYPES, MEMORY_TYPE_LABELS, typesOfFamily, typeEnumSep } from '../memory-types.js';
 import { CONTENT_IS_DATA_CLAUSE, DATA_DELIMITER_NOTE } from './boundary.js';
+import { EXTRACTION_FEW_SHOT } from './examples.js';
 // 词表枚举串由单一真源渲染（pm-name-distill task_1.6）：手抄枚举与写入白名单
 // 漂移过一次——prompt 让模型能选的类与 `memory_add` 肯收的类分头演化过。
 const TYPE_ENUM_WORK = typeEnumSep('|', 'work');
@@ -467,8 +468,28 @@ export function getExtractMemoriesSystemPrompt(mode, opts) {
         out += NARRATIVE_CLAUSE;
     if (opts?.usageScenario)
         out += USAGE_SCENARIO_CLAUSE;
+    // 名称蒸馏（Phase 3）：跟上面两个开关同一形状——**不改那三个 schema 常量本体**。
+    // 改本体有两个代价：off 不再与旧行为逐字相同（零漂移红线被破），且钉死提示全文的
+    // 五条 sha1 金标准全得重锚——为了一个可选字段去换掉“旧产物逐字不变”这个保证不值。
+    if (opts?.title)
+        out += TITLE_CLAUSE;
+    if (opts?.fewShot)
+        out += EXTRACTION_FEW_SHOT;
     return out;
 }
+/**
+ * 名称蒸馏（Phase 3）指令段：仅在 `cfg.naming.enabled` 时拼到系统提示末尾。
+ *
+ * 定义与 `examples.ts` 的止例同文：只给定义不给样子，模型就照着散文自由发挥（真机那批
+ * “句子残片名”就是这么来的）；只给样子不给定义，新类型进来时没人知道规则是什么。
+ */
+const TITLE_CLAUSE = `
+
+【记忆标题】每条记忆必须额外输出一个 "title" 字段，它与 content 是两个不同的产物：
+- title：6–14 个字的**名词短语**，回答“这条讲的是什么”。不得是完整句子、不得以句末标点结尾（。！？.!?）、不得含文件路径或 / \\ 分隔符、不得含 URL、session- 开头的会话 id、连续长 hex、-1234 这类版本号尾巴；不得以“用户要求/用户规定/团队已/团队将/针对…需求/已生成/本次/目前/结论/要点”等叙述引子开头；**不得照抄 content 的开头**。
+- content：完整叙述正文，定义与上面各类型的句式要求**不变**。
+
+两者都必填。title 不合格时系统会丢弃它并另行命名（宁可短而准，不要长而像句子）。`;
 /** 类型叙述模板（G2）指令段：仅在 cfg.narrativeTemplates.enabled 时拼到系统提示末尾。 */
 const NARRATIVE_CLAUSE = `
 

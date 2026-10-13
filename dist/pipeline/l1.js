@@ -13,6 +13,7 @@ import { buildReceipts, newRunId, persistReceiptsSafely } from '../store/receipt
 import { buildConflictPair, conflictRejectId, DEFER_MAX, normalizeClaimKey, normalizeConflictType, occupiesConflictQuota, pendingHardTotal, validateConflictPair, } from '../store/conflicts.js';
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt } from '../prompts/l1-extraction.js';
 import { normTags, normUsageScenario, readCognitiveHall, readWing } from '../metadata-validators.js';
+import { acceptTitle } from '../util/md-name.js';
 import { formatBatchConflictPrompt, getConflictDetectionSystemPrompt } from '../prompts/l1-dedup.js';
 import { resolveSourceAnchors, withSourceAnchors } from './anchors.js';
 import { familyForType, normPersistence, normScope, resolveRecordFamily, resolveRecordScope, WING_FALLBACK } from '../types.js';
@@ -142,7 +143,15 @@ export function mergeAxes(self, targets) {
     }
     return { metadata: out, notes };
 }
-function toStoreRecord(m, now, ts, anchorMap) {
+/**
+ * 导出仅供用例：`title → name` 这一跳是本计划的风隙（模型给的名字能不能落成合法身份名），
+ * 而驱动整条 LLM 管线会把断言埋进抽取/去重两段的噪声里。与 `mergeAxes` 同一先例。
+ */
+export function toStoreRecord(m, now, ts, anchorMap) {
+    // 名称蒸馏（Phase 3）：模型当场给的 title 只是**名字候选**，必须过同一个形状闸；
+    // 过不了就**不写键**，交给 `L1Store.assignMissingNames`——判据只留一份，
+    // 不在这里养第二套“看起来差不多”的名字清洗。
+    const titled = m.title === undefined ? undefined : acceptTitle(m.title);
     return {
         id: m.record_id,
         content: m.content,
@@ -166,6 +175,7 @@ function toStoreRecord(m, now, ts, anchorMap) {
         ...(m.repoKeyName ? { repoKeyName: m.repoKeyName } : {}),
         ...(m.repoKeyOwner ? { repoKeyOwner: m.repoKeyOwner } : {}),
         ...(m.applicability ? { applicability: m.applicability } : {}),
+        ...(titled === undefined ? {} : { name: titled }),
         // 文件身份键不在这里分：**起名只有一个真源**（`L1Store.assignMissingNames`）。
         // 以前这里自己分一份、库里再分一份，两套判据迟早漂移，而漂移的后果是同一个基底
         // 洗出两个名字（文件跳名）或两个记录抢一个名字（整条写不进去）。
@@ -288,7 +298,14 @@ mergeRekey) {
             halls,
         });
         const raw = await callLLM(ctx, cfg, {
-            system: getExtractMemoriesSystemPrompt(mode, { usageScenario: cfg.usageScenario?.enabled === true, narrative: cfg.narrativeTemplates?.enabled === true }),
+            system: getExtractMemoriesSystemPrompt(mode, {
+                usageScenario: cfg.usageScenario?.enabled === true,
+                narrative: cfg.narrativeTemplates?.enabled === true,
+                // 名称蒸馏（Phase 3）：示例段只在总开关开着时付（它与 title 是两层成本，
+                // 分开开关才能 A/B）。关着时这份 opts 产出的提示与改动前逐字相同。
+                title: cfg.naming?.enabled === true,
+                fewShot: cfg.naming?.enabled === true && cfg.naming.fewShot === true,
+            }),
             user: userPrompt,
             maxTokens: resolveLayerTokens(cfg, 'extract'),
             layer: 'l1-extract',
@@ -314,6 +331,10 @@ mergeRekey) {
                     : undefined;
                 extracted.push({
                     ...m,
+                    // 开关关着时**不把 title 带进管线**：旧记录形状逐字不变（不新增键、不参与任何判据）。
+                    ...(cfg.naming?.enabled === true && m.title !== undefined && m.title !== null
+                        ? { title: m.title }
+                        : {}),
                     record_id: newId('mem'),
                     scene_name: scene.scene_name,
                     family,
@@ -350,7 +371,7 @@ mergeRekey) {
         conflictFreeze: cfg.conflictFreeze.enabled,
     });
     const dedupRaw = await callLLM(ctx, cfg, {
-        system: getConflictDetectionSystemPrompt(mode, { conflictFreeze: cfg.conflictFreeze.enabled }),
+        system: getConflictDetectionSystemPrompt(mode, { conflictFreeze: cfg.conflictFreeze.enabled, title: cfg.naming?.enabled === true }),
         user: dedupPrompt,
         maxTokens: resolveLayerTokens(cfg, 'dedup'),
         layer: 'l1-dedup',
@@ -575,6 +596,11 @@ mergeRekey) {
         logger.info(`[memory] merge 传播身份(${m.record_id} ← ${targets.length} 条): `
             + `name=${mergedName ?? '(本轮没继承到，由起名器分配)'} extKey=${inheritedExtKey ?? '(无)'} `
             + `tags=${Array.isArray(axes.metadata.tags) ? axes.metadata.tags.length : 0}`);
+        // 名字优先级：继承旧身份（保持文件连续）> 模型当场给的 merged_title > 交给起名器。
+        // 顺序反了会让每次合并都把新语义挂在旧名字上，而旧名字描述的正是被合并掉的那批内容。
+        const mergedTitle = mergedName === undefined || mergedName.length === 0
+            ? acceptTitle(decision.merged_title)
+            : mergedName;
         added.push({
             id: m.record_id,
             content: mergedContent,
@@ -593,7 +619,7 @@ mergeRekey) {
             family: m.family,
             // 身份两键：从 targets 继承（没得继承且开关开着才现分）。
             ...(inheritedExtKey === undefined ? {} : { extKey: inheritedExtKey }),
-            ...(mergedName === undefined || mergedName.length === 0 ? {} : { name: mergedName }),
+            ...(mergedTitle === undefined || mergedTitle.length === 0 ? {} : { name: mergedTitle }),
             // 归属五字段必须带上：这里此前**一个都没写**，等于每次合并都把 scope/
             // workspaceId/repoKey/applicability 打回默认——cfg.scope='global' 时看不出来，
             // 一旦启用围栏，一条记忆归过哪个项目就在合并后静默丢了。

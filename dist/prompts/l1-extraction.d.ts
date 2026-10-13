@@ -12,6 +12,8 @@ export declare const EXTRACT_ALL_MEMORIES_SYSTEM_PROMPT: string;
 export declare function getExtractMemoriesSystemPrompt(mode: ExtractMode, opts?: {
     usageScenario?: boolean;
     narrative?: boolean;
+    title?: boolean;
+    fewShot?: boolean;
 }): string;
 /**
  * 格式化 L1 抽取用户 prompt。
