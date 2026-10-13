@@ -158,7 +158,7 @@ export const memorySchema = Schema.object({
      * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
      * 而不是全托底到 `<dataDir>/memories`）。默认路由表就是用户给的两条归类规则（路径可改，不需改码）。
      */
-    workspaceHints: Schema.object({
+    workspaceSource: Schema.object({
         enabled: Schema.boolean().default(true),
         routes: Schema.array(Schema.object({
             /**

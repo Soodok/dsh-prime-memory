@@ -433,11 +433,11 @@ export async function runExtraction(
       for (const m of scene.memories ?? []) {
         if (!m || typeof m.content !== 'string' || !m.content.trim()) continue;
         const family = resolveRecordFamily(forcedFamily, m.family, m.type ?? '');
-        // 内容路由（`cfg.workspaceHints`，默认关）：按内容谈到哪个项目定归属。
+        // 内容路由（`cfg.workspaceSource`，默认开）：按内容谈到哪个项目定归属。
         // 不走「来源会话反查」：session_id 恒为 default、锚点仅 7.3% 能定位到会话树，
         // 而内容自己说它属于哪个项目——不受这些缺失影响。见 `src/workspace-route.ts`。
-        const routed = cfg.workspaceHints?.enabled === true
-          ? routeWorkspace(`${m.content}\n${scene.scene_name}`, cfg.workspaceHints.routes)
+        const routed = cfg.workspaceSource?.enabled === true
+          ? routeWorkspace(`${m.content}\n${scene.scene_name}`, cfg.workspaceSource.routes)
           : undefined;
         extracted.push({
           ...m,

@@ -133,15 +133,22 @@ export interface MemoryConfig {
   /**
    * 内容路由（workspace 归属）：按「这条记忆**谈到**哪个项目」给记录补 `workspace_id`。
    *
+   * 名字沿革：本面曾叫 `workspaceHints`。那是“hints 时代”的遗产——当时归属靠来源链
+   * （session_id / 锚点 sessionId / 会话树路径反解）**猜**，证据弱所以只当提示。实测来源链三处
+   * 断裂（见下），主判据已换成内容路由：路由表是**权威裁决**而不是提示，它直接决定写盘落点。
+   * 硬改名不留兼容别名：`workspaceHints` 从未随任何发版外发，现网 profile 里不存在该键的已存值，
+   * 加别名等于养第二个事实源。
+   *
    * 为什么不用「产生它的会话」定位：实测 `l1_records.session_id` 恒为 `default`（废字段），
    * 锚点里的 sessionId 能在磁盘会话树里找到目录的只占 7.3%（树会被清理/隔离），
    * 而 L1 时间戳与 L0 两个时间列零命中——来路链不可依赖。内容路由不受锚点缺失影响。
    *
-   * 默认关。开启后**只写 `workspace_id` 列、不改 `scope`**：可见性仍由 `scope` 决定
-   * （`resolveRecordScope` 规则③ 的零漂移不破），所以对现有部署零行为变化；
-   * 将来真启用 workspace 围栏时，这个列已经是现成的正确依据。
+   * 默认**开**。开启后**只写 `workspace_id` 列、不改 `scope`**：可见性仍由 `scope` 决定
+   * （`resolveRecordScope` 规则③ 的零漂移不破），所以对检索可见面零行为变化；
+   * 但它**决定投射文件的落点根**（`targetFor` 按 workspace 优先生成 `<ws>/.agents/memory/`），
+   * 这一点不像“提示”那样无害——也是当初叫 hints 名不副实的地方。
    */
-  workspaceHints: {
+  workspaceSource: {
     enabled: boolean;
     /** 路由表：按数组序取首个命中——dsh 侧在前，故双项目并存时归 dsh（用户口径）。 */
     routes: WorkspaceRoute[];
@@ -507,7 +514,7 @@ export const memorySchema = Schema.object({
    * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
    * 而不是全托底到 `<dataDir>/memories`）。默认路由表就是用户给的两条归类规则（路径可改，不需改码）。
    */
-  workspaceHints: Schema.object({
+  workspaceSource: Schema.object({
     enabled: Schema.boolean().default(true),
     routes: Schema.array(Schema.object({
       /**

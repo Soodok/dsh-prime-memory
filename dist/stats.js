@@ -506,9 +506,9 @@ export async function handleEndpoint(endpoint, payload, deps) {
         case 'dsh-memory/workspace-relink': {
             // 存量记忆的 workspace 回填（内容路由）。**缺省干跑**：先看命中率与分布报告，再决定真写。
             // 真写额外要求高权限门（它改的是库里的列，虽然只改 `workspace_id`）。
-            const hints = effectiveCfg(cfg, live).workspaceHints;
-            if (hints?.enabled !== true)
-                throw new Error('内容路由未开启（cfg.workspaceHints.enabled）');
+            const wsSrc = effectiveCfg(cfg, live).workspaceSource;
+            if (wsSrc?.enabled !== true)
+                throw new Error('内容路由未开启（cfg.workspaceSource.enabled）');
             const p = (payload ?? {});
             const dryRun = p.dryRun !== false;
             if (!dryRun && live?.get().memoryMutate !== true)
@@ -518,10 +518,10 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     list: (o) => stores.l1.list(o),
                     setWorkspaceIds: (items) => stores.l1.setWorkspaceIds(items),
                 },
-                routes: hints.routes,
+                routes: wsSrc.routes,
                 dryRun,
-                maxRecords: hints.maxRecords,
-                timeBudgetMs: hints.timeBudgetMs,
+                maxRecords: wsSrc.maxRecords,
+                timeBudgetMs: wsSrc.timeBudgetMs,
                 logger: deps.logger,
             });
         }

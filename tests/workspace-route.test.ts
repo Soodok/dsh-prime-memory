@@ -17,14 +17,14 @@ import { resolve } from 'node:path';
  * 路由表**取自真配置默认值**，不在此手抄一份。
  *
  * 上一版这里写死了与 `config.ts` 同形的三条字面量，结果默认路由表改了这里不会红——
- * “断言与拄本一致、拄本不与事实一致”，等于把刚发生的双 `.agents` 缺陷留在看不见的位置。
+ * “断言与抄本一致、抄本不与事实一致”，等于把刚发生的双 `.agents` 缺陷留在看不见的位置。
  */
 const DEFAULTS = (memorySchema as unknown as (v: unknown) => Record<string, unknown>)({});
-const HINTS = DEFAULTS.workspaceHints as { enabled: boolean; routes: WorkspaceRoute[] };
-const ROUTES: WorkspaceRoute[] = HINTS.routes;
+const SRC = DEFAULTS.workspaceSource as { enabled: boolean; routes: WorkspaceRoute[] };
+const ROUTES: WorkspaceRoute[] = SRC.routes;
 
 describe('routeWorkspace', () => {
-  it('谈到 dsh 生态 → 归 rewrite-agently\\.agents', () => {
+  it('谈到 dsh 生态 → 归 rewrite-agently（workspace 根，不含 .agents）', () => {
     expect(routeWorkspace('dsh-prime-memory 的反刍计数没有持久化', ROUTES)).toContain('rewrite-agently');
     expect(routeWorkspace('Cordis 的 inject 门面', ROUTES)).toContain('rewrite-agently');
     expect(routeWorkspace('给 brief-sidebar 加一个分区', ROUTES)).toContain('rewrite-agently');
@@ -42,7 +42,7 @@ describe('routeWorkspace', () => {
   });
 
   it('内容路由默认开（用户口径：不要全托底到 <dataDir>/memories）', () => {
-    expect(HINTS.enabled).toBe(true);
+    expect(SRC.enabled).toBe(true);
   });
 
   it('默认路由的 path 是 workspace 根：拼上 WORKSPACE_SUBDIR 后不得出现 .agents 套 .agents', () => {
