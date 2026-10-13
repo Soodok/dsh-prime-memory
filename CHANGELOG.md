@@ -17,6 +17,106 @@
   - **建议状态(`longtask-hint-get`)以纯端点提供**:判定 = 上下文占用达 `contextThresholdPct` 或 todo 漂移达 `driftThreshold`(部署配置可调);配合 `longtask-compress-tail` 作手动压缩入口。
   - **撤下浮动球 UI(`client/src/longtask-fab.ts`;beta.1 起曾随包发布)**:悬浮建议面板的归属本在 context-compression 侧(「建议启动压缩」是其领域),pm 属误载——2026-10-02 用户裁定撤下。撤下不违座位契约(settings.section 恰一个 + 输入栏 pill,body 单例不占座位),但全应用级 overlay 会与其他插件的悬浮 UI 抢占屏幕角落;长任务开关与手动压缩入口待长任务定版时落记忆设置分节。
   - **`session-mode-set` 的 `mode` 转为可选**:与 `longTask` 二选一必传——纯切长任务开关不再被迫发送档位(旧客户端恒传 mode,行为不变)。响应 `mode` 改回当前生效值。
+## [0.24.0] — 未发布（本地线 `0.24.0-local.0…3`，2026-10-13）
+
+### 新增
+
+- **类型词表单一真源（`src/memory-types.ts`）**：宿主记忆分类 29 类原名 + 插件旧 7 类 + `unclassified` 兜底，共 37 类。投射目录白名单、`memory_add` 写入白名单、面板标签、抽取与去重 prompt 的枚举串、memport 的 TS/Python 双实现类型码**全部由它派生**。此前「类型全集」手抄在四处各自演化：`memory_add` 把外部分类**静默改写**成 `episodic`，而 memport 文案承诺「按原样透传」——同一件事两套口径。
+- **名称蒸馏（`cfg.naming`）**：抽取当场产出 `title`，与 `content` **分离定义**（title 是回答「这条讲的是什么」的名词短语，content 是完整叙述正文）；去重 merge 一并产出 `merged_title`。落库时 `title` 只是**名字候选**，必须过 `validateTitle` 形状闸，不合格仍交给起名器——名字唯一性的真源不因多一个来源就分两套判据。
+- **few-shot 标准格式示例集（`src/prompts/examples.ts`）**：分类型止例 + 反例，总长有预算上限（示例是每轮蒸馏都付的固定成本）；止例自身必须过闸门且骨架齐备，用例直接吃 `auditFewShot()` 而不是手抄判据。
+- **骨架判据可执行化（`SKELETON_ELEMENTS` + `scoreSkeleton`）**：把「没有前因后果、写不全就不算可用」从提示词里的愿望变成能测、能用来定默认值的判据。声明局限：关键词启发式，只能用于同输入两臂相对比较，不是绝对质量分。
+- **目录骨架 + 每类 `_index.md`（`memory-md-skeleton.ts`）**：每个类型目录放一个索引文件（类名 + 库里条数）。空目录会被 git 与压缩包吐掉，而「没这个目录」与「这类 0 条」在人眼里长得一样。幂等：内容不变零写入不刷 mtime；投射面关着时零动作。
+
+### 变更
+
+- **三处默认值按 A/B 实测翻开**（`narrativeTemplates.enabled` / `naming.enabled` / `naming.fewShot`）。依据是两条**方向相反**的实测：真会话蒸馏路径无示例时骨架齐备 **0.000**（0/23）、有示例 **0.703**（26/37）；而存量改名的命名任务加了示例反而 **−0.113**（漏答 18/160）。结论：**示例不能跨任务用**，它只进抽取提示、不进命名脚本。
+- **md 投射默认开**（`memExport.enabled`）：整个计划的前提是「文件为内容权威 + 库为索引」，默认关等于默认不用。`mdSync.enabled` **仍默认关**——它写库，风险不对称。
+- **workspace 归属配置面改名 `workspaceHints` → `workspaceSource`**：硬改名不留兼容别名（该键从未随任何发版外发，加别名等于养第二个事实源）。默认开；路由 `path` 改存 **workspace 根**（旧值写成 `E:\test\rewrite-agently\.agents`，而 `targetFor` 会再拼 `.agents/memory` → 得到 `.agents\.agents\memory\` 孤儿树，「根不存在才退回单根」的护栏拦不住这种形状）。真机存量回填 **724/1166** 条拿到归属，`hashRecords` 逐字不变。
+
+### 修复
+
+- **账本加载器把绝对键覆写进 `relPath`**：N10 之后账本键是绝对路径，而加载时那句「不一致就以键为准重写」每次加载都必然触发，实测污染 **1167/1241** 条；下游症状是孤儿归档拼出含冒号的非法目录、75 条搬家全 ENOENT。改为按 `root` + 键推导（新增 `deriveRelPath`），归档侧不再信任存下来的 `relPath`。
+- **`--revert` 未兜底 hooks**：`findArchivedOld` 直接摸 `deps.hooks.exists`，而 `runCli` 调 revert 时不传 hooks（apply 侧有 `deps.hooks ?? defaultHooks`，revert 侧漏了）。沙箱第一次跑回滚就 74 条全报错。重点在危害不对称：apply 出事靠 `--revert` 退回，**回滚本身是坏的等于备份是唯一退路**。
+- **跨根重复文件绕过「两边都变就不动」**：`roots = 记录落点根 ∪ 账本记过的根`，同一条记录可在两个根下各有一份文件；判定拿旧根那份、写盘走 `targetFor` 算的新根那份，于是旧根里人写的编辑把权威那份覆盖掉，而报告看起来完全合规。现只承认当前落点根，其余计入新字段 `staleRootFiles` 并显示到面板。
+- **撞名把整条记忆挤出检索库**：`{ ...旧记录, id: 新 id }` 的写法会带着「已属于另一行的名字」去写库 → 撞部分唯一索引 → 批量写回退逐条仍失败 → 该条合并产物**静默消失**（旧记录已退场，这次取代什么都没留下）。起名判据由「name 为空」改为「**这个名字不属于它**」。
+- **向量「待补 N 条」永不归零而「重建索引无事可做」**：展示面 `missing = total − embedded` 的分母含退场行，而退场行按设计合法地无向量；驱动补齐的两条 SQL 都排除退场行，于是同一屏同时出现「待补 114」与「无事可做」。分母口径统一为活跃行。
+- **投射护栏数的是「遍历」而不是「动作」**：`maxRecords` 把判为「未变」的条也计入配额，第二次点击扫的还是同一批前 N 条——面板那句「再点一次继续」是谎话（真机症状：`已写 9 · 未变 291 · 剩余 866` 恒定不变）。改为只数碰过磁盘的条，扫描总量由 `timeBudgetMs` 兜底。
+- **账本落盘 O(n²)**：`set()` 每条排一次整本 JSON 原子重写。1200 条同盘实测 **9442ms → 1954ms**（脏标记 + 合批窗口 + `flush()` 强制）。
+- **`NAME_MAX`(40) 与 `NAME_CLIP_MAX`(28) 拆成两个数**：字符计数把 ASCII 与汉字同价，`dsh-agent-teams` / `Python-3.13` 一个词吃掉 15 个额度，语义上只有一两个词的正当名被判 `too-long`；而统一放 40 会让 `deriveName` 把叙述句抄成句子尾巴（实测过）。顺带修掉 `validateTitle` 里硬写的 28（同阈值两个事实源）。
+- **名称闸门三处误杀**：剥引子表与拒名字表**分家**（裸主语「用户/团队」不再把「用户npm账号用户名」这类名词短语误杀，真机 10 条）；`has-id-fragment` 收窄为「非 ASCII 字符后的 4+ 位数字」（`ADR-0006`、`Han-1413141` 放行，真机 4 条）。
+
+### 已知边界
+
+- 反刍收尾增量投射靠 `id→updatedAt` 基线 diff，而 relabel / 退场走 `patchMetadata` 不碰 `updated_time` ⇒ **metadata-only 改写不当轮重投**。
+- P2 反向同步仍欠两项：启动自动钩子（已改为只给端点 + 按钮）、`pending` 那批未进 `conflicts` 待裁决面。
+- **8 语译本自 0.20.0 起未跟进**（本次只把 0.22.0 起的条目补进去，0.20/0.21 的空档仍在，另记）。
+
+## [0.23.0] — 未发布（本地线 `0.23.0-local.1…8`，2026-10-12…13）
+
+### 新增
+
+- **md 权威投射面（P0/P1/U/N10/N11）**：`l1_records.name` 列（文件身份键 + 部分唯一索引）；`renderRecord` + 双指纹账本（`dbDigest`/`fileDigest`）+ `mem-export` / `mem-reconcile` 端点；面板「外部存档」节；投射根改为 **workspace 优先**（`<ws>/.agents/memory/<类型>/<名>.memory.md`）；判过时联动 `.memory.md.disable`。
+- **P2 反向同步（文件 → 索引）**：按账本双 digest 做**三方象限**——仅文件变回灌入库并重写成规范渲染（消写回环）、仅库变复用 `exportRecords` 重写文件、**两边都变则两侧都不动**只挂 `pending`；`.disable` 走退场不删文件；来路不明的新文件只计数不入库（导入须过写入内核）。端点 `dsh-memory/mem-sync`。
+- **P3 归档 + 物理删**：`exportThenPurge` 门禁由整库哈希改**批次级投影**（并发蒸馏只要改过与本批无关的任何记录，旧实现就让清理永远删不动）；删后写给人读的 `retired.md` + 把该批投射文件（含 `.disable`）搬进快照目录；`cleanup-retired` 干跑回**待删清单预览**；图投影索引表新增 `forgetRecords`（此前全仓只增不减——从快照恢复的记录因投影行仍在而被当「已投影」，**永不重投影**，检索图静默缺一条不报错）。
+- **P4.1 默认类 `unclassified` + P4.2 正文版式标准化**（`normalizeContentMd`）。幂等是硬要求：不幂等就会让账本 `fileDigest` 每轮都变，写回环由渲染器自己引入。只做版式不做语义（不 bullet 化散文、不插 H1、不往正文塞元数据）。
+- **孤儿投射文件归档 `dsh-memory/mem-orphans`**：只搬「账本记着我们写过、且现在没有任何记录认领这个路径」的文件；账本里没有的来路不明文件**一律不动**（那可能是人放进投射目录等着被同步回来的输入）。不删只搬，保住相对形状与原文。
+
+### 行为修复（召回显示面）
+
+- 召回条目不再瞬时消失：view 带 `body` / `retired`，停止摘除 `session_recalled` 行，pill 显示「已判过时」删除线旁注。
+- 启动清理存量退场残留（本机实测 725 行仍脏在 `l1_fts`）；退场不变量补齐两条旁路写路径（修「标失效后检索面复活」）。
+- 召回打分端到端：`-1..5`（0..5 相关度；`-1` 声明过时并退场），打分进成熟度指标（`-1/1/2` 拉低并沉底、`4/5` 抬高并上浮）。
+- workspace 内容路由首次落地（dsh 生态 → `rewrite-agently`，非 dsh → `agent-no-dsh`；**只写 `workspace_id`、不动 `scope`、不动 `updated_time`**，并同步 `l1_fts` 行自带的归属列）。
+
+### 纪律
+
+- memport 两个巨型函数两轮拆分（Extract Function，行为保持，CLI 金标准逐字节回归）。
+- 端点契约**五处齐改**纪律持续生效（`MEMORY_ENDPOINTS ≡ switch ≡ contract 双 map ≡ contract-keys 计数 ≡ config`），计数链 55→56→57→58→59。
+
+## [0.22.2] — 2026-10-12
+
+### 新增
+
+- 皮肤三态（auto/light/dark）+ 令牌覆写块；面板 11 Tab 单行收紧。
+- `memory_import` 的 `ext_key` 幂等（`l1_records.ext_key` + 部分唯一索引 + `deduped` 回执）。
+- **Memport Connect**：`.mem` 解析 / 预筛 / 扫描 + 来源注册表 + Connect Tab（跨实现 sha256 金标准对齐）。
+- **技能结晶**：skill-store（JSON sidecar）+ 候选检测 + 技能召回注入 + 看板开关 `skillsEnabled`。
+- G4 图谱因果边（导致 / 因为 / 修复了 / 取代，不 bump `projectorVersion`）。
+- G3 成熟度读时派生（记录卡徽标 + 矛盾裁决视图旁注，不参与自动裁决）。
+- G1 `usageScenario` 门控端到端（抽取 → 落 `metadata.dsh_usage_scenario` → 召回细排；off 逐字不变）。
+- G2 类型叙述模板（门控 prompt 变体；off 是 on 的前缀）。
+- wing / 认知 hall 两轴不串（正交访问器 + 值域不相交回归锁）。
+- **G-live 本会话活召回集**：持久 sidecar + `session-recalled` 只读端点 + pill 只读列表。
+- `memoryRecall` 会话感知投影（brief 侧栏「本会话召回」分区数据源，`init(header).id`）。
+- `cfg.slots.migrateLegacy`（默认关）：把「钉成常驻、内容已由活 L1 承载」的 rule 槽位软退场。
+
+### 修复
+
+- 反刍回灌致待处理计数还原 / 变多（ruminate 改传空消息，与 `enqueueSessionSlices` 同语义）。
+- 反刍 finalize 与 `doLightRefresh` 的 L3 强制真跑 + 计数清零 + `state.save()` 落盘（修「待 L2/L3 反刍后不清、重启又弹回」）。
+
+### 纪律
+
+- 全部新能力默认关，off 态产物与注入逐字不变；跨插件展示契约（`memorySlots` 投影）保持接线。
+
+## [0.22.1] — 2026-10-09
+
+### 修复
+
+- **浮层底面改为不透明**：输入栏的记忆浮层（`.dsh-mem-popover`）与下拉 / 筛选面板（`.dsh-mem-pop`）原先跟随宿主的 `--dsw-specific-menu`，而宿主把它解析成半透明玻璃值 ⇒ 面板透出背景。现改为在**不透明 `bg-primary` 底**上叠别名层（underlay 手法），无论宿主 alpha 如何面板都是实的。
+
+## [0.22.0] — 2026-10-09
+
+### 变更
+
+- **声明面适配 15rc**：9 条 dsh peers 覆盖全部已发布宿主 rc（`0.1.0-rc.2..0.2.0-rc.2`，逐条 `npm view` 取证且各线集合一致），全部 optional；`engines >= 0.1.0-rc.2` 作粗栅栏（精确闸门是 peers），`package.json` 与 `dsh.plugin.json` 同步。
+- **双清单版本回正**：`dsh.plugin.json` 此前漂移在 `0.20.0-beta.6-dsh0.2.0.1`，本批与 `package.json` 逐字对齐（V1 门禁）。
+- **`dsh.client.inject` 收缩到 `ui-primitives` only**：`dsh-client-connection` 从 0.1.2 起才作为包存在，声明它会让整个 client 入口在 0.1.0/0.1.1 上挂起（`rpc.ts` 早已惰性 `ctx.get` 该连接）。
+
+### 纪律
+
+- 所有 build 型仓注入 `prepack: npm run build`——`npm pack` 只触发 prepack，不触发 `prepublishOnly`；这是 stale-build 冤案的三层防线之一。
+
 ## [0.21.0] — 2026-10-04
 
 ### 新增
