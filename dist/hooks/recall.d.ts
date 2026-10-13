@@ -41,6 +41,43 @@ export declare function isOwnRecallSource(src: {
     plugin?: unknown;
     form?: unknown;
 } | undefined | null): boolean;
+/** 会话事件里本插件可能关心的那几个字段（只读形状，不依赖宿主类型导出）。 */
+export interface InjectionEventLike {
+    /** 存储兜底路的事件形状宽松，`type` 也可能缺；缺即不是注入（下面的不等判定已覆盖 undefined）。 */
+    type?: string;
+    /** 存储兜底路（`sessionPersistence.loadStored`）的事件**不带 seq**，所以它是可选的。 */
+    seq?: number;
+    data?: {
+        id?: unknown;
+        source?: Record<string, unknown>;
+        content?: ReadonlyArray<{
+            type?: string;
+            text?: string;
+        }>;
+    };
+}
+/** 一条本插件召回注入的事实。 */
+export interface OwnInjectionFacts {
+    /** 注入消息 id——稳定锚点。**不能用 seq 做键**：压缩的 `surfaceOp:{op:'replace'}` 会重排它。 */
+    id: string;
+    /**
+     * 该消息此刻在日志里的 seq（拿去比 `surface.nodes`）。
+     *
+     * `undefined` = 这条来源根本没有 seq。**没有 seq 就不能声称“它可见”**——
+     * 宁可算“不在可见集里”，也不拿一个臆测的默认值去判（哨兵值会把误标藏起来）。
+     */
+    seq: number | undefined;
+    /** 注入正文字符数（token 估算用）。 */
+    chars: number;
+}
+/**
+ * 认出一条 `user/message` 事件是不是本插件的召回注入，并取出它的消息 id / seq / 正文字数。
+ *
+ * 这是**唯一的识别口径**：召份额估算（live 与存储两条路）与「正文已被摘要取代」对账都读它。
+ * 两处各写一套判定迟早漂移，而漂移的后果是静默的（份额归零或误标取代）。
+ * 署名判定走 `isOwnRecallSource`，同时吃 v4 `plugin:memory` 与 v3 旧行形状。
+ */
+export declare function ownInjectionFromEvent(ev: InjectionEventLike): OwnInjectionFacts | undefined;
 export declare function buildRecallQuery(messages: Array<{
     content: unknown;
 }>, tailMessages?: number, maxChars?: number): string;

@@ -21,6 +21,7 @@ import { MdLedgerStore } from '../src/store/memory-md-ledger.js';
 import { exportRecords } from '../src/store/memory-md-export.js';
 import { resolveMemoriesRoot } from '../src/store/memory-md.js';
 import { syncFromFiles } from '../src/pipeline/md-sync.js';
+import { parseMdFile } from '../src/store/memory-md-parse.js';
 import type { EmbeddingService } from '../src/store/embedding.js';
 import type { MemoryRecord } from '../src/types.js';
 
@@ -174,6 +175,51 @@ describe('syncFromFiles 边界', () => {
     const rep = await sync();
     expect(rep.orphan).toBe(1);
     expect(rep.retired).toBe(0);
+  });
+
+  it('正文被手改（hash 与正文不符）→ 计入 hashMismatch，仍按文件侧回灌并重盖指纹', async () => {
+    const { store, root, sync } = await setup();
+    const p = pathOf(root, 'work_fact', '官方地址上行');
+    await writeFile(p, (await readFile(p, 'utf8')).replace('上行必须走官方地址', '上行必须走镜像地址'), 'utf8');
+
+    const rep = await sync();
+    // 自校验不符被看见，但没有变成拒收：正文照旧回灌入库。
+    expect(rep.hashMismatch).toBe(1);
+    expect(rep.imported).toBe(1);
+    expect(store.all().find((r) => r.id === 'r2')?.content).toContain('镜像地址');
+    // 重写后文件自洽：hash 与正文再次对上。
+    expect(parseMdFile(await readFile(p, 'utf8'))?.hashValid).toBe(true);
+    // 再跑一轮：自校验已恢复，一切 same，不再报不符。
+    const rep2 = await sync();
+    expect(rep2.hashMismatch).toBe(0);
+    expect(rep2.same).toBe(3);
+  });
+
+  it('老投射文件没有 hash 键 → 计入 unsigned（无自校验能力），按文件侧回灌后补盖', async () => {
+    const { root, sync } = await setup();
+    const p = pathOf(root, 'work_fact', '官方地址上行');
+    // 模拟升级前的产物：整行删掉 hash。
+    await writeFile(p, (await readFile(p, 'utf8')).replace(/^hash: .*\n/m, ''), 'utf8');
+
+    const rep = await sync();
+    expect(rep.unsigned).toBe(1);
+    expect(rep.hashMismatch).toBe(0);
+    // 回灌重写带上新指纹；下一轮 unsigned 归零。
+    expect(parseMdFile(await readFile(p, 'utf8'))?.hashValid).toBe(true);
+    expect((await sync()).unsigned).toBe(0);
+  });
+
+  it('.disable 的正文与 hash 不符也照样退场（后缀即裁决，自校验只留痕）', async () => {
+    const { store, root, sync } = await setup();
+    const base = pathOf(root, 'work_fact', 'pnpm-hoisted');
+    const text = await readFile(base, 'utf8');
+    // 凭证正文被手改（hash 停留在改前）——不能因此把退场锁死。
+    await writeFile(`${base}.disable`, text.replace('pnpm 需要 hoisted 平铺布局', 'pnpm 已不需要 hoisted'), 'utf8');
+
+    const rep = await sync();
+    expect(rep.retired).toBe(1);
+    expect(rep.hashMismatch).toBe(1);
+    expect(store.all().find((r) => r.id === 'r1')?.validTo).toBeDefined();
   });
 
   it('没有账本也认不出记录的新文件 → 计数，绝不入库（导入须过写入内核）', async () => {

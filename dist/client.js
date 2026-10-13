@@ -1696,7 +1696,9 @@ var __defProp = Object.defineProperty;
 		  const links = rep.skippedLinks > 0 ? ` · 防护拦下 ${rep.skippedLinks} 个链接/越界条目（未读）` : "";
 		  const stale = rep.staleRootFiles > 0 ? ` · 陈旧根 ${rep.staleRootFiles} 个文件未参与同步（交给孤儿归档）` : "";
 		  const multi = rep.multiPath > 0 ? ` · 同记录多路径 ${rep.multiPath} 份未动（先跑孤儿归档再同步）` : "";
-		  return head + tail + extra + links + stale + multi + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
+		  const hashBad = rep.hashMismatch > 0 ? ` · 自校验不符 ${rep.hashMismatch} 个（文件被外部改动，已按文件侧处理）` : "";
+		  const unsigned = rep.unsigned > 0 ? ` · 未签名 ${rep.unsigned} 个（老投射文件无 hash，下轮导出补盖）` : "";
+		  return head + tail + extra + links + stale + multi + hashBad + unsigned + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "");
 		}
 		function lineOfOrphans(rep) {
 		  const head = rep.dryRun ? `账本共 ${rep.scanned} 条 · 仍被认领 ${rep.claimed} · 无人认领 ${rep.orphans}（未搬任何东西）` : `已搬 ${rep.moved} · 失败 ${rep.failed} · 仍被认领 ${rep.claimed}`;
@@ -4050,7 +4052,9 @@ var __defProp = Object.defineProperty;
 		      if (r && r.ok) {
 		        setSel(/* @__PURE__ */ new Set());
 		        if (expandedId && ids.indexOf(expandedId) >= 0) setExpandedId(null);
-		        fetchPage(last, 0, false);
+		        const removed = r.value?.deleted ?? ids.length;
+		        setItems((prev) => prev.filter((m) => !ids.includes(m.id)));
+		        setTotal((t) => t === null ? null : Math.max(0, t - removed));
 		        if (showRetired) loadRetired();
 		      } else if (r) setError(r.error ? r.error.message : "退场失败");
 		    }).catch((e) => setError(String(e && e.message || e)));
@@ -4065,7 +4069,8 @@ var __defProp = Object.defineProperty;
 		          return next;
 		        });
 		        if (expandedId === id) setExpandedId(null);
-		        fetchPage(last, 0, false);
+		        setItems((prev) => prev.filter((m) => m.id !== id));
+		        setTotal((t) => t === null ? null : Math.max(0, t - 1));
 		        if (showRetired) loadRetired();
 		      } else if (r) setError(r.error ? r.error.message : "退场失败");
 		    }).catch((e) => setError(String(e && e.message || e)));
@@ -4092,7 +4097,10 @@ var __defProp = Object.defineProperty;
 		    rpc("dsh-memory/records-restore", { ids }).then((r) => {
 		      if (r && r.ok) {
 		        loadRetired();
-		        fetchPage(last, 0, false);
+		        const restored = new Set(ids);
+		        setItems(
+		          (prev) => prev.map((m) => restored.has(m.id) ? { ...m, retired: false, retiredReason: void 0 } : m)
+		        );
 		      } else if (r) setError(r.error ? r.error.message : "恢复失败");
 		    }).catch((e) => setError(String(e && e.message || e))).finally(() => setRetiredBusy(false));
 		  };
@@ -4119,6 +4127,15 @@ var __defProp = Object.defineProperty;
 		          },
 		          onKeyDown: (e) => {
 		            if (e.key === "Enter") search();
+		            else if (e.key === "Escape" || e.key === "Backspace" && (e.ctrlKey || e.metaKey)) {
+		              if (query.length > 0) {
+		                e.preventDefault();
+		                setQuery("");
+		                const conds = { query: "", type: typeFilter, scene: sceneFilter, halls: hallFilter, tag: tagFilter, untagged: untaggedOnly, retired: retiredFilter };
+		                setLast(conds);
+		                fetchPage(conds, 0, false);
+		              }
+		            }
 		          }
 		        }
 		      ),
@@ -6195,19 +6212,24 @@ var __defProp = Object.defineProperty;
 		    };
 		  }, [rpc, sessionId]);
 		  if (records === void 0) return null;
-		  const recentFirst = [...records].reverse();
+		  const rows = records.filter((r) => r.superseded !== true || r.retired === true);
+		  const recentFirst = [...rows].reverse();
 		  const shown = recentFirst.slice(0, SHOW_CAP);
 		  const hidden = recentFirst.length - shown.length;
+		  const allSuperseded = rows.length === 0 && records.length > 0;
 		  return /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "dsh-mem-sinfo", children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		      "div",
 		      {
 		        style: { fontSize: 11, color: "var(--dsh-mem-text-3)", marginBottom: 6 },
-		        title: "本会话召回注入过的记忆（压缩后仍保留在本列表里，清空会话才清除；不是常驻注入）",
-		        children: "本会话召回 " + records.length + " 条"
+		        title: "本会话召回、且正文仍在上下文里的记忆（正文被摘要顶掉的已折叠不显示；清空会话才清除；不是常驻注入）",
+		        children: "本会话召回 " + rows.length + " 条"
 		      }
 		    ),
-		    records.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)", lineHeight: "16px" }, children: "还没召回到记忆（聊几轮后按相关性自动浮现）" }) : /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: [
+		    allSuperseded ? (
+		      // 不是“还没召回到”——那批确实注入过，只是正文已被摘要顶掉。说谎的空态比不显示更糟。
+		      /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)", lineHeight: "16px" }, children: "本会话注入过的 " + records.length + " 条记忆正文已被摘要取代" })
+		    ) : records.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)", lineHeight: "16px" }, children: "还没召回到记忆（聊几轮后按相关性自动浮现）" }) : /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: [
 		      shown.map((r) => /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { style: rowStyle, title: rowTitle(r), children: [
 		        /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
 		          "span",

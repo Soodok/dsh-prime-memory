@@ -8,7 +8,11 @@
  *
  * 一条刻意的不对称：文件里的 `id` 只当**线索**，不当身份。id 每轮新铸（F1），一次合并
  * 就换；真正认人靠账本键（绝对路径）与 `name`。
+ *
+ * 另有一条自校验：frontmatter 里的 `hash` 是投射时盖下的正文指纹（N13）。这里只**核对**它
+ * 与正文本体是否一致（`hashValid`），不替调用方决定怎么处置——那属于同步侧的裁决。
  */
+import { contentHash } from './memory-md.js';
 /** 取 frontmatter 块：首行必须是 `---`，到下一个 `---` 为止。 */
 function splitFrontmatter(text) {
     // BOM 与 CRLF 都要先吃掉：人在记事本里改一行就会引入 \r，而 `\r` 会让 key 匹配不上。
@@ -63,6 +67,7 @@ export function parseMdFile(text) {
         ? fields.get('usageScenario').filter((s) => typeof s === 'string' && s.length > 0)
         : [];
     const prio = Number(fields.get('priority'));
+    const declaredHash = str(fields.get('hash'));
     return {
         name: str(fields.get('name')),
         type: str(fields.get('type')),
@@ -72,6 +77,8 @@ export function parseMdFile(text) {
         usageScenario: scenario,
         extKey: str(fields.get('extKey')),
         id: str(fields.get('id')),
+        hash: declaredHash,
+        hashValid: declaredHash.length === 0 ? undefined : declaredHash === contentHash(parts.body),
         retired: fields.get('retired') === true,
         content: parts.body,
     };

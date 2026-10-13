@@ -1,10 +1,16 @@
 /**
- * 本会话召回区（G-live）：pill 浮层里的一段**普通只读列表**——当前会话已注入、
- * 尚未被压缩覆盖的记忆（= 模型此刻真正看到的那几条）。
+ * 本会话召回区（G-live）：pill 浮层里的一段**普通只读列表**——当前会话注入过、且正文仍在
+ * 上下文里的那几条（= 模型此刻真正看到的）。
+ *
+ * 两种“离场”分处理（用户 2026-10-13 定）：
+ * - 已被摘要取代（`superseded`）：**直接隐藏不显示**，与 brief 折叠同口径；
+ * - 判过时（`retired`）：仍列出并划删除线——那是人的裁决凭证，“正文没了”不是丢掉裁决的理由。
+ * 两标记同存时保留该行（裁决优先）。压缩不再清空底层列表（12a5154），所以“隐藏”必须发生在
+ * 这一层的过滤上，而不是靠数据被删。
  *
  * 刻意**不是**槽位：
- * - 不注册、不常驻、不提供 pin/激活任何写操作。记忆按相关性隐式浮现，压缩/清空即离开上下文；
- * - 数据源 `dsh-memory/session-recalled`（按 sessionKey 的持久 sidecar，compact/clear 自动 reset），
+ * - 不注册、不常驻、不提供 pin/激活任何写操作。记忆按相关性隐式浮现；
+ * - 数据源 `dsh-memory/session-recalled`（按 sessionKey 的持久 sidecar），
  *   所以旧会话重开也读得到，不是重启即空的内存态；
  * - 与 `memorySlots` 投影无关（那条路只承载用户手动写的常驻约定）。
  *
@@ -61,20 +67,30 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
 
   if (records === undefined) return null;
 
+  // 正文已被摘要取代的条目直接隐藏（用户定，与 brief 折叠同口径）；判过时行例外保留——
+  // 那是裁决凭证，两标记同存时也不能一起藏掉。
+  const rows = records.filter((r) => r.superseded !== true || r.retired === true);
   // 注入序是旧→新，展示成最近在上
-  const recentFirst = [...records].reverse();
+  const recentFirst = [...rows].reverse();
   const shown = recentFirst.slice(0, SHOW_CAP);
   const hidden = recentFirst.length - shown.length;
+  // 底层确实召回过、只是全部被折叠：不能当成“从没召回”。
+  const allSuperseded = rows.length === 0 && records.length > 0;
 
   return (
     <div className="dsh-mem-sinfo">
       <div
         style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)', marginBottom: 6 }}
-        title="本会话召回注入过的记忆（压缩后仍保留在本列表里，清空会话才清除；不是常驻注入）"
+        title="本会话召回、且正文仍在上下文里的记忆（正文被摘要顶掉的已折叠不显示；清空会话才清除；不是常驻注入）"
       >
-        {'本会话召回 ' + records.length + ' 条'}
+        {'本会话召回 ' + rows.length + ' 条'}
       </div>
-      {records.length === 0 ? (
+      {allSuperseded ? (
+        // 不是“还没召回到”——那批确实注入过，只是正文已被摘要顶掉。说谎的空态比不显示更糟。
+        <div style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)', lineHeight: '16px' }}>
+          {'本会话注入过的 ' + records.length + ' 条记忆正文已被摘要取代'}
+        </div>
+      ) : records.length === 0 ? (
         <div style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)', lineHeight: '16px' }}>
           还没召回到记忆（聊几轮后按相关性自动浮现）
         </div>
@@ -91,7 +107,7 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
               <span className="dsh-mem-sinfo-val" style={r.retired === true ? STALE_TEXT_STYLE : textStyle}>
                 {r.content}
               </span>
-              {/* 判过时的条目不摘除，只划掉：文本仍在上下文里，直到压缩。 */}
+              {/* 判过时的条目不摘除，只划掉：那是人的裁决，与“正文还在不在”无关。 */}
               {r.retired === true ? (
                 <span style={{ fontSize: 10, color: 'var(--dsh-mem-text-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>
                   已判过时

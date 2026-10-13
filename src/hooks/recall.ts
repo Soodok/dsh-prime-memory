@@ -107,6 +107,56 @@ export function isOwnRecallSource(src: { kind?: unknown; plugin?: unknown; form?
   return !!src && src.form === 'recall' && (src.kind === 'plugin:memory' || (src.kind === 'plugin' && src.plugin === 'memory'));
 }
 
+/** 会话事件里本插件可能关心的那几个字段（只读形状，不依赖宿主类型导出）。 */
+export interface InjectionEventLike {
+  /** 存储兜底路的事件形状宽松，`type` 也可能缺；缺即不是注入（下面的不等判定已覆盖 undefined）。 */
+  type?: string;
+  /** 存储兜底路（`sessionPersistence.loadStored`）的事件**不带 seq**，所以它是可选的。 */
+  seq?: number;
+  data?: {
+    id?: unknown;
+    source?: Record<string, unknown>;
+    content?: ReadonlyArray<{ type?: string; text?: string }>;
+  };
+}
+
+/** 一条本插件召回注入的事实。 */
+export interface OwnInjectionFacts {
+  /** 注入消息 id——稳定锚点。**不能用 seq 做键**：压缩的 `surfaceOp:{op:'replace'}` 会重排它。 */
+  id: string;
+  /**
+   * 该消息此刻在日志里的 seq（拿去比 `surface.nodes`）。
+   *
+   * `undefined` = 这条来源根本没有 seq。**没有 seq 就不能声称“它可见”**——
+   * 宁可算“不在可见集里”，也不拿一个臆测的默认值去判（哨兵值会把误标藏起来）。
+   */
+  seq: number | undefined;
+  /** 注入正文字符数（token 估算用）。 */
+  chars: number;
+}
+
+/**
+ * 认出一条 `user/message` 事件是不是本插件的召回注入，并取出它的消息 id / seq / 正文字数。
+ *
+ * 这是**唯一的识别口径**：召份额估算（live 与存储两条路）与「正文已被摘要取代」对账都读它。
+ * 两处各写一套判定迟早漂移，而漂移的后果是静默的（份额归零或误标取代）。
+ * 署名判定走 `isOwnRecallSource`，同时吃 v4 `plugin:memory` 与 v3 旧行形状。
+ */
+export function ownInjectionFromEvent(ev: InjectionEventLike): OwnInjectionFacts | undefined {
+  if (ev.type !== 'user/message') return undefined;
+  const msg = ev.data;
+  if (msg === undefined || !isOwnRecallSource(msg.source)) return undefined;
+  let chars = 0;
+  for (const b of msg.content ?? []) {
+    if (b?.type === 'text' && typeof b.text === 'string') chars += b.text.length;
+  }
+  return {
+    id: typeof msg.id === 'string' ? msg.id : '',
+    seq: typeof ev.seq === 'number' ? ev.seq : undefined,
+    chars,
+  };
+}
+
 export function buildRecallQuery(
   messages: Array<{ content: unknown }>,
   tailMessages = RECALL_QUERY_TAIL_MESSAGES,
@@ -321,9 +371,13 @@ export function registerRecall(
   const postCompaction = new PostCompactionTracker();
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'compaction/end') return;
-    if (postCompaction.onCompactionEnd(String(session.id ?? session))) {
-      logger.info(`[memory] compaction/end:下一轮将做一次增强召回(session=${String(session.id ?? session)})`);
+    const sid = String(session.id ?? session);
+    if (postCompaction.onCompactionEnd(sid)) {
+      logger.info(`[memory] compaction/end:下一轮将做一次增强召回(session=${sid})`);
     }
+    // Phase 0B：压缩完成的**权威**信号。取代标记不再只靠 agent/created 的粗标，而是从
+    // surface.nodes 逐条对账；即使那条事件根本没发，这里也能把状态算对（并可撤销误标）。
+    void reconcileSupersededFromSession(sid);
   });
 
   // 上下文压缩/清空 → 已注入内容从模型上下文丢失,重置该会话的去重压制
@@ -632,7 +686,7 @@ export function registerRecall(
           usage?.recordAttempt(scoped.map((h) => h.id), fresh.slice(0, lines.length).map((h) => h.id));
           // G-live:按 **sessionKey**(=agent.session?.id ?? agent.id，与 pill 的 sessionId / 投影 header.id 同源，
           // 非 ownerId)记入本会话“活召回集”，供侧栏卡读取；压缩时同键 reset。
-          stores.recalled?.add(sessionKey, fresh.slice(0, lines.length).map((h) => h.id));
+          stores.recalled?.add(sessionKey, fresh.slice(0, lines.length).map((h) => h.id), injection.id);
           // 入账在成功构造注入消息之后、返回 enter 之前——任何前置抛错路径账目零扰动
           const led = ledgerFor(payload.agent.id);
           recordRecallInjection(led, text.length);
@@ -673,8 +727,43 @@ export function registerRecall(
     return body ? `${body}\n\n${MEMORY_TOOLS_GUIDE}` : MEMORY_TOOLS_GUIDE;
   };
 
-  /** 本插件 recall 注入的署名判据(v4 `plugin:memory` 与 v3 旧行双形状;宿主迁移负责升格旧行)。 */
-  const isOwnRecall = isOwnRecallSource;
+  /**
+   * Phase 0B：从宿主官方会话服务对账「正文已被摘要取代」。
+   *
+   * 为什么不再靠“收到一条压缩事件”：事件会漏（压缩不重建 agent 的宿主线、含 CCI compat 摘要
+   * 路径，根本不发 `agent/created{source:'compact'}`），漏一次就永久错且无法补算。这里每轮从
+   * `surface.nodes` 重算，所以既能标上也能撤销（误标与重新注入都会自愈）。
+   *
+   * @returns true = 会话在 live store 且已对账；false = 不在（调用方回退到粗标记）。
+   */
+  const reconcileSupersededFromSession = async (sessionId: string): Promise<boolean> => {
+    const recalled = stores.recalled;
+    if (recalled === undefined || sessionId.length === 0) return false;
+    try {
+      // 可选服务一律走 ctx.get() 的宽容路径（属性访问对未 inject 的服务会抛）
+      const sessions = ctx.get?.('sessions') as
+        | { get?: (id: SessionId) => { surface: { nodes: readonly number[] }; events: ReadonlyArray<InjectionEventLike> } | undefined }
+        | undefined;
+      const session = typeof sessions?.get === 'function' ? sessions.get(sessionId as SessionId) : undefined;
+      if (session === undefined) return false;
+      const visibleSeqs = new Set(session.surface.nodes);
+      const visibleIds = new Set<string>();
+      const knownIds = new Set<string>();
+      for (const ev of session.events) {
+        const own = ownInjectionFromEvent(ev);
+        if (own === undefined || own.id.length === 0) continue;
+        knownIds.add(own.id);
+        // 只有“确实拿到了 seq 且 seq 在 surface.nodes 里”才算可见；
+        // seq 缺失时宁可不撤销（保持原状），也不拿臆测值去改动人的可见性判定。
+        if (own.seq !== undefined && visibleSeqs.has(own.seq)) visibleIds.add(own.id);
+      }
+      return recalled.reconcileSuperseded(sessionId, visibleIds, knownIds);
+    } catch (err) {
+      // 对账是旁路：失败只能“本轮不动”，绝不能弄挂召回或面板。
+      logger.warn(`[memory] 取代对账失败(本轮跳过): ${errDetail(err)}`);
+      return false;
+    }
+  };
 
   async function estimateRecallFromStorage(sessionId: string): Promise<number | null> {
     if (storedEstimateCache.has(sessionId)) return storedEstimateCache.get(sessionId) ?? null;
@@ -688,15 +777,11 @@ export function registerRecall(
       if (stored?.events) {
         tokens = 0;
         for (const ev of stored.events) {
+          // 存储路没有 surface，只能沿用“遇到压缩就归零”的启发式（粗近似，不伪装成精确判定）。
           if (typeof ev.type === 'string' && ev.type.startsWith('compaction')) tokens = 0;
-          if (ev.type !== 'user/message') continue;
-          const src = ev.data?.source;
-          if (!isOwnRecall(src)) continue;
-          let chars = 0;
-          for (const b of ev.data?.content ?? []) {
-            if (b?.type === 'text' && typeof b.text === 'string') chars += b.text.length;
-          }
-          if (chars > 0) tokens += estimateInjectedMessageTokens(chars);
+          const own = ownInjectionFromEvent(ev);
+          if (own === undefined || own.chars === 0) continue;
+          tokens += estimateInjectedMessageTokens(own.chars);
         }
       }
     } catch {
@@ -723,17 +808,10 @@ export function registerRecall(
         const visible = new Set(session.surface.nodes);
         let total = 0;
         for (const ev of session.events) {
-          if (ev.type !== 'user/message' || !visible.has(ev.seq)) continue;
-          const msg = ev.data as
-            | { source?: Record<string, unknown>; content?: ReadonlyArray<{ type?: string; text?: string }> }
-            | undefined;
-          const src = msg?.source;
-          if (!isOwnRecall(src) || !msg) continue;
-          let chars = 0;
-          for (const b of msg.content ?? []) {
-            if (b?.type === 'text' && typeof b.text === 'string') chars += b.text.length;
-          }
-          if (chars > 0) total += estimateInjectedMessageTokens(chars);
+          const own = ownInjectionFromEvent(ev);
+          // 无 seq = 无法证明它可见，就不能算进份额（与原行为一致：原来它必须 visible.has(seq)）。
+          if (own === undefined || own.chars === 0 || own.seq === undefined || !visible.has(own.seq)) continue;
+          total += estimateInjectedMessageTokens(own.chars);
         }
         return total;
       }

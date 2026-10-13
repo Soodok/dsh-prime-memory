@@ -27,6 +27,16 @@ describe('本会话召回显示层（构建产物）', () => {
     expect(client).toContain('本会话召回');
   });
 
+  it('pill 折叠“已被摘要取代”的条目而不显示（用户裁定，与 brief 同口径）', () => {
+    // 旁注 UI 必须彻底撤掉：留着它就是“半隐藏”，比纯隐藏更误导。
+    expect(client).not.toContain('recalled-superseded');
+    // 但过滤判据仍要在（不读 superseded 字段就无法折叠）。
+    expect(client).toContain('superseded');
+    // 全被折叠时的空态不得谎称“还没召回到记忆”，两个分支都要在包里。
+    expect(client).toContain('正文已被摘要取代');
+    expect(client).toContain('还没召回到记忆');
+  });
+
   it('投影侧（memorySlots）不得挂任何召回痕迹——形式不是持久槽位', () => {
     expect(slotsProjection).not.toMatch(/recalled/i);
     expect(slotsProjection).not.toContain('session-recalled');

@@ -13,7 +13,7 @@ export declare class SessionRecalledStore {
     revision(): number;
     private init;
     /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。 */
-    add(sessionKey: string, recordIds: readonly string[]): void;
+    add(sessionKey: string, recordIds: readonly string[], injectionId?: string): void;
     /**
      * 标为受保护（判过时/软退场）：条目留在列表里，且不受上限淘汰与压缩清理影响。
      * id 不在本会话列表里时忽略（不凭这个调用新建条目）。
@@ -34,6 +34,19 @@ export declare class SessionRecalledStore {
      * 未出现过取代的会话返回共享空集，不每次新建）。
      */
     supersededOf(sessionKey: string): ReadonlySet<string>;
+    /**
+     * 用会话日志的可见性事实**对账**取代标记（Phase 0B）。
+     *
+     * 判据来自宿主官方服务的 `surface.nodes`（模型可见节点集），而不是“有没有收到一条压缩事件”：
+     * 事件会漏、换代形状还会漂移，而且漏一次就永久错、无法补算。本函数每轮从事实源重算，
+     * 所以既能**标上**也能**撤销**（重新注入、或上一轮粗标记误伤的，都能自愈）。
+     *
+     * @param visible 当前仍在上下文里的注入消息 id 集
+     * @param known   会话日志里出现过的本插件注入消息 id 集。**不在 known 里的 = 该注入从未落日志**
+     *                （被宿主取消/覆盖），属“无从判”——不动它，绝不猜成“已被取代”。
+     * @returns 是否真的改动了状态（无改动不推 rev、不写盘）
+     */
+    reconcileSuperseded(sessionKey: string, visible: ReadonlySet<string>, known: ReadonlySet<string>): boolean;
     /**
      * 注：曾有 `remove(sessionKey, recordIds)` 供「声明过时」单条摘除，已删。
      * 理由：用户判过时后条目得留在召回列表里显示删除线，所以**只有** `reset(…, 'clear')`

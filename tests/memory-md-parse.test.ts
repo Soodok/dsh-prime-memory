@@ -86,4 +86,25 @@ describe('parseMdFile', () => {
     const p = parseMdFile('---\nname: "x"\npriority: abc\n---\n正文\n');
     expect(p?.priority).toBe(60);
   });
+
+  it('往返带自校验：渲染出的 hash 与正文一致（hashValid=true）', () => {
+    const p = parseMdFile(renderRecord(rec()).text);
+    expect(p?.hash).toMatch(/^[0-9a-f]{12}$/);
+    expect(p?.hashValid).toBe(true);
+  });
+
+  it('正文被改而 hash 没跟着改 → hashValid=false（不拒收，交同步侧处理）', () => {
+    const text = renderRecord(rec()).text.replace('镜像有同步延迟', '镜像已无延迟');
+    const p = parseMdFile(text);
+    expect(p).toBeDefined();
+    expect(p?.hashValid).toBe(false);
+    // 改动后的正文照旧读得出来——自校验只标记，不吞内容。
+    expect(p?.content).toContain('镜像已无延迟');
+  });
+
+  it('老文件没有 hash 键 → hash 空串、hashValid=undefined（兼容放行）', () => {
+    const p = parseMdFile('---\nname: "x"\ntype: "work_fact"\n---\n正文\n');
+    expect(p?.hash).toBe('');
+    expect(p?.hashValid).toBeUndefined();
+  });
 });

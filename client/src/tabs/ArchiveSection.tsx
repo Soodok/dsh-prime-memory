@@ -82,7 +82,11 @@ function lineOfSync(rep: SyncReport): string {
   const stale = rep.staleRootFiles > 0 ? ` · 陈旧根 ${rep.staleRootFiles} 个文件未参与同步（交给孤儿归档）` : '';
   // 同记录多路径且两份都被改：机器不替人挑，但必须说出来——不说就会被当成“同步过了”。
   const multi = rep.multiPath > 0 ? ` · 同记录多路径 ${rep.multiPath} 份未动（先跑孤儿归档再同步）` : '';
-  return head + tail + extra + links + stale + multi + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
+  // 自校验（N13）：声明 hash 与正文不符 = 文件被外部改动/损坏；老文件没带 hash = 无自校验能力。
+  // 两者都不阻断同步，但必须说出来——不说就把“文件已不自洽”伪装成“一切正常”。
+  const hashBad = rep.hashMismatch > 0 ? ` · 自校验不符 ${rep.hashMismatch} 个（文件被外部改动，已按文件侧处理）` : '';
+  const unsigned = rep.unsigned > 0 ? ` · 未签名 ${rep.unsigned} 个（老投射文件无 hash，下轮导出补盖）` : '';
+  return head + tail + extra + links + stale + multi + hashBad + unsigned + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
 }
 
 function lineOfOrphans(rep: OrphanReport): string {

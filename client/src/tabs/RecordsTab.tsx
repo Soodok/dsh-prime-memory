@@ -204,7 +204,12 @@ export function RecordsTab(props: { rpc: RpcFn }) {
         if (r && r.ok) {
           setSel(new Set());
           if (expandedId && ids.indexOf(expandedId) >= 0) setExpandedId(null);
-          fetchPage(last, 0, false);
+          // 去动态（用户裁决）：删除后不再自动重发上一条查询（删除后检索面短暂
+          // 变慢，自动重查会让面板停在「加载中」且输入体验劣化）。列表只在表单
+          // 提交（搜索/回车/清空快捷键/筛选钮/刷新）时变化，这里只做本地移除。
+          const removed = (r.value as { deleted?: number } | undefined)?.deleted ?? ids.length;
+          setItems((prev) => prev.filter((m) => !ids.includes(m.id)));
+          setTotal((t) => (t === null ? null : Math.max(0, t - removed)));
           if (showRetired) loadRetired();
         } else if (r) setError(r.error ? r.error.message : '退场失败');
       })
@@ -223,7 +228,9 @@ export function RecordsTab(props: { rpc: RpcFn }) {
             return next;
           });
           if (expandedId === id) setExpandedId(null);
-          fetchPage(last, 0, false);
+          // 去动态：同批量删除，本地移除即可，不自动重发查询。
+          setItems((prev) => prev.filter((m) => m.id !== id));
+          setTotal((t) => (t === null ? null : Math.max(0, t - 1)));
           if (showRetired) loadRetired();
         } else if (r) setError(r.error ? r.error.message : '退场失败');
       })
@@ -261,7 +268,12 @@ export function RecordsTab(props: { rpc: RpcFn }) {
       .then((r) => {
         if (r && r.ok) {
           loadRetired();
-          fetchPage(last, 0, false);
+          // 去动态：不自动重发主列表查询；混排视图里可见的行就地翻回活跃态，
+          // 全量刷新交给下一次表单提交（搜索/回车/刷新按钮）。
+          const restored = new Set(ids);
+          setItems((prev) =>
+            prev.map((m) => (restored.has(m.id) ? { ...m, retired: false, retiredReason: undefined } : m)),
+          );
         } else if (r) setError(r.error ? r.error.message : '恢复失败');
       })
       .catch((e: unknown) => setError(String((e && (e as Error).message) || e)))
@@ -293,6 +305,17 @@ export function RecordsTab(props: { rpc: RpcFn }) {
           }}
           onKeyDown={(e: ReactKeyboardEvent) => {
             if (e.key === 'Enter') search();
+            // 清空快捷键（用户裁决）：Esc / Ctrl+Backspace 清空关键词并回到全量列表。
+            // 清空即一次空查询提交——列表仍只在表单提交动作时变化（去动态）。
+            else if (e.key === 'Escape' || (e.key === 'Backspace' && (e.ctrlKey || e.metaKey))) {
+              if (query.length > 0) {
+                e.preventDefault();
+                setQuery('');
+                const conds = { query: '', type: typeFilter, scene: sceneFilter, halls: hallFilter, tag: tagFilter, untagged: untaggedOnly, retired: retiredFilter };
+                setLast(conds);
+                fetchPage(conds, 0, false);
+              }
+            }
           }}
         />
         <NSel

@@ -202,11 +202,28 @@ export async function syncFromFiles(deps) {
         skippedLinks: 0,
         staleRootFiles: 0,
         multiPath: 0,
+        hashMismatch: 0,
+        unsigned: 0,
         samples: [],
     };
     const sample = (path, action) => {
         if (report.samples.length < SAMPLE_CAP)
             report.samples.push({ path, action });
+    };
+    // 自校验留痕（N13）：声明 `hash` 与正文实算不符 → 记一笔并留痕；没声明（老文件） → 记
+    // `unsigned`。**两者都不阻断流程**：不符=正文被人改过（正是 P2 要回灌的输入），无声明=升级前
+    // 的产物（下轮导出会补盖）。只把「静默按既有口径处理」变成「看得见地处理」。
+    const noteHash = (parsed, abs) => {
+        if (parsed === undefined)
+            return; // 形状不符的文件：主循环各有各的处置，不自校验
+        if (parsed.hashValid === false) {
+            report.hashMismatch += 1;
+            sample(abs, 'hash: 声明与正文不符（文件被外部改动/损坏；仍按既有象限处理）');
+            logger?.warn(`[memory] md 自校验不符（声明 hash ≠ 正文实算）: ${abs}`);
+        }
+        else if (parsed.hashValid === undefined) {
+            report.unsigned += 1;
+        }
     };
     // 根集合：记录算出的落点根 ∪ 账本记过的根。后者让人改过 workspaceId、或记录已被
     // 裁撤之后，残留文件仍能被看见并挂账，而不是凭空蒸发。
@@ -340,6 +357,9 @@ export async function syncFromFiles(deps) {
                 sample(abs, 'disable: 找不到对应记录');
                 continue;
             }
+            // 自校验（N13）：`.disable` 也带 `hash`。**只留痕、不改裁决**——后缀即“人已判过时”，
+            // 若因凭证正文被手改一字节就把退场锁死，等于让人改坏凭证就丢掉处置意图。
+            noteHash(parseMdFile(text), abs);
             if (rec.validTo !== undefined) {
                 report.same += 1;
                 if (entry === undefined)
@@ -364,8 +384,12 @@ export async function syncFromFiles(deps) {
             sample(abs, '新文件: 未入库（导入须过写入内核）');
             continue;
         }
+        // 只对已入库记录的文件做自校验（上面新文件/下面孤儿不算：那不是我们管理的投射）。
+        noteHash(parsed, abs);
         const dbChanged = entry === undefined || entry.dbDigest !== recordDigest(rec);
-        const fileChanged = entry === undefined || entry.fileDigest !== digest(text);
+        // 自校验：声明 `hash` 与正文不符 = 文件侧确实被改过。把它并进 `fileChanged`（只可能“打开”、
+        // 不会“关掉”判据）——这样即使账本基线因故与文件碰巧相等，正文被改仍不会被漏判成 `same`。
+        const fileChanged = entry === undefined || entry.fileDigest !== digest(text) || parsed.hashValid === false;
         if (dbChanged && fileChanged) {
             report.pending += 1;
             sample(abs, 'both: 挂待裁决（两侧都不动）');

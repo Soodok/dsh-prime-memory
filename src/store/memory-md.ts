@@ -42,7 +42,7 @@ export const UNSORTED_DIR = UNCLASSIFIED_DIR;
 
 /** frontmatter 允许出现的键（用例断言键集**恰等于**它，防检索轴泄漏进文件）。 */
 export const FRONTMATTER_KEYS: readonly string[] = [
-  'name', 'type', 'priority', 'createdAt', 'updatedAt', 'usageScenario', 'extKey', 'id', 'retired',
+  'name', 'type', 'priority', 'createdAt', 'updatedAt', 'usageScenario', 'extKey', 'id', 'hash', 'retired',
 ];
 
 /** 内容指纹长度（12 hex ≈ 48 bit；账本只用来判"变没变"，不当身份用）。 */
@@ -175,6 +175,20 @@ export function digest(text: string): string {
   return createHash('sha1').update(normText(text), 'utf8').digest('hex').slice(0, DIGEST_HEX);
 }
 
+/**
+ * 投射文件自带 `hash` 键的**规范口径**（导出写、读入核，两侧都必须走它）。
+ *
+ * 定义 = `digest(归一后的正文)`：与 `renderRecord` 写进 `hash` 的值、以及读侧拿解析出的
+ * `content` 实算的值三处同源。只覆盖正文、不含任何 frontmatter 字段——所以换 id、换文件名、
+ * 退场标记都不改变它，它只回答「正文有没有被改过」这一件事。
+ *
+ * 走 `digest`（内含 NFKC + 空白折叠）而非裸 sha1：CRLF/BOM/尾随空白这类搬运噪声不该触发
+ * 假不符（搬文件、换编辑器、git autocrlf 都会引入它们）。
+ */
+export function contentHash(content: string): string {
+  return digest(normalizeContentMd(content));
+}
+
 /** 记录内容指纹：正文字段（不含 metadata——轴变了不算内容变）。 */
 export function recordDigest(r: Pick<MemoryRecord, 'content'>): string {
   return digest(r.content);
@@ -212,6 +226,9 @@ export function renderRecord(r: MdRecordInput): { relPath: string; text: string 
   const scenario = Array.isArray(r.metadata?.dsh_usage_scenario)
     ? (r.metadata?.dsh_usage_scenario as string[]).filter((s) => typeof s === 'string')
     : [];
+  // 正文只归一一次：`hash` 键与正文行必须落在**同一份正文**上，否则读入侧的
+  // 「声明 vs 实算」核对会因两次归一是否完全一致而变得可疑（归一虽幂等，复用同一变量最稳）。
+  const body = normalizeContentMd(r.content);
   const lines: string[] = ['---'];
   lines.push(fmLine('name', stem));
   lines.push(fmLine('type', r.type));
@@ -221,12 +238,17 @@ export function renderRecord(r: MdRecordInput): { relPath: string; text: string 
   lines.push(fmLine('usageScenario', scenario));
   lines.push(fmLine('extKey', r.extKey ?? ''));
   lines.push(fmLine('id', r.id));
+  // 正文自校验指纹（N13）：写在 frontmatter 里的 `hash`，只覆盖**渲染后的正文**（与下面那行
+  // 正文同源）。读入侧据此确认文件未被外部改动/损坏，且**不依赖账本**——文件搬到别的机器、
+  // 账本丢失时仍可自证。刻意不含 frontmatter：`id` 会随 merge 重铸（F1），把 id 算进去会让
+  // 「换了 id、正文没动」也误报被改。
+  lines.push(fmLine('hash', contentHash(r.content)));
   // 退场标记只在真退场时写：不留 `retired: false` 这种噪声键（键集越稳，人越不容易改错）。
   if (r.validTo !== undefined) lines.push(fmLine('retired', true));
   lines.push('---', '');
   // 正文过一道版式归一（P4.2）：无结构存量文本出口就是标准形状。归一是**幂等**的，
   // 所以不会把账本 `fileDigest` 每轮推得变一下（不幂等 = 反向同步永远判“文件被改过”）。
-  lines.push(normalizeContentMd(r.content));
+  lines.push(body);
   lines.push('');
   return { relPath, text: lines.join('\n') };
 }

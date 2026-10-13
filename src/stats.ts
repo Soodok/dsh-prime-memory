@@ -197,6 +197,24 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * 面板检索软超时（用户裁决：删除后检索面短暂变慢不得挂死面板）：竞速到期即
+ * 返回业务错误（客户端显示可重试的提示，而不是永远「加载中」）。底层检索
+ * 稍后自然完成时其结果被 race 吸收，不产生未处理拒绝。
+ */
+function raceTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+/** 面板关键词检索的软超时上限：正常检索是毫秒级，8s 足够宽裕。 */
+const SEARCH_SOFT_TIMEOUT_MS = 8_000;
+
 /** 读取 JSON 请求体(上限 8MB:面板最大载荷为 list-records 分页与图谱检索)。 */
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -688,7 +706,6 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       // 退场**前**的记录快照（带 workspaceId/name）——失效联动要靠它算落点，
       // 而 `retire` 只改 `valid_to`，不会动这两列，所以取在退场前后等价，取在前更直白。
       let rec: MemoryRecord | undefined;
-      let fileDisabled: string | undefined;
       if (p.score === -1) {
         rec = stores.l1.getByIds([id])[0];
         const retiredAt = new Date().toISOString();
@@ -703,10 +720,12 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           announced = true;
         }
         deps.logger.info(`[memory] 用户声明记忆过时并退场(session=${sessionId}, ${retired ? '已退场' : '本已退场'}): ${id}`);
-        // 失效联动（N11）：退场成立后才去动投射文件；它失败只影响“磁盘凭证”，
-        // 绝不回滚退场、也绝不抛（`disableProjectionFile` 内部收敛成 'failed'）。
+        // 失效联动（N11，用户裁决改异步）：退场成立后**后台**去动投射文件——
+        // 文件改名/建凭证不再阻塞本 RPC（面板只等库侧结果）；它内部已收敛所有
+        // 失败为 'failed'，这里再兜一层 catch 只落日志。响应不再带 fileDisabled
+        // （面板无消费方），磁盘凭证的对账走 mem-reconcile。
         if (retired && rec !== undefined && cfg.memExport?.enabled === true && stores.mdLedger !== undefined) {
-          fileDisabled = await disableProjectionFile({
+          void disableProjectionFile({
             // 传退场**后**的快照：渲染出的 frontmatter 才带 `retired: true`，
             // 凭证自己就能说清它为什么存在。
             record: { ...rec, validTo: Date.parse(retiredAt) || Date.now() },
@@ -714,7 +733,9 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
             dataDir: deps.dataDir,
             ledger: stores.mdLedger,
             logger: deps.logger,
-          });
+          })
+            .then((outcome) => deps.logger.info(`[memory] 投射文件失效联动(后台): ${id} → ${outcome}`))
+            .catch((err: unknown) => deps.logger.warn(`[memory] 投射文件失效联动(后台)异常: ${err instanceof Error ? err.message : String(err)}`));
         }
       }
       return {
@@ -723,7 +744,6 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         rating: { last: entry.last, rated: entry.rated, mean: entry.mean, obsolete: entry.obsolete },
         retired,
         announced,
-        ...(fileDisabled === undefined ? {} : { fileDisabled }),
       };
     }
 
@@ -1616,7 +1636,13 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (p.query && p.query.trim()) {
         const SEARCH_CAP = 200;
         const wanted = offset + limit + 1;
-        const hits = await stores.l1.search(p.query, Math.min(wanted, SEARCH_CAP), { type: p.type || undefined });
+        // 软超时护栏（用户裁决）：删除/繁重后台动作后的短暂检索迟滞不得把面板
+        // 永久钉在「加载中」。到期返回可重试的业务错误。
+        const hits = await raceTimeout(
+          stores.l1.search(p.query, Math.min(wanted, SEARCH_CAP), { type: p.type || undefined }),
+          SEARCH_SOFT_TIMEOUT_MS,
+          `检索超时(${Math.round(SEARCH_SOFT_TIMEOUT_MS / 1000)}s):检索面短暂繁忙,请重试或缩小关键词`,
+        );
         let filtered = p.scene ? hits.filter((h) => h.scene_name === p.scene) : hits;
         // Wing / Room 过滤(检索命中不含 metadata):按 id 批量取回元数据后过滤
         let metaById: Map<string, Record<string, unknown>> | null = null;

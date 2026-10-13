@@ -23,6 +23,21 @@ import { SESSION_RECALLED_FILE_VERSION } from './file-versions.js';
 import { RECALL_DEDUPE_IDS_CAP, RECALL_DEDUPE_SESSION_CAP } from './recall-dedupe.js';
 /** 共享空集（未出现过取代的会话重复取用，不必每次新建）。 */
 const EMPTY_SET = new Set();
+/**
+ * 读 `injectedBy` 的宽容解析：非对象/值非字符串一律丢弃。
+ * 宁可让那条记录“无从判”（对账不动它），也不把脏值喂给可见性判定——
+ * 一个错的 message id 会把仍在本上下文里的正文误标成“已被摘要取代”。
+ */
+function toIdMap(raw) {
+    const out = new Map();
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+        return out;
+    for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === 'string' && v.length > 0)
+            out.set(k, v);
+    }
+    return out;
+}
 /** 条目过期清理（90 天，与 recall-dedupe 同量级）。 */
 const PRUNE_MS = 90 * 24 * 3600_000;
 export class SessionRecalledStore {
@@ -77,23 +92,28 @@ export class SessionRecalledStore {
                 // 旧文件没这个字段（不升版本号：升了会让老文件整体进只读降级），默认空集。
                 protectedIds: new Set(Array.isArray(entry.protectedIds) ? entry.protectedIds : []),
                 supersededIds: new Set(Array.isArray(entry.supersededIds) ? entry.supersededIds : []),
+                injectedBy: toIdMap(entry.injectedBy),
                 updatedAt: entry.updatedAt ?? now,
             });
         }
     }
     /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。 */
-    add(sessionKey, recordIds) {
+    add(sessionKey, recordIds, injectionId) {
         if (!sessionKey || recordIds.length === 0)
             return;
         let entry = this.entries.get(sessionKey);
         if (!entry) {
-            entry = { ids: new Set(), protectedIds: new Set(), supersededIds: new Set(), updatedAt: 0 };
+            entry = { ids: new Set(), protectedIds: new Set(), supersededIds: new Set(), injectedBy: new Map(), updatedAt: 0 };
             this.entries.set(sessionKey, entry);
         }
+        const stamp = typeof injectionId === 'string' && injectionId.length > 0 ? injectionId : undefined;
         for (const id of recordIds) {
             entry.ids.add(id);
             // 重新注入 = 正文又回到模型上下文，取代标记随之撤销（否则一条记忆只能被取代一次）。
             entry.supersededIds.delete(id);
+            // 记下这次注入落在哪条消息上：没有它，对账就无从判“这条正文还在不在”。
+            if (stamp !== undefined)
+                entry.injectedBy.set(id, stamp);
             // 淘汰只能淘汰**没被判过时的**：受保护条目数本身超顶时宁可超顶，也不能把人的裁决
             // 凭证挤掉（那等于“因为后面又召回了几条，所以之前那条的判定历史丢了”）。
             while (entry.ids.size > RECALL_DEDUPE_IDS_CAP) {
@@ -103,6 +123,7 @@ export class SessionRecalledStore {
                 entry.ids.delete(oldest);
                 entry.protectedIds.delete(oldest);
                 entry.supersededIds.delete(oldest);
+                entry.injectedBy.delete(oldest);
             }
         }
         entry.updatedAt = Date.now();
@@ -177,6 +198,44 @@ export class SessionRecalledStore {
         return this.entries.get(sessionKey)?.supersededIds ?? EMPTY_SET;
     }
     /**
+     * 用会话日志的可见性事实**对账**取代标记（Phase 0B）。
+     *
+     * 判据来自宿主官方服务的 `surface.nodes`（模型可见节点集），而不是“有没有收到一条压缩事件”：
+     * 事件会漏、换代形状还会漂移，而且漏一次就永久错、无法补算。本函数每轮从事实源重算，
+     * 所以既能**标上**也能**撤销**（重新注入、或上一轮粗标记误伤的，都能自愈）。
+     *
+     * @param visible 当前仍在上下文里的注入消息 id 集
+     * @param known   会话日志里出现过的本插件注入消息 id 集。**不在 known 里的 = 该注入从未落日志**
+     *                （被宿主取消/覆盖），属“无从判”——不动它，绝不猜成“已被取代”。
+     * @returns 是否真的改动了状态（无改动不推 rev、不写盘）
+     */
+    reconcileSuperseded(sessionKey, visible, known) {
+        const entry = this.entries.get(sessionKey);
+        if (entry === undefined || entry.injectedBy.size === 0)
+            return false;
+        let touched = false;
+        for (const [id, messageId] of entry.injectedBy) {
+            if (!entry.ids.has(id))
+                continue;
+            if (!known.has(messageId))
+                continue;
+            if (visible.has(messageId)) {
+                if (entry.supersededIds.delete(id))
+                    touched = true;
+            }
+            else if (!entry.supersededIds.has(id)) {
+                entry.supersededIds.add(id);
+                touched = true;
+            }
+        }
+        if (!touched)
+            return false;
+        entry.updatedAt = Date.now();
+        this.rev++;
+        this.writeChain = this.writeChain.then(() => this.persist());
+        return true;
+    }
+    /**
      * 注：曾有 `remove(sessionKey, recordIds)` 供「声明过时」单条摘除，已删。
      * 理由：用户判过时后条目得留在召回列表里显示删除线，所以**只有** `reset(…, 'clear')`
      * 能让条目离开这张列表（判过时的还受 `protectedIds` 保护，连淘汰都走不到它）。
@@ -242,6 +301,7 @@ export class SessionRecalledStore {
                 recordIds: [...e.ids],
                 ...(e.protectedIds.size > 0 ? { protectedIds: [...e.protectedIds] } : {}),
                 ...(e.supersededIds.size > 0 ? { supersededIds: [...e.supersededIds] } : {}),
+                ...(e.injectedBy.size > 0 ? { injectedBy: Object.fromEntries(e.injectedBy) } : {}),
                 updatedAt: e.updatedAt,
             };
         }

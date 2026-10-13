@@ -8,7 +8,11 @@
  *
  * 一条刻意的不对称：文件里的 `id` 只当**线索**，不当身份。id 每轮新铸（F1），一次合并
  * 就换；真正认人靠账本键（绝对路径）与 `name`。
+ *
+ * 另有一条自校验：frontmatter 里的 `hash` 是投射时盖下的正文指纹（N13）。这里只**核对**它
+ * 与正文本体是否一致（`hashValid`），不替调用方决定怎么处置——那属于同步侧的裁决。
  */
+import { contentHash } from './memory-md.js';
 
 /** 解析出的文件形状（值已按渲染时的类型还原）。 */
 export interface MdParsed {
@@ -23,6 +27,16 @@ export interface MdParsed {
   extKey: string;
   /** 文件里记的 record_id，只当线索。 */
   id: string;
+  /** 文件声明的正文指纹（`hash` 键原文）；空串 = 老文件没带（未签名）。 */
+  hash: string;
+  /**
+   * 声明指纹与正文实算的比对：`true` 一致、`false` 不符、`undefined` = 文件没声明（无从判）。
+   *
+   * `false` **不是**拒收理由：正文被人改过恰恰是 P2 要回灌的正常输入；它只说明「文件不是
+   * 我们上次写出去的那份字节」，交给调用方计入报告并重盖指纹。结构性拒收仍在更上面
+   * （形状不符 / 正文为空）。
+   */
+  hashValid: boolean | undefined;
   /** frontmatter 带 `retired: true`。 */
   retired: boolean;
   /** 正文（已去首尾空白）。 */
@@ -78,6 +92,7 @@ export function parseMdFile(text: string): MdParsed | undefined {
     ? (fields.get('usageScenario') as unknown[]).filter((s): s is string => typeof s === 'string' && s.length > 0)
     : [];
   const prio = Number(fields.get('priority'));
+  const declaredHash = str(fields.get('hash'));
   return {
     name: str(fields.get('name')),
     type: str(fields.get('type')),
@@ -87,6 +102,8 @@ export function parseMdFile(text: string): MdParsed | undefined {
     usageScenario: scenario,
     extKey: str(fields.get('extKey')),
     id: str(fields.get('id')),
+    hash: declaredHash,
+    hashValid: declaredHash.length === 0 ? undefined : declaredHash === contentHash(parts.body),
     retired: fields.get('retired') === true,
     content: parts.body,
   };

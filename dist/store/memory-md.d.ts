@@ -75,6 +75,17 @@ export declare function disablePathOf(absPath: string): string;
  * 借它的 `normText`（NFKC + 换行归一），口径独立、且明确标注为"投射账本专用"。
  */
 export declare function digest(text: string): string;
+/**
+ * 投射文件自带 `hash` 键的**规范口径**（导出写、读入核，两侧都必须走它）。
+ *
+ * 定义 = `digest(归一后的正文)`：与 `renderRecord` 写进 `hash` 的值、以及读侧拿解析出的
+ * `content` 实算的值三处同源。只覆盖正文、不含任何 frontmatter 字段——所以换 id、换文件名、
+ * 退场标记都不改变它，它只回答「正文有没有被改过」这一件事。
+ *
+ * 走 `digest`（内含 NFKC + 空白折叠）而非裸 sha1：CRLF/BOM/尾随空白这类搬运噪声不该触发
+ * 假不符（搬文件、换编辑器、git autocrlf 都会引入它们）。
+ */
+export declare function contentHash(content: string): string;
 /** 记录内容指纹：正文字段（不含 metadata——轴变了不算内容变）。 */
 export declare function recordDigest(r: Pick<MemoryRecord, 'content'>): string;
 /**
