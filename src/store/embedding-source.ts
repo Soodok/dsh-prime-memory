@@ -280,6 +280,14 @@ export class EmbeddingManager {
   };
   private reindexCancel = false;
   /**
+   * 上一次重建的留痕（类型就地取自契约，不另开 import）。
+   *
+   * 为什么必须存：进度条只在 `running` 期间存在，而“待补 0 条”的重建会瞬间跑完，
+   * 界面上与“点了没反应”长得一模一样——真机反馈就是这么读的。留痕存**前后待补数**，
+   * 让“效果”是两个可比数字而不是一句“我转了一下”。
+   */
+  private reindexLast: ReindexProgressState['last'];
+  /**
    * 向量计数缓存(分级 TTL)。
    *
    * 见 `vectorsCached()`:`embedding-state-get` 是设置页轮询热点,
@@ -567,6 +575,27 @@ export class EmbeddingManager {
   private async reindexNow(): Promise<{ cancelled: boolean; failedTotal: number; error?: string }> {
     this.reindexCancel = false;
     this.reindex = { running: true, l1Done: 0, l1Total: 0, l0Done: 0, l0Total: 0, startedAt: Date.now(), cancelled: false };
+    // 重建**前**的待补数：先破缓存再取，否则拿到的可能是 TTL 里的旧值（那会让“前后差”假报 0）。
+    // 口径故意与界面用的同一个（相减法），不拿精确口径去对展示数字，否则两边永远对不上。
+    this.invalidateVecCache();
+    const v0 = this.vectorCounts();
+    const missingBefore = { l1: v0.l1.missing, l0: v0.l0.missing };
+    const finish = (cancelled: boolean, error?: string): void => {
+      this.invalidateVecCache();
+      const v1 = this.vectorCounts();
+      const at = Date.now();
+      this.reindexLast = {
+        finishedAt: at,
+        durationMs: Math.max(0, at - this.reindex.startedAt),
+        processed: this.reindex.l1Done + this.reindex.l0Done,
+        planned: this.reindex.l1Total + this.reindex.l0Total,
+        failed: failedTotal,
+        cancelled,
+        ...(error === undefined ? {} : { error }),
+        missingBefore,
+        missingAfter: { l1: v1.l1.missing, l0: v1.l0.missing },
+      };
+    };
     let failedTotal = 0;
     try {
       const r1 = await this.deps.l1.reindex({
@@ -589,12 +618,14 @@ export class EmbeddingManager {
       this.reindex.cancelled = cancelled;
       this.reindex.running = false;
       this.invalidateVecCache(); // 收尾:计数必须立刻反映重建结果(TTL 可能还压着 1s 旧值)
+      finish(cancelled);
       return { cancelled, failedTotal };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.reindex.running = false;
       this.reindex.error = message;
       this.invalidateVecCache();
+      finish(false, message);
       return { cancelled: false, failedTotal, error: `重嵌入失败: ${message}` };
     }
   }
@@ -634,7 +665,7 @@ export class EmbeddingManager {
       download: this.downloader.getProgress(),
       apply: { phase: this.applyPhase, message: this.applyMessage, startedAt: this.applyStartedAt, busy: this.applyBusy },
       local: this.localSvc ? { state: this.localSvc.getState(), error: this.localSvc.getLoadError() } : null,
-      reindex: { ...this.reindex },
+      reindex: { ...this.reindex, last: this.reindexLast },
       vectors: this.vectorsCached(),
       activeNote: this.activeNote,
     };

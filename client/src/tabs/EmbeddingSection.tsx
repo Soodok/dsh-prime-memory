@@ -379,6 +379,18 @@ export function EmbeddingSection(props: { rpc: RpcFn }) {
   // 不是"零条"。这两个说法在界面上必须分开，否则用户会去点一个永远没反应的按钮。
   const vec = st.vectors;
   const vecOk = !!vec && vec.l1.embedded >= 0 && vec.l0.embedded >= 0;
+  // 上一次重建的留痕。进度条只在 running 期间存在，而“待补 0 条”的重建会瞬间跑完，
+  // 没留痕就与“点了没反应”完全同形（真机反馈的根因）。前后待补数是这里的重点：
+  // “效果无法确认”指的是没有可比数字，不是没动画。
+  const lastRun = st.reindex ? st.reindex.last : undefined;
+  const lastNote = !lastRun
+    ? ''
+    : ' · 上次重建：处理 ' + lastRun.processed + '/' + lastRun.planned + ' 条' +
+      (lastRun.failed > 0 ? '、失败 ' + lastRun.failed : '') +
+      (lastRun.cancelled ? '（被取消）' : '') +
+      '，待补 ' + (lastRun.missingBefore.l1 + lastRun.missingBefore.l0) +
+      ' → ' + (lastRun.missingAfter.l1 + lastRun.missingAfter.l0) +
+      '，用时 ' + (lastRun.durationMs / 1000).toFixed(1) + 's';
   const vecNote = !vec
     ? '向量索引：宿主版本较旧，未上报计数'
     : !vecOk
@@ -386,7 +398,8 @@ export function EmbeddingSection(props: { rpc: RpcFn }) {
       : '已嵌入 L1 ' + vec.l1.embedded + '/' + vec.l1.total +
         ' · L0 ' + vec.l0.embedded + '/' + vec.l0.total +
         (vec.l1.missing + vec.l0.missing > 0 ? '（待补 ' + (vec.l1.missing + vec.l0.missing) + ' 条）' : '') +
-        (vec.l1.skipped + vec.l0.skipped > 0 ? '（' + (vec.l1.skipped + vec.l0.skipped) + ' 条内容不可嵌入，已跳过）' : '');
+        (vec.l1.skipped + vec.l0.skipped > 0 ? '（' + (vec.l1.skipped + vec.l0.skipped) + ' 条内容不可嵌入，已跳过）' : '') +
+        lastNote;
   const reindexRunning = !!(st.reindex && st.reindex.running);
   const canRebuild = vecOk && st.source !== 'off' && !reindexRunning && !st.apply.busy;
   const rebuildHint = !vecOk

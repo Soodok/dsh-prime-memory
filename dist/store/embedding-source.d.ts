@@ -98,6 +98,14 @@ export declare class EmbeddingManager {
     private reindex;
     private reindexCancel;
     /**
+     * 上一次重建的留痕（类型就地取自契约，不另开 import）。
+     *
+     * 为什么必须存：进度条只在 `running` 期间存在，而“待补 0 条”的重建会瞬间跑完，
+     * 界面上与“点了没反应”长得一模一样——真机反馈就是这么读的。留痕存**前后待补数**，
+     * 让“效果”是两个可比数字而不是一句“我转了一下”。
+     */
+    private reindexLast;
+    /**
      * 向量计数缓存(分级 TTL)。
      *
      * 见 `vectorsCached()`:`embedding-state-get` 是设置页轮询热点,

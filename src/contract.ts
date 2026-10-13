@@ -390,6 +390,34 @@ export interface DownloadProgress {
 export type ApplyPhase = 'idle' | 'installing-runtime' | 'warming' | 'switching' | 'reindexing' | 'done' | 'error';
 
 /** 重嵌入进度。 */
+/**
+ * 一轮重建跑完后的留痕。
+ *
+ * 为什么必需：进度条只在 `running` 期间存在，而“待补 0 条”的重建会**瞬间跑完**
+ * （l1Total/l0Total 都是 0），界面与“点了什么也没发生”长得一模一样。真机反馈原话就是
+ * “重建索引无法观察进度无进度条、索引重设的效果无法确认”——缺的不是进度，是事后凭证。
+ * 所以这里同时存**重建前后的待补数**：效果就是这两个数的差，不是“我看它转了一下”。
+ */
+export interface ReindexRunSummary {
+  /** 完成时刻(ms epoch)；0 = 从未跑过。 */
+  finishedAt: number;
+  /** 从 startedAt 到完成的毫秒数。 */
+  durationMs: number;
+  /** 本轮实际重嵌条数（L1 + L0 完成数之和）。 */
+  processed: number;
+  /** 两层计划总数（为 0 就是“无事可做”，这不是失败而是本来就同步好了）。 */
+  planned: number;
+  /** 嵌入失败条数（进 skip 集的那些）。 */
+  failed: number;
+  cancelled: boolean;
+  /** 抛出来的整体错误（单层失败不在这里，在 failed 里）。 */
+  error?: string;
+  /** 重建**前**的待补数（-1 = 向量能力不可用）。 */
+  missingBefore: { l1: number; l0: number };
+  /** 重建**后**的待补数。 */
+  missingAfter: { l1: number; l0: number };
+}
+
 export interface ReindexProgressState {
   running: boolean;
   l1Done: number;
@@ -399,6 +427,8 @@ export interface ReindexProgressState {
   startedAt: number;
   cancelled: boolean;
   error?: string;
+  /** 上一次重建的结果（从未跑过则缺省）。 */
+  last?: ReindexRunSummary;
 }
 
 /** 嵌入源状态视图(embedding-state-get 端点的主体)。 */

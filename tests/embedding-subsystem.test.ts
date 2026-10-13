@@ -498,7 +498,49 @@ describe('manual reindex (embedding-reindex)', () => {
     expect(l0Reindex).toHaveBeenCalledTimes(1);
     manager.dispose();
   });
-
+  
+  it('跑完留下 `reindex.last`：处理/计划/失败/前后待补数都可确认', async () => {
+    // 这条钉的是真机反馈的后半句：“索引重设的效果无法确认”。进度条只在 running 期间存在，
+    // 而“待补 0 条”的重建会瞬间跑完，没留痕就与“点了没反应”完全同形。
+    const { manager } = await mk();
+    expect((await manager.snapshot()).reindex.last).toBeUndefined();
+  
+    manager.startReindex();
+    for (let i = 0; i < 50; i++) {
+      if (!(await manager.snapshot()).reindex.running) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const last = (await manager.snapshot()).reindex.last;
+    expect(last).toBeDefined();
+    // 默认桩：两层各 written 1 条、无失败；db 桩给 L1 5/3、L0 9/7 → 相减待补各 2
+    expect([last!.processed, last!.planned, last!.failed, last!.cancelled]).toEqual([0, 0, 0, false]);
+    expect(last!.missingBefore).toEqual({ l1: 2, l0: 2 });
+    expect(last!.missingAfter).toEqual({ l1: 2, l0: 2 });
+    expect(last!.durationMs).toBeGreaterThanOrEqual(0);
+    expect(last!.finishedAt).toBeGreaterThan(0);
+    manager.dispose();
+  });
+  
+  it('失败条数与取消标志会落进 last（不能只报“跑完了”）', async () => {
+    const { manager, l1Reindex, l0Reindex } = await mk();
+    l1Reindex.mockImplementation(async (opts?: { onProgress?: (d: number, t: number) => void }) => {
+      opts?.onProgress?.(4, 4);
+      return { written: 3, failed: 1, skipped: 0 };
+    });
+    l0Reindex.mockImplementation(async (opts?: { onProgress?: (d: number, t: number) => void }) => {
+      opts?.onProgress?.(2, 2);
+      return { written: 2, failed: 0, skipped: 0 };
+    });
+    manager.startReindex();
+    for (let i = 0; i < 50; i++) {
+      if (!(await manager.snapshot()).reindex.running) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const last = (await manager.snapshot()).reindex.last;
+    expect([last!.processed, last!.planned, last!.failed]).toEqual([6, 6, 1]);
+    manager.dispose();
+  });
+  
   it('卸载后拒绝', async () => {
     const { manager } = await mk();
     manager.dispose();
