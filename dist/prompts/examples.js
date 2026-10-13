@@ -85,13 +85,94 @@ ${TITLE_GOOD_EXAMPLES.map(renderGoodExample).join('\n\n')}
 【不要这样】
 ${TITLE_BAD_EXAMPLES.map((b) => `- ✗ ${b.title}　→ ${b.why}`).join('\n')}
 `;
-/** 自检：示例本身是否合格（用例直接吃这两个函数，不另抄一份判据）。 */
+/**
+ * 各类型的"前因后果"要素表（照 G2 `NARRATIVE_CLAUSE` 写，不另造一套定义）。
+ *
+ * 为什么需要它：可用性判据是用户定的——"content 没前因后果、写不全就不算可用"。
+ * 那句活若只留在提示词里就永远没法判定、也没法拿它定默认值，所以每个类型拆 3 个要素，
+ * 每个要素给一组词元（命中任一即算在）。
+ *
+ * **这是关键词启发式，不是语义判定**：要素换个说法就接不住；G2 自己也允许"信息不足则省略该节"。
+ * 因此它只能用于**同一输入下两臂相对比较**，不能当绝对质量分。
+ */
+export const SKELETON_ELEMENTS = {
+    work_method: [
+        { name: '目标', anyOf: ['目标', '目的', '为了', '旨在'] },
+        { name: '步骤', anyOf: ['步骤', '做法', '先', '再', '然后', '流程', '执行'] },
+        { name: '前置/注意', anyOf: ['前置', '注意', '前提', '坑', '风险', '必须', '不能'] },
+    ],
+    work_fact: [
+        { name: '结论/事实', anyOf: ['结论', '事实', '必须', '只能', '会', '导致', '默认'] },
+        { name: '依据', anyOf: ['因为', '由于', '实测', '验证', '确认', '依据', '来源', '试过'] },
+        { name: '适用范围/失效', anyOf: ['适用', '范围', '失效', '仅', '除非', '例外'] },
+    ],
+    work_task: [
+        { name: '任务', anyOf: ['任务', '需求', '要做', '目标', '工作'] },
+        { name: '当前状态', anyOf: ['当前', '状态', '进度', '已', '未', '完成', '跑通'] },
+        { name: '下一步/阻塞', anyOf: ['下一步', '阻塞', '待', '计划', '负责人', '截止', '尚需'] },
+    ],
+    work_artifact: [
+        { name: '交付物', anyOf: ['交付', '文档', '报告', '产物', '脚本', '清单', '模块'] },
+        { name: '位置', anyOf: ['位置', '路径', '目录', '链接', '存放', '落到', '位于'] },
+        { name: '用途/结论', anyOf: ['用途', '供', '用于', '结论', '便于', '可用'] },
+    ],
+    instruction: [
+        { name: '规则', anyOf: ['规则', '必须', '不得', '禁止', '要求', '一律'] },
+        { name: '触发时机', anyOf: ['触发', '时机', '当', '若', '之前', '之后'] },
+        { name: '反例/边界', anyOf: ['反例', '边界', '例外', '不适用', '除非', '不必', '豁免'] },
+    ],
+    episodic: [
+        { name: '事件', anyOf: ['发生', '做了', '完成', '处理', '排查', '提交'] },
+        { name: '时间/参与者', anyOf: ['时间', '于', '日', '当天', '用户', '团队', '会话'] },
+        { name: '结果', anyOf: ['结果', '产出', '导致', '得以'] },
+    ],
+    persona: [
+        { name: '偏好/习惯', anyOf: ['偏好', '习惯', '喜欢', '倾向', '风格'] },
+        { name: '表现/例子', anyOf: ['表现', '例子', '例如', '总是', '会'] },
+        { name: '强度', anyOf: ['一直', '从不', '总是', '硬性', '强烈', '优先', '稳定'] },
+    ],
+};
+/** 不在表里的类型（宿主那 29 类新词）共用一个兼容要素集，不拿未知类型假判完备。 */
+const GENERIC_ELEMENTS = [
+    { name: '事实', anyOf: ['是', '为', '必须', '会', '有'] },
+    { name: '原因', anyOf: ['因为', '由于', '原因', '实测', '验证'] },
+    { name: '边界', anyOf: ['适用', '范围', '仅', '除非', '注意'] },
+];
+/**
+ * 按类型给 content 打骨架分（关键词启发式，局限见 {@link SKELETON_ELEMENTS}）。
+ *
+ * @param type - 记忆类型。
+ * @param content - 模型产出的正文。
+ * @returns 命中情况；空正文算 0 命中而不是"齐备"。
+ */
+export function scoreSkeleton(type, content) {
+    const spec = SKELETON_ELEMENTS[type] ?? GENERIC_ELEMENTS;
+    const text = typeof content === 'string' ? content : '';
+    const 缺 = [];
+    for (const el of spec) {
+        if (!el.anyOf.some((k) => text.includes(k)))
+            缺.push(el.name);
+    }
+    return {
+        类型: type,
+        要素数: spec.length,
+        命中数: spec.length - 缺.length,
+        缺,
+        齐备: text.trim().length > 0 && 缺.length === 0,
+        无表可依: SKELETON_ELEMENTS[type] === undefined,
+    };
+}
+/** 自检：示例本身是否合格（用例直接吃这个函数，不在用例里手抄判据）。 */
 export function auditFewShot() {
     const badTitles = TITLE_GOOD_EXAMPLES.filter((g) => !validateTitle(g.title).ok).map((g) => g.title);
+    // 止例自己必须骨架齐备：否则示例就是在示范"只写一句"，而定义与判据全部白写。
+    const thin = TITLE_GOOD_EXAMPLES.filter((g) => !scoreSkeleton(g.type, g.content).齐备)
+        .map((g) => `${g.type}:${scoreSkeleton(g.type, g.content).缺.join('/')}`);
     return {
         超预算: EXTRACTION_FEW_SHOT.length > FEW_SHOT_BUDGET,
         长度: EXTRACTION_FEW_SHOT.length,
         不合格title: badTitles,
         抄content开头: TITLE_GOOD_EXAMPLES.filter(copiesContentStart).map((g) => g.title),
+        止例骨架不全: thin,
     };
 }

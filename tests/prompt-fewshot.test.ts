@@ -79,6 +79,13 @@ describe('few-shot 示例集自检（判据来自示例模块本身，不在这�
     expect(auditFewShot().抄content开头).toEqual([]);
   });
 
+  it('止例自己骨架齐备（用户的可用性判据：没前因后果不算可用）', () => {
+    // 示例如果在自己的判据下都不合格，那它就是在示范"只写一句"，
+    // 而 A/B 测出来的"示例有收益"也只是模型在抄我们的坏样子。
+    const audit = auditFewShot();
+    expect(audit.止例骨架不全).toEqual([]);
+  });
+
   it('三条反例逐个被闸门拒（"不要这样"里的例子若其实合格，示范就是反的）', () => {
     for (const bad of TITLE_BAD_EXAMPLES) {
       expect(validateTitle(bad.title).ok, bad.title).toBe(false);

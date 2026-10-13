@@ -29,11 +29,45 @@ export declare function renderGoodExample(g: GoodExample): string;
  * A/B 的 fallback 率说话，不能靠"看起来更专业"。
  */
 export declare const EXTRACTION_FEW_SHOT: string;
-/** 自检：示例本身是否合格（用例直接吃这两个函数，不另抄一份判据）。 */
+/**
+ * 各类型的"前因后果"要素表（照 G2 `NARRATIVE_CLAUSE` 写，不另造一套定义）。
+ *
+ * 为什么需要它：可用性判据是用户定的——"content 没前因后果、写不全就不算可用"。
+ * 那句活若只留在提示词里就永远没法判定、也没法拿它定默认值，所以每个类型拆 3 个要素，
+ * 每个要素给一组词元（命中任一即算在）。
+ *
+ * **这是关键词启发式，不是语义判定**：要素换个说法就接不住；G2 自己也允许"信息不足则省略该节"。
+ * 因此它只能用于**同一输入下两臂相对比较**，不能当绝对质量分。
+ */
+export declare const SKELETON_ELEMENTS: Readonly<Record<string, ReadonlyArray<{
+    name: string;
+    anyOf: readonly string[];
+}>>>;
+/** 骨架打分结果。 */
+export interface SkeletonScore {
+    类型: string;
+    要素数: number;
+    命中数: number;
+    缺: string[];
+    /** 所有要素都命中（且正文非空）。 */
+    齐备: boolean;
+    /** 该类型不在要素表里（分数仅供参考，不拿它下结论）。 */
+    无表可依: boolean;
+}
+/**
+ * 按类型给 content 打骨架分（关键词启发式，局限见 {@link SKELETON_ELEMENTS}）。
+ *
+ * @param type - 记忆类型。
+ * @param content - 模型产出的正文。
+ * @returns 命中情况；空正文算 0 命中而不是"齐备"。
+ */
+export declare function scoreSkeleton(type: string, content: string): SkeletonScore;
+/** 自检：示例本身是否合格（用例直接吃这个函数，不在用例里手抄判据）。 */
 export declare function auditFewShot(): {
     超预算: boolean;
     长度: number;
     不合格title: string[];
     抄content开头: string[];
+    止例骨架不全: string[];
 };
 export {};

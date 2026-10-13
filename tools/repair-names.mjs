@@ -269,7 +269,7 @@ export function parseTitleArray(text) {
  * thinking 模式也不至于整批静默降级成规则名）。
  * @returns {Promise<string>} 模型回复文本。
  */
-export async function callLlm(endpoint, apiKey, model, messages, fetchImpl, timeoutMs = 30_000) {
+export async function callLlm(endpoint, apiKey, model, messages, fetchImpl, timeoutMs = 60_000, maxTokens = LLM_BATCH * 64) {
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   const res = await (fetchImpl ?? globalThis.fetch)(endpoint, {
@@ -281,8 +281,11 @@ export async function callLlm(endpoint, apiKey, model, messages, fetchImpl, time
         { role: 'system', content: messages.system },
         { role: 'user', content: messages.user },
       ],
+      // maxTokens 必须可传：默认值是按“10 条命名”算的，而**抽取一臂的输出长得多**
+      // （情境数组 + 每条完整正文），沿用 640 会**静默截断**——那正好能把
+      // “示例有收益”测成假阴性（截断后 JSON 解不开 → 产出 0 条）。
       temperature: 0.2,
-      max_tokens: LLM_BATCH * 64,
+      max_tokens: maxTokens,
       chat_template_kwargs: { enable_thinking: false },
     }),
     signal: AbortSignal.timeout(timeoutMs),

@@ -198,16 +198,18 @@ export const memorySchema = Schema.object({
     usageScenario: Schema.object({
         enabled: Schema.boolean().default(false),
     }),
-    // 类型叙述模板（G2）：默认关；开时抽取 prompt 追加分类型 content 骨架（off 逐字不变）。
+    // 类型叙述模板（G2）：默认**开**；开时抽取 prompt 追加分类型 content 骨架（关时仍逐字不变）。
+    // 默认值从关改开的理由写在上方接口注释：只给定义实测骨架齐备 0/23，
+    // 而"没前因后果就不算可用"是用户定的判据，所以默认值要按可用性定而不是按保守定。
     narrativeTemplates: Schema.object({
-        enabled: Schema.boolean().default(false),
+        enabled: Schema.boolean().default(true),
     }),
-    // 名称蒸馏（Phase 3）：两个开关都默认关。开关的粒度不是改错而是**代价不同**：
-    // `enabled` 只多一个输出字段（几乎免费），`fewShot` 每轮都多付 1.2-1.4k 字的固定提示，
-    // 所以两者必须能分别开关（否则想只要字段就得连带买示例，或想关示例就得连功能一起关）。
+    // 名称蒸馏（Phase 3）。两个开关的默认值都来自 A/B 实测，不是审美偏好：
+    // `ab-distill.mjs`（真会话）+0.703 骨架齐备 → 默认开；`ab-naming.mjs`（存量改名）
+    // −0.113 → 证明示例不能跨任务复用，所以抽取提示里的那段不注入命名脚本。
     naming: Schema.object({
-        enabled: Schema.boolean().default(false),
-        fewShot: Schema.boolean().default(false),
+        enabled: Schema.boolean().default(true),
+        fewShot: Schema.boolean().default(true),
     }),
     // 召回相关度反馈：默认开（只新增写端点与播报，不改任何既有产物；播报需用户显式打 -1）。
     recallFeedback: Schema.object({

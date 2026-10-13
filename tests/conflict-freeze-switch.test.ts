@@ -137,10 +137,18 @@ describe('task_23 开关确实接进了管线（端到端）', () => {
     return dedupSystems[0] ?? '';
   }
 
-  it('关:真管线送出的去重 prompt 与 base 逐字相同（零漂移的行为证据）', async () => {
+  it('关:真管线送出的去重 prompt 不含 conflict 动作，且等于纯函数同名开关下的那份', async () => {
+    // 以前这条是"与 base 逐字相同"。`naming.enabled` 现在默认开（实测：只给定义时
+    // 骨架齐备 0/23，见 tools/ab-distill.mjs），管线会额外追加 merged_title 条款，
+    // 所以"逐字等于 base"只在 naming 也关时成立。本用例要钉的是 **conflictFreeze 自己**
+    // 的零漂移，不是 naming 的：断言改成"不含 conflict 动作 + 与纯函数同名开关结果相等"，
+    // 既不给旧断言打掩护，也不拿另一个开关的默认值变化当它红了的理由。
+    const title = (DEFAULTS.naming as { enabled?: boolean } | undefined)?.enabled === true;
     const system = await runOnce(false, 'off');
-    expect(system).toBe(WORK_CONFLICT_DETECTION_SYSTEM_PROMPT);
     expect(system).not.toMatch(CONFLICT_ACTION_DEF);
+    expect(system).toBe(getConflictDetectionSystemPrompt('work', { conflictFreeze: false, title }));
+    if (title) expect(system).toContain('merged_title');
+    else expect(system).toBe(WORK_CONFLICT_DETECTION_SYSTEM_PROMPT);
   });
 
   it('开:真管线送出的去重 prompt 含 conflict 动作（接线未漏）', async () => {

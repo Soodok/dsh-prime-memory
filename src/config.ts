@@ -183,22 +183,33 @@ export interface MemoryConfig {
   usageScenario: {
     enabled: boolean;
   };
-  /** 类型叙述模板（G2）：抽取时按 7 类型各自的“前因后果”骨架写 content。默认关，关时 prompt 逐字不变。 */
+  /**
+   * 类型叙述模板（G2）：抽取时按 7 类型各自的“前因后果”骨架写 content。
+   *
+   * 默认从 false 改 **true**（用户定的可用性判据：“没有前因后果、写不全就不算可用”）。
+   * 单开它还不够：`tools/ab-distill.mjs` 实测只给定义不给示例时，真会话 23 条产出
+   * **骨架齐备 0 条**——定义本身不被遵守，所以必须与 `naming.fewShot` 同开。
+   */
   narrativeTemplates: {
     enabled: boolean;
   };
   /**
    * 名称蒸馏（pm-name-distill Phase 3）：让抽取当场就产出 `title`（与 content 分离定义），
-   * 而不是事后拿正则从正文剪。默认关——关时抽取/去重 prompt 与产物**逐字不变**
-   * （两条指令段都是追加式的，off 是 on 的前缀，所以五条 prompt sha1 金标准不必重锚）。
+   * 而不是事后拿正则从正文剪。
+   *
+   * 两个开关都默认开，但**两者不对称**：关着时 prompt 与产物逐字不变（零漂移仍由
+   * `tests/prompt-fewshot.test.ts` 的 `off === 常量` 断言钉住），而默认值本身是实测定的：
+   * `tools/ab-distill.mjs` 在真会话上量到 无示例 0.000 vs 有示例 0.703 骨架齐备率
+   * （title 出现率 0.565 → 0.730，整批解析失败 1/8 → 0/8）。
+   * 注意示例段只对**抽取任务**有收益：`tools/ab-naming.mjs` 量到把它塞进存量改名
+   * 那条命名提示反而 −0.113（模型开始漏答条目）。同一堆例子放错任务就是负收益。
    */
   naming: {
     /** 开=抽取与去重 merge 都要求产出 title，并把它当文件身份名候选入库（过不了闸仍交给起名器）。 */
     enabled: boolean;
     /**
-     * 开=在系统提示尾部追加标准格式示例集。**单独一个开关**是因为它的代价不对称：
-     * 示例每轮蒸馏都要付（约 1.2–1.4k 字的固定 prompt 开销），而“加了示例就质变”
-     * 目前只是假设，要等 A/B（`tools/ab-naming.mjs`）拿出 fallback 率对比后再定默认值。
+     * 开=在系统提示尾部追加标准格式示例段。每轮蒸馏都付它（约 1.2–1.4k 字），
+     * 默认开是因为实测显示“只给定义”的结构齐备率为 0；不想要结构时可以单关这一项。
      */
     fewShot: boolean;
   };
@@ -536,16 +547,18 @@ export const memorySchema = Schema.object({
   usageScenario: Schema.object({
     enabled: Schema.boolean().default(false),
   }),
-  // 类型叙述模板（G2）：默认关；开时抽取 prompt 追加分类型 content 骨架（off 逐字不变）。
+  // 类型叙述模板（G2）：默认**开**；开时抽取 prompt 追加分类型 content 骨架（关时仍逐字不变）。
+  // 默认值从关改开的理由写在上方接口注释：只给定义实测骨架齐备 0/23，
+  // 而"没前因后果就不算可用"是用户定的判据，所以默认值要按可用性定而不是按保守定。
   narrativeTemplates: Schema.object({
-    enabled: Schema.boolean().default(false),
+    enabled: Schema.boolean().default(true),
   }),
-  // 名称蒸馏（Phase 3）：两个开关都默认关。开关的粒度不是改错而是**代价不同**：
-  // `enabled` 只多一个输出字段（几乎免费），`fewShot` 每轮都多付 1.2-1.4k 字的固定提示，
-  // 所以两者必须能分别开关（否则想只要字段就得连带买示例，或想关示例就得连功能一起关）。
+  // 名称蒸馏（Phase 3）。两个开关的默认值都来自 A/B 实测，不是审美偏好：
+  // `ab-distill.mjs`（真会话）+0.703 骨架齐备 → 默认开；`ab-naming.mjs`（存量改名）
+  // −0.113 → 证明示例不能跨任务复用，所以抽取提示里的那段不注入命名脚本。
   naming: Schema.object({
-    enabled: Schema.boolean().default(false),
-    fewShot: Schema.boolean().default(false),
+    enabled: Schema.boolean().default(true),
+    fewShot: Schema.boolean().default(true),
   }),
   // 召回相关度反馈：默认开（只新增写端点与播报，不改任何既有产物；播报需用户显式打 -1）。
   recallFeedback: Schema.object({
