@@ -1,7 +1,7 @@
 {
   "id": "dsh-prime-memory",
   "name": "dsh-prime-memory",
-  "version": "0.24.0-local.14",
+  "version": "0.24.0-local.15",
   "description": {
     "en": "Layered distilled memory plugin (L0 capture → L1 atomic memory → L2 scenes → L3 persona) with automatic recall injection before each model step.",
     "zh": "L0~L3 分层蒸馏记忆插件:自动捕获对话、抽取原子记忆、整合场景块、蒸馏核心画像,并在模型步骤前自动召回注入。"
