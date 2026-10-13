@@ -16,8 +16,6 @@ y los números de versión obedecen al [versionado semántico](https://semver.or
 > **Convención de capturas de interfaz**: las entradas que traen cambios de interfaz conservan capturas reales
 > en `assets/changelog/<número de versión>/<número de dos dígitos>-<resumen>.png` y las citan en el texto con una ruta relativa: en el registro de cambios se ve directamente cómo luce la interfaz de la nueva versión.
 
-<!-- Brecha: las entradas de 0.21.0 y 0.20.x aún no están traducidas. -->
-
 ## [0.24.0] — Sin publicar (línea local `0.24.0-local.0…3`, 2026-10-13)
 
 ### Añadido
@@ -117,6 +115,307 @@ y los números de versión obedecen al [versionado semántico](https://semver.or
 ### Disciplina
 
 - En todo repositorio de tipo build se inyecta `prepack: npm run build` — `npm pack` solo dispara prepack, no `prepublishOnly`; es una de las tres capas de defensa contra el falso stale-build.
+
+## [0.21.0] — 2026-10-04
+
+### Añadido
+
+- **Sellado por grupos de herramientas (panel de memoria → Memoria → Sellado de herramientas)**: 5 conmutadores (gestión de room / graph / ruminate / conflict / mutate escritura-borrado, cubriendo 13 herramientas). Apagado = las herramientas de ese grupo **no se registran**, desaparecen directo de la lista de herramientas del modelo (no un rechazo en tiempo de ejecución); el volteo se aplica al instante vía hot update volatile, sin reiniciar. Las lecturas núcleo (memory_search / memory_read_scene / memory_receipts / conversation_search) y las tres piezas de ranuras no están bajo control. Contexto: la mayoría de las herramientas agrupadas (p. ej. la gobernanza de Room, la rumiación) se usan con una frecuencia bajísima en el día a día, así que tenerlas residentes en la lista de herramientas solo gasta atención e induce al modelo a invocarlas por error.
+- **Comprobación de existencia de las referencias mem_ en memory_slot_write**: los record_id L1 de forma `mem_*` dentro de los refs pasan por una comprobación de existencia `getByIds` antes de escribirse; un id alucinado o mal escrito se rechaza en el acto con un aviso de pasar por memory_search — garantizando que «las memorias activadas por la búsqueda» que entran en una referencia de ranura sean necesariamente registros reales (la resolución de resumen de nombre del lado brief tiene así una entrada fiable). Los refs de ruta de archivo / URL no se comprueban.
+
+## [0.20.4] — 2026-10-04 (build local, sin publicar)
+
+### Corregido
+
+- **Tolerancia a fallos integral en la resolución de refViews de la proyección**: la llamada a L1 `getByIds` dentro de `resolveRefViews` queda envuelta en try/catch — el drive del registro no tiene protección de excepciones, así que cualquier fallo en la capa de resolución (sqlite ocupado / degradación del backend / estado anómalo del registro) se llevaba por delante todo el controlador de eventos de sesión e incluso el proceso del huésped. Ante un fallo degrada a que ese fotograma no lleve refViews (el frontend retrocede a los refs crudos).
+
+## [0.20.3] — 2026-10-03
+
+### Corregido
+
+- **El texto renderizado de `memory_search` ahora añade el id**: v0.20.2 metió el record_id en el JSON de salida y en el schema, pero el modelo ve el producto del render, no el JSON crudo — la línea renderizada no llevaba el id, lo cual para el modelo equivale a no devolver nada (descubierto en retest en máquina real). Ahora cada resultado termina en `— id: mem_xxx`, escribible directo en los refs de ranura.
+
+## [0.20.2] — 2026-10-03
+
+### Corregido
+
+- **El juicio de suciedad de `memorySlots` de la proyección relajado a cualquier evento**: antes la suciedad se juzgaba por la rev del store solo en `tool/result` (settled, sin error) — tras una escritura dependía de que «llegara justo otro resultado de herramienta» para refrescar, y la consulta entre sesiones debía esperar a las propias llamadas a herramientas de la sesión que consulta; la máquina real dejó al descubierto que la barra lateral se quedaba mucho tiempo en un fotograma vacío tras escribir. Se cambia a una comparación de rev O(1) sobre cualquier evento confirmado: si la rev cambia, se reconstruye y empuja; la guarda isError se elimina (la rev solo se incrementa tras un cambio real; el evento es solo un disparador, no la fuente de datos).
+- **La inyección permanente pasa a un fotograma con etiqueta `<system-reminder>`** (alineado con el house style de inyección AGENTS.md de dsh-agent-instructions): el portador con rol user no cambia, pero ahora se presenta como una caja de etiqueta + declaración de autoridad (no requiere respuesta / no repetir / no anula los prompts del sistema ni las instrucciones directas del usuario) — corrige los modelos débiles que repetían literalmente el contenido de la ranura como si fuera habla del usuario e interferían con la respuesta normal; las etiquetas de cierre del cuerpo de la ranura se escapan (`</system-reminder>`) para impedir que el contenido de la ranura finja el límite del fotograma.
+
+### Añadido
+
+- **Los resultados de `memory_search` exponen `id` (record_id L1)**: rompe el bloqueo de «la recuperación no obtiene id → no puedo escribir refs de ranura / alimentar memory_receipts»; la descripción del schema anota los dos destinos del id.
+- **La vista de cable expone `refs` + `refViews`**: las referencias de tipo `mem_*` se resuelven al construir el fotograma de proyección vía L1 `getByIds` a `[type] 名称简述` (primera línea del content, truncada a 80 caracteres), brief-sidebar (≥0.5.0-beta.2) las renderiza directo; las referencias de ruta/URL se mantienen literales; los registros faltantes o retirados no generan entrada. La resolución ocurre al construir el fotograma — el conjunto de referencias se congela al escribir la ranura, así que ediciones posteriores del registro L1 no refluyen a los fotogramas viejos. El schema autoimplementado valida los campos adicionales solo «si existen», de modo que las filas checkpoint viejas pasan enteras (stateVersion intacto).
+
+## [0.20.1] — 2026-10-03 (promovida a estable; el canal beta consolida desde beta.1 todas sus capacidades)
+
+La cadena completa de gestión de clasificación Hall·Room (registro de dos niveles / merge / rename / retire / update / adopción / retiro con registros / retirar un no registrado añade entrada al registro), páginas de gestión independientes para Hall y Room (filtro de búsqueda, plegado por defecto, clasificación por arrastre con puntero, filtro de retiro), muestra del peso de envejecimiento + estadísticas de uso del recuerdo (solo entrar en topN cuenta como usado). El último beta antes de promover fue 0.20.0-beta.26, idéntico en contenido a 0.20.1; el canal `dsh-0.2.0-beta` sigue recibiendo los betas posteriores.
+
+## [0.20.0-beta.26] — 2026-10-03
+
+### Añadido (usabilidad tras el crecimiento de Hall/Room)
+
+- **Filtro de búsqueda por nombre Hall/Room**: la página Hall gana un cuadro de búsqueda (slug, nombre visible, alias, sin distinguir mayúsculas) — un acierto sobre el propio hall muestra todas sus rooms hijas, si no solo se conservan las rooms hijas que aciertan, y un grupo sin ningún acierto se oculta; al buscar, los grupos que aciertan se despliegan solos (el estado plegado ya no esconde los resultados); la zona auto-crecida no registrada se filtra igual. La página Room trae el mismo cuadro de búsqueda, que se compone con los chips del filtro de retiro.
+- **Plegado de grupos Hall, plegado todo por defecto**: la cabecera del hall solo muestra «total N entradas · M rooms», tocar la cabecera o el botón ▸/▾ despliega/pliega las rooms hijas; botones en lote «desplegar todo / plegar todo»; el estado de despliegue se recuerda en localStorage (`dsh.memory.halls.open`). La prioridad de la clasificación por clic (tocar la cabecera del hall para completar la clasificación) no cambia.
+
+## [0.20.0-beta.25] — 2026-10-02
+
+> Corrección del estado invisible de las rooms auto-crecidas tras el retiro + regla de muestra de rooms hijas de Hall (fallo del usuario).
+
+### Corregido / Cambiado
+
+- **Las rooms auto-crecidas no registradas pasan a «retirado / recuperar» al retirarse**: antes el retiro solo borraba lógicamente los registros, el vocabulario no tenía entrada que cambiar y el botón siempre era «adoptar / retirar». Ahora retire withRecords, para un slug no registrado, **añade por sí solo una entrada de registro grown y la pone retired** — la fila del panel cambia al instante al estado «retirado», y «recuperar» (active:true) la devuelve al vocabulario. Persistido, no se pierde al reiniciar.
+- **La página Hall solo muestra rooms active**: las rooms retired/retiradas ya no aparecen bajo el agrupamiento del hall (véanlas en la página Room, que incluye un filtro «retirado»); el recuento agregado del grupo incluye por tanto solo subtipos active.
+
+## [0.20.0-beta.24] — 2026-10-02
+
+### Corregido
+
+- **Desplegar/retirar en la página Hall alineado con la página Room**: desplegar una fila de room en la página Hall también trae solo los registros activos (`retired:false`); tras confirmar un retiro, si esa room está desplegada, la zona desplegada se refresca sola. (beta.23 solo parcheó la página Room, la página Hall se quedó sin sincronizar — el otro punto detrás de lo que el usuario observó en máquina: «retiro pero no veo efecto».)
+
+## [0.20.0-beta.23] — 2026-10-02
+
+> **Filtro de retiro de la página Room completado** (los chips del filtro de beta.22 nunca llegaron al disco por un fallo a mitad del script de parche, solo la insignia entró en el paquete — esta pasada escribe cada ítem al disco vía Edit y verifica todo en verde).
+
+### Corregido / Añadido
+
+- **Chips del filtro de retiro** (página Room, sobre el formulario de registro): todos / activos (vocabulario no retirado) / retirados.
+- **Efecto del retiro instantáneo**: desplegar una entrada trae solo registros **activos** (`retired:false`) — tras el retiro, la zona desplegada muestra «no hay entradas de memoria»; si la room está desplegada tras confirmar el retiro se **refresca sola**; insignia [retirado] + atenuado como respaldo (ya en beta.22).
+
+## [0.20.0-beta.22] — 2026-10-02
+
+> Visibilidad del efecto del retiro + filtro de retiro de la página Room (feedback en máquina real: tras confirmar el retiro la interfaz no mostraba cambio y no había forma de filtrar).
+
+### Corregido / Añadido
+
+- **Efecto del retiro instantáneo**: desplegar una entrada en la página Room trae solo registros **activos** (`retired:false`) — tras el retiro la zona desplegada muestra «esta Room no tiene entradas de memoria»; si esa room está desplegada tras confirmar el retiro, sus entradas se **refrescan solas**; respaldo en lista mixta: las entradas retiradas muestran una insignia [retirado] y se atenúan.
+- **Filtro de retiro**: la página Room gana chips «todos / activos / retirados» (un filtro por estado de retiro del vocabulario).
+
+## [0.20.0-beta.21] — 2026-10-02
+
+> **Retirar con registros**: al retirar un room se puede opcionalmente **retirar junto todas sus memorias activas** (antes solo existía la tabla de verbos, y las rooms auto-crecidas en particular no tenían forma de procesarse).
+
+### Añadido
+
+- **`retire withRecords`** (botón «retirar» de las páginas Room/Hall, rojo): retiro del vocabulario + borrado lógico por lotes de todos los registros **activos** bajo ese room (cada lote ≤200, el mismo primitivo que records-delete; reason=manual) — los registros se pueden recuperar uno a uno en la zona «retirados» de la página de memoria. Una fila auto-crecida no registrada también tiene «retirar» (solo retira registros, no hay entrada de vocabulario que mover). La respuesta trae un recuento `retiredRecords`.
+- El botón «exportar huérfanos» vuelve al **panel de consulta de memoria** (en línea dentro de la fila del filtro de huérfanos).
+
+### Corregido
+
+- aislamiento de pruebas de recall-usage (un caso de ida y vuelta persistido entraba en carrera bajo paralelismo); corrección de la muestra del `\n` literal en el diálogo de confirmación de retiro de RoomTab.
+
+## [0.20.0-beta.20] — 2026-10-02
+
+> **Room en pestaña propia** (separada de Hall): la existencia, el nombre y las entradas de un room tienen cada uno su superficie de gestión; la página de memoria ya no amontona etiquetas Room.
+
+### Añadido
+
+- **La pestaña «Room»** (después de Hall): una lista plana de todos los rooms (entradas registradas ∪ auto-crecidos no registrados) — **existencia** (registrar un slug de dos niveles / adoptar grown / retirar·recuperar), **nombre** (editar el nombre visible + la nota de clasificación; renombrar puede usar un slug de dos niveles, los registros lo siguen), **entradas** (▸ desplegar para recorrer las entradas de memoria de ese room, plegado por defecto, primera carga de 10); la exportación de huérfanos y los conmutadores de altos privilegios van con la página.
+- **Re-editable tras registrar**: un nuevo `room-admin update` (reescribe label/description, los campos no proveídos quedan intactos) + el store `RoomRegistryStore.update` + la herramienta `memory_room_admin action=update` + una entrada «editar» en el panel — antes, tras registrar, el label/nota solo podía completar vacíos, no reescribirse.
+- **Despliegue de contenido en la fila de room** (igual que las filas de room de la página Hall): plegado por defecto, ▸ despliega para ver entradas.
+- **Bloque Room de la página de memoria separado**: se quitan los chips de slug / paginación / bloque desplegable (duplican las páginas Hall/Room), conservando solo el filtro de huérfanos «sin vínculo · N» y el texto de guía — recorrer/gestionar etiquetas de room corresponde a las páginas Hall/Room.
+
+### Cambiado
+
+- Los formularios y la vista previa de merge/clasificar/renombrar quedan pegados al scroll (sticky) (con muchos halls ya no hace falta deslizar arriba y abajo buscando el diálogo de confirmación).
+- Arrastre propio por puntero (el mismo esquema pointer de ego-browser, un respaldo para webviews donde el DnD de HTML5 no dispara).
+
+## [0.20.0-beta.19] — 2026-10-02
+
+> Clasificación rehecha (feedback en máquina real: el arrastre HTML5 no dispara en algunos webviews; tras tocar un hall la vista previa quedaba enterrada en la fila origen y parecía «sin respuesta»).
+
+### Cambiado
+
+- **Arrastre propio por puntero** (el mismo esquema puramente pointer de ego-browser): mantener pulsado un room / slug auto-crecido → un chip fantasma flotante sigue al dedo → pasar sobre la cabecera de un hall la resalta con línea discontinua → soltar para clasificar. No depende del DnD de HTML5, funciona en cualquier webview. Se conserva la clasificación por clic («clasificar» / «asignar» → estado de selección → tocar la cabecera del hall).
+- **Barra de acciones global**: los formularios de merge/clasificar/renombrar y la vista previa dryRun quedan **permanentes al principio de la página** (el diálogo rojo de confirmación no se desliza con la fila y ya no queda enterrado en la fila del room origen) — tras tocar un hall siempre se ve.
+- **Diseño de la fila de room**: los botones fijados en una fila ya no se parten (Exportar ya no queda solo en su línea); nombre/alias ajustan natural en el área de información izquierda (los alias pueden romperse a mitad de palabra).
+
+## [0.20.0-beta.18] — 2026-10-02
+
+### Mantenimiento
+
+- limpieza de lint: las dos importaciones muertas dejadas en stats.ts / rooms-registry.ts por la sustitución isTag→isRoomSlug de beta.17 (la puerta de publicación no las detectó — tras el pipe `$?` tomaba el código de salida de tail, reincidiendo en la trampa D2). Sin cambio funcional.
+
+## [0.20.0-beta.17] — 2026-10-02
+
+> **Corrección de la pérdida de relaciones hall/room tras reiniciar**: el cargador de `rooms-registry.json` seguía filtrando los slugs con `isTag` — al releer desde disco tras reiniciar, todas las entradas de dos niveles `major/minor` se tomaban por ilegales y se **descartaban en silencio** (los halls de un solo segmento pasaban, así que sobrevivían). Es el tercer punto del embrollo isTag/isRoomSlug; la misma tanda desactivó la mina gemela en `normTags`.
+
+### Corregido
+
+- **El cargador descartaba entradas de dos niveles** (init de `store/rooms-registry.ts`): el filtro pasa a `isRoomSlug`. **Los datos de rooms-registry.json en su disco estaban intactos** (las entradas de dos niveles siempre estuvieron en el archivo, solo se descartaban al arrancar) — tras actualizar y recargar las relaciones se recuperan solas, sin acción de reparación.
+- **normTags lavaba las etiquetas con slash** (`metadata-validators.ts`): la puerta «todos los puntos de reescritura de tags deben pasar por aquí» usaba isTag, así que una etiqueta `hall/minor` reescrita por la clasificación se despojaba en silencio la próxima vez que la destilación o el reetiquetado la tocara. Ahora pasan los slugs de room de dos niveles (los de tres siguen rechazados); la fuente de verdad `isRoomSlug` se trasladó a este archivo (para evitar un ciclo de dependencias), y la reexportación de rooms-registry sigue compatible.
+- **El filtro de etiquetas de dos niveles de list-records era rechazado por error** (misma forma que tagSel de stats.ts): se cambia a `isRoomSlug` — tocar el filtro de registros de un room de dos niveles en la página Hall devolvía 400.
+- Prueba roja primero ×3 (ida y vuelta de dos niveles en persistencia / normTags deja pasar / integración de filtro de etiquetas de dos niveles), verificado en rojo y corregido a verde.
+
+## [0.20.0-beta.16] — 2026-10-02
+
+> **Slugs auto-crecidos no registrados clasificados directo en un hall**: cada chip del área «auto-crecido no registrado» del fondo ahora se puede arrastrar a una cabecera de hall — adopción + volverse su subtipo en un paso.
+
+### Añadido
+
+- **Arrastre / clic para clasificar el chip grown**: arrastrar un slug no registrado (p. ej. `git-commits`) a la cabecera de un hall (o tocar el botón «asignar» del chip para entrar en estado de selección, luego tocar el hall objetivo) → vista previa dryRun → confirmar para ejecutar de verdad. Semántica = **adopción en el sitio (from, source=grown) → rename a `hall/子类`**: las tags de los registros lo siguen, el nombre viejo entra en los alias del objetivo, la entrada queda active y no luce ⭐ (identidad de adopción). Volver a un slug de dos niveles bajo su propio hall (p. ej. `dsh-plugin/xxx`) = adopción en el sitio.
+- El orden de la composición queda clavado en una prueba de integración (markMered sale antes con un from no registrado — primero hay que adoptar el from, luego renombrar); execMerge adopta automáticamente un from no registrado.
+
+## [0.20.0-beta.15] — 2026-10-02
+
+> Dos correcciones seguidas del feedback real de clasificación: ①una entrada renombrada llevaba por error «retirado» (se caía del vocabulario de anotación); ②el arrastre HTML5 no funcionaba en algunos webviews → se añadió la vía principal de **clasificación por clic**.
+
+### Corregido
+
+- **Entrada marcada retired por error tras clasificar (renombrar)**: renameRoom reutiliza la orquestación de merge, y el «la entrada vieja pasa a retirada» de `markMerged` venía arrastrado — el room recién clasificado mostraba «retirado» y **se caía del vocabulario del anotador** (el filtro listActive). Ahora el cierre de rename restaura el estado previo (una entrada active sigue active tras renombrar); un merge real (semántica de unión) no se afecta. Prueba roja primero (unit + integración de superficie HTTP).
+
+### Cambiado
+
+- **La clasificación por clic como vía principal**: tocar «clasificar» de la fila de room → entrar en estado de selección (el botón pasa a «elegir hall…», todas las cabeceras de hall resaltan con línea discontinua) → tocar la cabecera del hall objetivo → sale la vista previa dryRun → confirmar para ejecutar. El arrastre se conserva (sigue usable en entornos que lo soportan), pero ya no se depende de él.
+
+## [0.20.0-beta.14] — 2026-10-02
+
+> Las tarjetas de memoria ganan la muestra de **peso de envejecimiento** y **uso del recuerdo**, y empieza a acumular datos para la «estadística de efectos del peso de envejecimiento». Definiciones (fallo del usuario): **solo entrar en topN (ser inyectado en el contexto) cuenta como usado**; un intento de participación que no entró = solo cuenta el intento.
+
+### Añadido
+
+- **Campos de la tarjeta**: un chip «envejecimiento N%» (el coeficiente de decaimiento de la vía de lectura `max(0.5, 0.5^(Δ天/半衰期))`, misma fórmula y misma fuente que el orden del recuerdo; ≤60% se marca rojo = envejecido) + un contador «usado used/attempts» (el title lleva las horas de último uso / último intento). La barra de herramientas gana el resumen «uso del recuerdo used/attempted(rate%)».
+- **Superficie de estadísticas**: `RecallUsageStore` (un sidecar recall-usage.json, de la misma familia de disciplina que rooms-registry — un archivo dañado cae a degradación de solo lectura, sin bloquear jamás la vía de lectura del recuerdo); cada ronda de recuerdo registra en los tres estados finales (inyección / todo suprimido / presupuesto a cero) (candidatos attempts++, inyectados used++, la marca de tiempo toma la más reciente); inmediato en memoria + volcado atómico con debounce de 5s, 50 000 entradas desalojadas por intento más reciente; sin montar = un bypass de coste cero.
+- Contrato: UiRecord gana `agingWeight`/`usage`, ListRecordsResponse gana `usageSummary` (campos opcionales, cero rotura para clientes viejos); el número de claves del contrato no cambia.
+
+### Definiciones de la estadística de efectos (para análisis posterior)
+- usageSummary: tracked (memorias con estadística de uso) / attempted (Σ intentos) / used (Σ usados) / rate (uso %)
+- El análisis fino (distribución de uso por tipo/banda de edad, base para ajustar la vida media) acumula datos desde esta versión; la vista de análisis se discutirá aparte.
+
+## [0.20.0-beta.13] — 2026-10-02
+
+> Lógica de clasificación completada: poner un room bajo un hall existente (antes solo se podía añadir un hall nuevo, o fusionar en otro room borrando su identidad). El panel soporta **clasificación por arrastre** — arrastrar un room y soltarlo sobre la cabecera de un hall.
+
+### Añadido
+
+- **Arrastrar para clasificar en la página Hall**: una fila de room es arrastrable (cursor de agarre cuando hiPriv está activo), las cabeceras de hall son objetivos de soltar (resaltado discontinuo); soltar = un rename prefijado (major/minor) directo a una vista previa dryRun, confirmar para ejecutar — los registros lo siguen, el nombre viejo va a los alias, la vista agrupada lo cuelga bajo ese hall. Pantallas táctiles / entornos sin arrastre usan como respaldo el botón «clasificar» de la fila de room o los chips de preselección rápida de hall del formulario de rename.
+- Corrección de backend: la validación del objetivo de `renameSlug` `isTag` → `isRoomSlug` — antes los objetivos de dos niveles (major/minor) eran rechazados por error, así que la vía «clasificar bajo un hall» no funcionaba (y la orquestación de rename reescribía primero los registros y luego lanzaba al renombrar el registro, dejando un estado a medio hacer). Según la disciplina de retirada/cambio C3: prueba roja primero (unit + integración de superficie HTTP, una cada una), verificado en rojo y corregido a verde.
+
+### Corregido
+
+- Igual que arriba: la validación de objetivo de dos niveles de `renameSlug` (un hueco introducido en beta.5).
+
+## [0.20.0-beta.12] — 2026-10-02
+
+> limpieza de lint + disciplina de retirada puesta por escrito (C3 añadido a ENGINEERING-NOTES). **Sin cambio funcional**.
+
+### Mantenimiento
+
+- **Limpieza de eslint (13 error → 0)**: residuos de la retirada de longtask (importaciones muertas de stats.ts ×2, estado muerto de RecordsTab) + deudas de tandas anteriores (interfaz y let muertos de recluster.ts, importaciones y let muertos de rooms-registry.ts / ruminate.ts / room-review.ts / dos archivos de pruebas). Los 4 warning restantes son del baseline preexistente (el any de primitives/tools).
+- **C3 «retirar también es TDD» añadido a ENGINEERING-NOTES**: retirar primero cambia las pruebas para expresar la nueva expectativa (rojo) → luego se quita la implementación (verde); lint es una puerta obligatoria para los cambios de tipo borrado (una importación sin usar = un detector automático de «no se quitó del todo»).
+
+## [0.20.0-beta.11] — 2026-10-02
+
+> **Pruebas de integración** Hall·Room incorporadas (`tests/hall-room.integration.test.ts`: cadena completa de superficie HTTP × viaje de usuario con almacenamiento real, 9 casos); la primera corrida de integración atrapó y corrigió un ángulo ciego de las pruebas unitarias.
+
+### Corregido
+
+- **La vista fusionada de rooms-get fijaba el source a `pre-registered`** (introducido en beta.4): al incorporar las entradas del registro a la lista de recuentos se escribía el origen fijo, así que una entrada adoptada (source=grown) llevaba siempre la insignia ⭐ pre-registrada en los chips de recuento del panel — identidad falseada. Ahora usa el origen real de la entrada (⭐ solo para pre-registrado; la adopción muestra grown). Causa del ángulo ciego unitario: las pruebas unitarias de rooms-registry solo probaban la capa del store, y nadie asertaba el source de una entrada grown en la fila fusionada del endpoint.
+
+### Pruebas
+
+- `hall-room.integration.test.ts`: recuento auto-crecido con tabla vacía → registro de dos niveles / rechazo de slug ilegal → adopción → exportar tres kinds → merge dryRun con cero escrituras → ejecución real (respaldo a disco / reescritura de la fila de retiro / preservación de metadata / encolado de recálculo de escena source='room-merge') → alias de rename → retire/recuperar → tope de 200 de la clase grande + la clase pequeña no consume cuota → línea roja de degradación a solo lectura con archivo dañado (rooms-get no bloquea, el disco no se reescribe).
+
+## [0.20.0-beta.10] — 2026-10-02
+
+> **Retirada total de longtask (modo de tarea larga)**: esta familia tenía su hogar en el lado de context-compression («sugerir iniciar la compresión» es su dominio), pm lo cargó por error — beta.8 quitó la bola flotante, esta versión quita el backend restante. pm vuelve al dominio puro de memoria. Si más adelante se necesitara «destilar la cola ya» y parecido, rediseñélo desde la propia posición de pm y vuelva a iniciarlo como proyecto.
+
+### Eliminado
+
+- **Endpoints `longtask-hint-get` / `longtask-compress-tail`** (claves de contrato 48 → 46) y el bucle cerrado `compressTailTurns` / ruminate con debounce: la medición de contexto (`ContextUsageStore`), la detección de deriva de todo (`TodoRefStore`), la decisión de sugerencia — todo se retira a la vez, `hooks/long-task.ts`, `store/context-usage.ts`, `store/todo-ref.ts` tres archivos borrados (incluido el augmento declare module del evento todo/write).
+- **El bloque de config `cfg.longTask.*`** (valores por defecto + dos sitios de Schema): las claves longTask en los archivos de config viejos las ignora el schema, sin necesidad de migrar.
+- **El flag `longTask` de nivel de sesión y la línea de marca de compresión de cola `lastTailCompressedTurn`** (session-modes): las claves residuales en el session-modes.json viejo las ignora naturalmente el filtro de carga.
+- **El `mode` de `session-mode-set` vuelve a ser obligatorio** (esa opcionalización había nacido solo para el uno-o-otro con longTask); se borran los campos `longTask` de petición/respuesta.
+- Se conserva: la corrección del cableado RPC de roomRegistry de beta.9 (se sostiene por sí sola); la página de gestión Hall y la superficie de gestión de clasificación Room sin cambios.
+
+## [0.20.0-beta.9] — 2026-10-02
+
+> Corrección de los deps que se perdían en toda la cadena RPC del panel: `roomRegistry` y `longTaskDeps` se perdían cuando el rpcHandler ensamblaba las sources, así que en el panel los endpoints de gestión de Room / tarea larga siempre decían «no montado» (la superficie de herramientas los pasaba directo y no se afectaba, de ahí que las herramientas funcionaran desde beta.4 mientras el registro del panel daba error constantemente).
+
+### Corregido
+
+- **El rpcHandler de `registerMemoryRpc` perdía `roomRegistry`/`longTask`** (introducido en beta.4): la distribución HTTP pasa uniforme por `buildEndpointDeps`, pero las sources solo llevaban 7 ítems — `rooms-get` no bajaba el registry, `room-register`/`room-admin` lanzaban «el registro de Room no está montado (necesita recargar el plugin para inicializar)», `longtask-hint-get`/`longtask-compress-tail` estaban siempre disabled. Ahora se bajan con las sources; una prueba de regresión clava toda la cadena de superficie HTTP (register → rooms-get merge → room-admin, rpc.test.ts).
+
+## [0.20.0-beta.8] — 2026-10-02
+
+> Se quita la UI de bola flotante: el panel flotante de sugerencias tenía su hogar en el lado de context-compression («sugerir iniciar la compresión» es su dominio), pm lo cargó por error — el FAB que venía con el paquete desde beta.1 se retira en esta versión.
+
+### Eliminado
+
+- **Bola flotante + tarjeta de sugerencia (`client/src/longtask-fab.ts`, incluida desde beta.1)**: se retira por completo, el cliente vuelve a dos superficies — `settings.section` (panel de memoria) + `conversation.input.left` (pill de nivel), ya no hay UI flotante a nivel de toda la aplicación. El modo de tarea larga en sí (medición de contexto / referencia de todo / compresión de turnos de cola) no se afecta; los endpoints `longtask-hint-get` / `longtask-compress-tail` se conservan como superficie backend, y el conmutador de tarea larga y la entrada de compresión manual caerán en la sección de ajustes de memoria al fijar la versión.
+
+## [0.20.0-beta.7] — 2026-10-02
+
+> Tercera travesía de la gestión de clasificación Room (el **volumen del panel de gestión**): una pestaña «Hall» dedicada, hall (clase grande) + room (clase pequeña) gestionados juntos — ver/gestionar Rooms a mano ya no tiene que pasar por la herramienta del agent.
+
+### Añadido
+
+- **La pestaña de gestión «Hall»** (después de «Escena»): un árbol de agrupamiento de halls — `major/minor` van bajo su clase grande de prefijo, un slug standalone forma su propio hall (es a la vez hall y el único room bajo él); la fila de cabecera del hall agrega recuentos + un clic «+clase pequeña» (prefijado `hall/`); las filas de room muestran ⭐pre-registrado / source / estado / alias / recuentos, los retired atenuados. Los términos de UI Hall/Room son la vista de agrupamiento, sin relación con Wing (el dominio `metadata.hall`) ni con el hall cognitivo (desambiguación ADR-0020 §7).
+- **Entrada UI de operación completa (puerta memoryMutate de altos privilegios)**: registro de slug de dos niveles (un formulario controlado, placeholder `dsh-plugin` / `dsh-plugin/merge`); **adopción** de slug auto-crecido (`source=grown`); **renombrar/fusionar** vía el nuevo RPC — vista previa dryRun (recuento afectado + muestras) → «confirmar ejecución» real, la misma orquestación que la herramienta memory_room_admin (respaldo automático antes de ejecutar + encolado de recálculo de escena al completar); retirar/recuperar con un clic (recuperar no pide segunda confirmación, retirar sí); una exportación CSV de la lista de registros por room; la exportación de vocabulario/huérfanos se reúne en esta página; renombrar/fusionar traen un aviso «ejecutar cuando la rumiación esté ociosa».
+- **Nuevo endpoint `dsh-memory/room-admin`** (merge/rename/retire; puerta memoryMutate, semántica de lanzamiento desde el endpoint): claves de contrato 47 → 48. `rooms-export` gana `kind='records'` (exportar lista de registros por Room, `tag` obligatorio); `room-register` gana un `source` opcional (la adopción pasa `grown`).
+- El bloque Room de la pestaña de memoria adelgazado: se quita el subpanel de gestión (la exportación de huérfanos sube a la fila de cabecera), el aviso apunta a la página Hall.
+
+### Corregido
+
+- El estrechamiento de tipo del kind de la rama records de `rooms-export` (TS2322) y un texto de error histórico con basura; corrección de la línea de título duplicada beta.1-beta.5 del CHANGELOG.
+
+## [0.20.0-beta.6] — 2026-10-01
+
+### Corregido
+
+- **El vocabulario del anotador conectado al registro (el ítem faltante de beta.5 completado)**: el merge/rename/retire de beta.5 ya había caído, pero el vocabulario del anotador de candidatos (`annotateOrphanCandidates`) seguía siendo un agregado puro auto-crecido — los Rooms pre-registrados no podían entrar en los candidatos en absoluto. Ahora OrphanAnnotateIO lleva un registry: el vocabulario fusionado = las entradas del registro ordenadas primero (count=0, con label/description) + el directorio auto-crecido, con tope 120; las dos rutas de anotación de ruminate y memory_room_admin pasan el argumento. **Los Rooms pre-registrados ahora influyen de verdad en la anotación de candidatos.**
+
+## [0.20.0-beta.5] — 2026-10-01
+
+> Segunda travesía de la gestión de clasificación Room (la **superficie destructiva**). dryRun es true por defecto — merge/rename previsualizan primero la superficie de impacto, se ejecutan solo tras confirmar; respaldo automático a `rooms-merge-backups/` antes de ejecutar.
+
+### Añadido
+
+- **Sistema de dos niveles del registro de Room**: los slugs admiten forma `major` o `major/minor` de dos niveles (p. ej. `dsh-plugin`, `dsh-plugin/merge`); **tope de clase grande 200**, las subdivisiones de clase pequeña no consumen la cuota de la clase grande (un seguro global de 2000). El vocabulario isTag no se relaja (el slash solo se permite en la capa del registro).
+- **merge/rename/retire (herramienta `memory_room_admin`, altos privilegios)**: merge reescribe con un cursor las tags de todos los registros coincidentes (releer-fusionar-escribir antes de escribir, claves preservadas entre roomCandidates/roomReview/hall/anchors etc.; incluye filas ya retiradas, coherente con la definición de recuento); rename = merge 1:1 + renombrar en el registro (los aliases absorben el nombre viejo); retire es solo retiro del vocabulario (lo existente no se toca). merge/rename en paralelo con la rumiación se pisan entre sí — escalónelos en horas distintas (tanto el aviso de la herramienta como ADR-0020 lo declaran).
+- **El trío de seguridad de reescritura**: dryRun por defecto devuelve solo affected + vista previa con cero escrituras; respaldo automático de los registros coincidentes a `rooms-merge-backups/<ts>-<slug>.json` antes de ejecutar; al terminar `invalidateRooms` automático + encolado de recálculo de escena por cada (family, scene) afectado (`source='room-merge'`).
+- **Subpanel de gestión Room del panel** (aparece tras activar altos privilegios): formulario de registro (slug/nombre/descripción, vía el nuevo RPC `room-register`), exportación de lista de huérfanos; las sugerencias de fusionar/retirar van por la herramienta del agent (la vista previa dryRun es más detallada).
+- Superficie de endpoints 46 → 47 (`room-register`).
+
+## [0.20.0-beta.4] — 2026-10-01
+
+> Primera travesía de la gestión de clasificación Room (la **superficie de cero deriva**): un registro vacío = comportamiento idéntico byte a byte a beta.3. La superficie destructiva merge/rename/retire llega con beta.5 (dryRun true por defecto se retiene una versión).
+
+### Añadido
+
+- **Registro de Room (un sidecar `rooms-registry.json`)**: pre-registra Rooms planificados (slug/label/description); dañado/vacío → degrada de vuelta a un directorio puro auto-crecido, sin bloquear jamás el panel ni el anotador; tope 200 para evitar spam. La capa de endpoint de `rooms-get` fusiona: una entrada registrada entra al vocabulario aunque count=0 y trae `source`/`label`, la respuesta gana un campo `registry` completo (lectura opcional por el cliente).
+- **Endpoint de exportación `dsh-memory/rooms-export`** (kind=rooms|orphans, salida CSV directa): rooms = registro ∪ vocabulario auto-crecido con recuentos; orphans = la lista de registros activos sin vínculo de Room (incluidas las columnas de estado candidato/reinspección).
+- **Herramienta `memory_room_admin`** (action=list|register): list muestra el registro + el panorama auto-crecido; register pre-registra un Room (puerta de altos privilegios, compleción idempotente) — junto con la reinspección ítem por ítem de `memory_room_review`, el agent gana una entrada completa de gestión de clasificación «registrar → premarcar → confirmar uno a uno».
+- Cliente: los chips de Room traen una insignia de origen «pre-registrado / auto-crecido»; los chips de huérfano traen la semántica de reinspección pendiente.
+
+## [0.20.0-beta.3] — 2026-10-01
+
+### Añadido
+
+- **Mejoras de clasificación Room del panel de registros**: ①desplegar/plegar (plegado = cabecera + una vista previa de los 8 Rooms de alta frecuencia, estado de apertura/cierre persistido); ②paginación completa en el estado desplegado (40 por página, ◀▶ para paginar), reemplazando el corte duro anterior de «solo los primeros 40»; ③**filtro de memorias huérfanas** — un chip «sin vínculo · N» en primera posición que muestra solo memorias sin ningún vínculo de Room (`list-records` gana un canal de filtro `untagged`, `rooms-get` gana `orphanCount`, misma definición que el recuento de Room); ④condiciones de filtro visibles al instante + borrado con un clic. La vía de recuperación trae el mismo filtro de huérfanos.
+
+## [0.20.0-beta.2] — 2026-10-01
+
+> Canal dsh-0.2.0-beta +1: optimización de contexto completo de la rumiación (cerco blando de repo / migración de escenas por proyecto / bucle cerrado). Empaquetado con longtask (ver beta.1), feedback de máquina real consolidado.
+
+### Añadido
+
+- **Cerco blando de repo (ADR-0015, `recall.scopeFence.*`, apagado por defecto)**: repoKey=basename(cwd normalizado) calculado al escribir dentro del metadata L1 (repo_key_name/repo_key_owner/applicability, DEFAULT con relleno cero, no entra en el FTS ni en el hash de instantánea); las salidas de recuerdo y memory_search rebajan el peso de forma blanda por `this-repo` / `cross-project` (×0.2 ajustable, **solo rebaja, nunca excluye**, la familia chat y los registros sin atribución no se cercan, un centinela de la vía de deduplicación evita entradas erróneas). Cero deriva: apagado por defecto, el orden del recuerdo empareja sha1 idéntico.
+- **Migración de escenas por proyecto (percepción de repo en L2 + reagrupamiento)**: el prompt de consolidación L2 ve repoKeyName/applicability — los registros this-repo ya no se fusionan en escenas cross-project; una cola `scene_recluster_jobs` + un consumidor de banda ociosa de ruminate (instantánea → borrar proyección de resumen → rollback total ante fallo, cero canal LLM nuevo); tras reparar la atribución de repo consulta solos por repoKey las escenas afectadas y encola el recálculo.
+- **Bucle cerrado de compresión**: un disparo de rumiación con debounce de 10 minutos tras un encolado de compresión de cola exitoso (lavado → L2 → L3 → reetiquetar → consumo de reagrupamiento), corrigiendo el corte de «registros comprimidos estancados en el cubo de destilación».
+
+## [0.20.0-beta.1] — 2026-10-01
+
+> Primer lanzamiento de canal beta de la línea dsh-0.2.0 (tag `dsh-0.2.0-beta`): vista previa en máquina real del modo de tarea larga. Además de lo de abajo, esta versión carga también todos los cambios de main aparcados antes en `[Unreleased]` (ranuras de activación / anclas de procedencia / lector de pruebas / bucle cerrado de retiro de memorias / conflictos de tres ejes etc.) — ya salieron con la línea 0.1.7, pero la línea main no tenía un número de versión correspondiente.
+
+### Añadido
+
+- **Modo de tarea larga (`longTask.*`, apagado por defecto) — el trío para «sesiones de larga corrida»: medición de contexto, referencia de tarea, compresión de cola, más un panel flotante de sugerencias no bloqueante.**
+  - **Uso de contexto (`store/context-usage.ts`)**: escucha el lado de entrada del `usage` oficial de `assistant/message` (input + lectura/escritura de caché), tomando semántica de **valor más reciente** (el lado de entrada de cada ronda ya contiene todo el historial, sin acumular); tras `compaction/summary` se pone a cero y se recuenta. Un Map puro en memoria por sesión — el primer mensaje assistant tras reiniciar lo puede reconstruir; persistirlo solo resucitaría muestras rancias.
+  - **Referencia de todo (`store/todo-ref.ts` + `hooks/long-task.ts`)**: escucha el evento estructurado `todo/write` del huésped (una instantánea completa; los tipos del paquete no lo habían declarado hasta 0.2.0-rc.1, así que el plugin se autoaumenta vía declare module — el mismo precedente que el dsh-compaction de §E). **Solo sesiones de tarea larga**: la instantánea se vuelca en una ranura `todo` pinned (refresco gestionado `SlotStore.refreshByTitle` — escrituras repetidas del mismo sujeto deben actualizar en el sitio, si no dentro del tope ≤8 de ranuras se amontona un rastro de ranuras cerradas), inyectada de forma permanente vía slot-recall — tras la compresión expulsar el contexto viejo, la estrella polar de la tarea sigue ahí. A instantañas adyacentes se les hace una detección de deriva Jaccard literal (reescrituras de la misma instantánea no diluyen la señal); body ≤512 bytes, truncado explícito.
+  - **Compresión de turnos de cola (endpoint `longtask-compress-tail` + `compressTailTurns`)**: destila inmediatamente a memoria vía `enqueue(force:true)` los últimos N turnos dentro de (línea de marca de compresión, última ronda capturada] — convierte la conversación de cola en memoria recuperable en el acto, sin esperar el umbral de destilación. La línea de marca (`SessionModeStore.lastTailCompressedTurn`) solo avanza, y pulsar repetido es naturalmente idempotente; la banda off es totalmente invisible; los datos viejos sin ancla solo se incluyen en la primera compresión (marca 0) — antes recoger de menos que revolver a destilar.
+  - **Estado de sugerencia (`longtask-hint-get`) + bola flotante (`client/src/longtask-fab.ts`)**: un overlay vanilla estilo ego-browser (FAB + panel, arrastre / persistencia de posición / ajuste a la ventana), **la sugerencia no bloquea** — el halo de respiración se enciende solo cuando «la ocupación de contexto llega a `contextThresholdPct`» o «la deriva de todo llega a `driftThreshold`» y la tarea larga está apagada; dentro del panel: el conmutador de tarea larga (temporal, por sesión, **sin mode** — voltear el conmutador no resetea el nivel del usuario), las barras de progreso de ocupación/deriva, un botón de compresión de cola manual (solo usable con tarea larga activada), un recuento de tareas. Sondeo 2s ocupado / 5s ocioso, los fallos de RPC en silencio; el contrato de asientos no cambia (settings.section exactamente uno, el body singleton no ocupa ningún asiento).
+  - **El `mode` de `session-mode-set` pasa a opcional**: obligatorio él o `longTask` — voltear solo el conmutador de tarea larga ya no obliga a enviar un nivel (los clientes viejos siempre enviaban mode, comportamiento igual). La respuesta `mode` vuelve al valor efectivamente en vigor.
 
 ## [0.19.0] — 2026-09-29
 

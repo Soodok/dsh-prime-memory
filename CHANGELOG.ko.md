@@ -9,8 +9,6 @@
 
 이 파일은 **0.12.0** 릴리스 노트와 현재 **미출시** 변경 사항의 한국어판입니다. 전체 이력은 [CHANGELOG.md](./CHANGELOG.md)（中文）를 참조하세요.
 
-<!-- 공백: 0.21.0 및 0.20.x 항목은 아직 번역되지 않았습니다. -->
-
 ## [0.24.0] — 미출시(로컬 라인 `0.24.0-local.0…3`, 2026-10-13)
 
 ### 새로 추가
@@ -110,6 +108,307 @@
 ### 규율
 
 - build형 저장소에 `prepack: npm run build`를 전부 주입 — `npm pack`은 prepack만 발동하고 `prepublishOnly`를 발동하지 않는다. stale-build 누명의 삼중 방어선 중 하나.
+
+## [0.21.0] — 2026-10-04
+
+### 새로 추가
+
+- **도구 그룹 봉인（기억 라이브러리 패널 → 기억 → 도구 봉인）**: 5개 그룹 스위치(room 관리 / graph 그래프 / ruminate 반추 / conflict 충돌 / mutate 쓰기·삭제, 13개 도구 커버). 끔 = 그 그룹 도구가 **등록되지 않는다**, 모델 도구 목록에서 곧장 사라진다(실행 시점 거절이 아니다); 스위치 뒤집기는 volatile 열갱신으로 즉시 발효, 재시작 불요. 핵심 읽기(memory_search / memory_read_scene / memory_receipts / conversation_search)와 슬롯 3건은 제어 밖. 배경: 대다수 그룹 도구(예컨대 Room 통치·반추)는 일상 사용 빈도가 극히 낮아, 상주 도구 목록은 주의만 허비하고 모델의 오인 호출을 부른다.
+- **memory_slot_write의 mem_ 참조 존재성 검증**: refs에서 `mem_*` 형태인 L1 record_id는 쓰기 전 `getByIds` 존재성 검증을 거친다, 지어냈거나 철자가 틀린 id는 곧장 거부하고 memory_search를 거치라 안내한다 — "search가 깨운 기억"이 슬롯 참조에 들어가면 반드시 실제 기록임을 보장한다(brief 쪽 이름 약술 해석이 신뢰할 만한 입력을 얻는 근거). 파일 경로/URL류 refs는 검증하지 않는다.
+
+## [0.20.4] — 2026-10-04(로컬 빌드, 미출시)
+
+### 수정
+
+- **투영 refViews 해석의 전면 내결함**: `resolveRefViews` 안에서 L1 `getByIds` 호출에 try/catch를 걸었다 — registry의 drive에 예외 보호가 없어, 해석 계층이 아무 예외(sqlite 점유/백엔드 강등/기록 상태 이상)든 토하면 세션 이벤트 구동 전체는 물론 호스트 프로세스까지 무너진다. 실패 시 이번 프레임은 refViews 없이 강등(프론트는 원시 refs로 회수).
+
+## [0.20.3] — 2026-10-03
+
+### 수정
+
+- **`memory_search` 렌더 텍스트에 id 보충**: v0.20.2가 record_id를 출력 JSON과 schema에 넣었지만, 모델이 보는 것은 render 산물이지 원시 JSON이 아니다 — 렌더 줄에 id가 없으면 모델로서는 안 돌려준 것과 같다(실머신 재측에서 발견). 이제 각 결과 끝에 `— id: mem_xxx`가 붙어, 그대로 슬롯 refs에 쓸 수 있다.
+
+## [0.20.2] — 2026-10-03
+
+### 수정
+
+- **투영 `memorySlots`의 더티 판정을 임의 이벤트로 완화**: 종전엔 `tool/result`(settled, 비-error)일 때만 store rev로 더티를 판정 — 쓰기 후 "하필 또 도구 결과가 하나 더 와야" 갱신되고, 세션 간 조회는 조회 세션 자신의 도구 호출을 더 기다려야 했다; 실머신에서 쓰기 후 사이드바가 오래 빈 프레임에 고착되는 증상이 드러났다. 임의의 확정된 이벤트에서 O(1) rev 비교를 하고 rev가 변하면 곧장 재건·push하도록 변경; isError 가드는 제거(rev는 실제 변경 후에만 증가, 이벤트는 촉발자일 뿐 데이터 소스가 아니다).
+- **상주 주입을 `<system-reminder>` 태그 프레임으로 변경**(dsh-agent-instructions의 AGENTS.md 주입 house style에 정렬): user 역할 담당은 불변, 다만 태그 상자 + 권위 선언(응답 불요/재서술 말 것/시스템 프롬프트와 사용자 직접 지령을 덮지 말 것)으로 제시 — 약한 모델이 슬롯 내용을 사용자 발화로 오인해 그대로 재서술하며 정상 답변을 방해하던 문제를 고쳤다; 슬롯 본문 안의 닫는 태그는 전이(`</system-reminder>`)시켜, 슬롯 내용이 프레임 경계를 위조하는 것을 막는다.
+
+### 새로 추가
+
+- **`memory_search` 결과가 `id`(L1 record_id)를 밖으로 드러냄**: "검색으로 id를 못 얻음 → 슬롯 refs / memory_receipts에 못 넣음"의 교착을 해제; schema 서술에 id의 사용처 두 곳을 명시.
+- **wire view가 `refs` + `refViews`를 드러냄**: `mem_*`류 참조는 투영 프레임 구축 시 L1 `getByIds`를 거쳐 `[type] 이름 약술`(content 첫 줄, 80자 절단)로 해석되고, brief-sidebar(≥0.5.0-beta.2)가 직접 렌더하며, 경로/URL류 참조는 문자 그대로 유지; 결손/이미 퇴장한 기록은 항목을 만들지 않는다. 해석은 프레임 구축 시점에 일어난다 — 참조 집합은 슬롯 쓸 때 이미 동결되므로, L1 기록을 사후 편집해도 옛 프레임에 역류하지 않는다. 자체 구현 schema는 부가 필드에 대해 "있어야만 검증"하므로 옛 checkpoint 행은 통째로 통과(stateVersion을 건드리지 않는다).
+
+## [0.20.1] — 2026-10-03(정식화; beta 채널이 beta.1 이후의 전 기능을 확정)
+
+Hall·Room 분류 관리 전 연쇄(2단계 등록부/merge/rename/retire/update/편입/기록 동반 퇴장/미등록 퇴장 시 항목 보완), Hall과 Room 각각의 독립 관리 페이지(검색 필터·기본 접힘·포인터 드래그 분류·퇴장 필터), 노화 가중치 표시 + 호출 사용 통계(topN에 들어가야 비로소 used로 셈). 정식화 직전 beta는 0.20.0-beta.26이고 내용은 0.20.1과 일치; `dsh-0.2.0-beta` 채널은 이후 beta를 계속 받는다.
+
+## [0.20.0-beta.26] — 2026-10-03
+
+### 새로 추가(Hall/Room 증가 후의 사용성)
+
+- **Hall/Room 이름 검색 필터**: Hall 페이지에 검색 상자를 신설(slug·표시 이름·별칭, 대소문자 무시) — hall 자기 이름에 걸리면 그 하위 room을 모두 보이고, 아니라면 걸린 하위 room만 남기며, 조 전체가 안 걸리면 숨긴다; 검색 중에는 매칭된 조가 자동 펼쳐진다(접힌 상태가 더는 결과를 가리지 않음); 자체 성장 미등록 영역도 같은 필터. Room 페이지에도 같은 검색 상자, 퇴장 필터 chips와 중첩 발동.
+- **Hall 그룹 접기, 기본으로 전부 접힘**: hall 헤더에는 "합계 N 건 · M개 room"만 보이고, 헤더나 ▸/▾ 단추를 눌러 하위 room을 펼치거나 접는다; "전체 펼치기/전체 접기" 일괄 단추; 펼침 상태는 localStorage에 기억(`dsh.memory.halls.open`). 분류 지정 클릭(hall 헤더를 눌러 분류 완료) 우선순위는 변하지 않는다.
+
+## [0.20.0-beta.25] — 2026-10-02
+
+> 자체 성장 미등록 room 퇴장 후 상태 비가시 수정 + Hall 하위 room 표시 규칙(사용자 판정).
+
+### 수정/변경
+
+- **자체 성장 미등록 room은 퇴장하면 곧 "퇴역/복원"으로 바뀐다**: 종전엔 퇴장 시 기록만 소프트 삭제했고 어휘표에 항목이 없어 바낄 것이 없었으므로 버튼은 언제나 "편입/퇴장"이었다. 이제 retire withRecords가 미등록 slug에 **자동으로 grown 등록 항목 하나를 보완하고 retired로 전환** — 패널 줄이 즉시 "퇴역" 상태로 전환, "복원"(active:true) 후 어휘표에 복귀. 영속화하며 재시작해도 사라지지 않는다.
+- **Hall 페이지 하위 room은 active만 표시**: retired/퇴장한 room은 더 이상 hall 그룹 아래에 안 나온다(Room 페이지에서 본다, "퇴역" 필터 포함); 그룹 집계 계수도 따라 active 하위류만 센다.
+
+## [0.20.0-beta.24] — 2026-10-02
+
+### 수정
+
+- **Hall 페이지 펼치기/퇴장을 Room 페이지와 정렬**: Hall 페이지의 room 줄을 펼칠 때도 활성 기록만 당긴다(`retired:false`); 퇴장 확인 후 해당 room이 펼쳐져 있으면 펼침 영역을 자동 갱신.(beta.23은 Room 페이지만 보강하고 Hall 페이지 동기화를 빠뜨렸다 — 사용자 실측 "퇴장을 눌러도 효과가 안 보인다"의 또 다른 한 군데.)
+
+## [0.20.0-beta.23] — 2026-10-02
+
+> **Room 페이지 퇴장 필터 보강**(beta.22의 필터 chips는 패치 스크립트가 도중 실패해 디스크에 못 내려가고 배지만 패키지에 들어갔다 — 이번엔 항목별 Edit로 내려놓고 전부 통과 검증).
+
+### 수정/새로 추가
+
+- **퇴장 필터 chips**(Room 페이지, 등록 폼 위): 전체 / 활성(어휘표 미퇴역) / 퇴역.
+- **퇴장 효과가 즉시 발현**: 전개 항목은 **활성** 기록만 당긴다(`retired:false`) — 퇴장 후 펼침 영역은 곧 "기억 항목 없음"; 퇴장 확인 후 해당 room이 펼쳐져 있으면 펼침 영역을 **자동 갱신**; [퇴장됨] 배지 + 회색화 폴백(beta.22에 이미 포함).
+
+## [0.20.0-beta.22] — 2026-10-02
+
+> 퇴장 효과 가시성 + Room 페이지 퇴장 필터(실측 피드백: 퇴장 확인 후 화면 변화 없음, 필터할 수도 없음).
+
+### 수정/새로 추가
+
+- **퇴장 효과가 즉시 발현**: Room 페이지에서 항목을 펼치면 **활성** 기록만 당긴다(`retired:false`) — 퇴장 후 펼침 영역에 곧 "이 Room에는 기억 항목이 없습니다" 표시; 퇴장 확인 후 해당 room이 펼쳐져 있으면 항목을 **자동 갱신**; 혼배 폴백: 이미 퇴장한 항목엔 [퇴장됨] 배지를 달고 회색화.
+- **퇴장 필터**: Room 페이지에 "전체 / 활성 / 퇴역" chips 신설(어휘표 퇴역 상태 필터).
+
+## [0.20.0-beta.21] — 2026-10-02
+
+> **퇴역 시 기록 동반**: room 퇴역 시 **그 아래 활성 기억을 통째로 함께 퇴장**시킬 수 있다(종전엔 동사표만 있어, 특히 자체 성장 room은 처리 수단이 없었다).
+
+### 새로 추가
+
+- **`retire withRecords`**(Room/Hall 페이지 "퇴장" 버튼, 빨강): 어휘표 퇴역 + 그 room 아래 **활성** 기록 일체를 배치 소프트 삭제(매배치 ≤200, records-delete와 같은 원어; reason=manual) — 기록은 기억 페이지 "퇴장됨" 영역에서 건별 복원 가능. 자체 성장 미등록 줄도 "퇴장"이 있다(기록만 퇴장, 어휘표 항목은 손댈 것이 없음). 응답에 `retiredRecords` 건수를 담는다.
+- "고아 내보내기" 버튼을 **기억 질의 패널**(고아 필터 줄 안)로 되돌렸다.
+
+### 수정
+
+- recall-usage 테스트 격리(영속 루프 케이스의 병렬 경합); RoomTab 퇴역 확인창의 문자 그대로 `\n` 표시 수정.
+
+## [0.20.0-beta.20] — 2026-10-02
+
+> **Room 독립 탭**(Hall과 분리): room의 존재·이름·항목 각각의 관리 면이 있다; 기억 페이지는 더 이상 Room 태그를 쌓지 않는다.
+
+### 새로 추가
+
+- **"Room" 탭**(Hall 뒤): 모든 room을 납작하게 나열(등록 항목 ∪ 자체 성장 미등록) — **존재**(2단계 slug 등록 / grown 편입 / 퇴역·복원), **이름**(표시 이름+분류 설명 편집; 개명은 2단계 slug 가능, 기록은 따라 이동), **항목**(▸ 펼쳐 그 room의 기억 항목 열람, 기본 접힘, 최초에 앞 10건만 당김); 고아 내보내기/고권한 스위치는 페이지를 따른다.
+- **등록 후 재편집 가능**: 새 `room-admin update`(label/description 재작성, 미제공 필드는 그대로)+ store `RoomRegistryStore.update` + 도구 `memory_room_admin action=update` + 패널 "편집" 진입 — 종전엔 등록 후 label/설명은 빈칸만 채울 수 있고 재작성 불가.
+- **room 줄 내용 전개**(Hall 페이지 room 줄과 동일): 기본 접힘, ▸로 펼치면 항목.
+- **기억 페이지 Room 블록 분리**: slug chips/페이지네이션/전개 블록 제거(Hall/Room 페이지와 중복), "미바인딩 · N" 고아 필터와 안내 문구만 유지 — room 태그 열람/관리는 Hall/Room 페이지로.
+
+### 변경
+
+- 병합/분류/개명 폼과 미리보기 sticky 스크롤 추종(hall이 많을 때 확인창을 찾느라 위아래로 밀 필요가 없다).
+- 포인터 자체 드래그(ego-browser과 같은 pointer 방식, 일부 webview에서 HTML5 DnD가 안 터지는 데 대한 폴백).
+
+## [0.20.0-beta.19] — 2026-10-02
+
+> 분류 상호작용 재작업(실측 피드백: HTML5 드래그가 일부 webview에서 안 터짐; hall 클릭 후 미리보기가 원본 줄에 묻혀 "반응 없음"처럼 보임).
+
+### 변경
+
+- **포인터 자체 드래그**(ego-browser과 같은 순수 pointer 방식): room/자체 성장 slug를 누른 채 → 유령 chip이 손을 따라 부유 → hall 헤더에 호버하면 점선 강조 → 손을 떼면 분류. HTML5 DnD에 의존하지 않아 어떤 webview에서도 발동. 클릭 지정 분류("분류" / "담기" → 지정 상태 → hall 헤더 클릭)는 유지.
+- **전역 조작 바**: 병합/분류/개명의 폼과 dryRun 미리보기가 **페이지 최상단에 상주**(빨간 확인창은 줄과 함께 스크롤되지 않고, 더 이상 원본 room 줄에 묻히지 않음) — hall을 클릭하면 반드시 보인다.
+- **room 줄 레이아웃**: 버튼을 한 줄에 고정해 더 이상 줄바꿈하지 않음(내보내기가 외톨이 줄 안 됨); 이름/별칭은 왼쪽 정보 영역에서 자연 줄바꿈(별칭은 단어 끊김 허용).
+
+## [0.20.0-beta.18] — 2026-10-02
+
+### 유지 보수
+
+- lint 정리: beta.17의 isTag→isRoomSlug 치환이 남긴 stats.ts / rooms-registry.ts 두 개의 죽은 import(출시 게이트 미검 — 파이프 후 `$?`가 tail의 종료 코드를 취함, D2 함정 재발). 기능 변경 없음.
+
+## [0.20.0-beta.17] — 2026-10-02
+
+> **재시작 후 hall/room 관계 소실 수정**: `rooms-registry.json`의 로더가 여전히 `isTag`로 slug를 필터링 — 재시작 후 디스크에서 읽을 때 모든 `major/minor` 2단계 항목이 불법으로 **조용히 버려진다**(단독 hall은 통과해 남았다). 이는 isTag/isRoomSlug 혼용의 세 번째 장소; 같은 배치에서 `normTags`의 같은 지뢰도 걷어냈다.
+
+### 수정
+
+- **로더가 2단계 항목을 버림**(`store/rooms-registry.ts` init): 필터를 `isRoomSlug`로 변경. **당신의 디스크 위 rooms-registry.json 데이터는 온전하다**(2단계 항목은 줄곧 파일에 있었고, 단지 부팅 시 버려진 것) — 업그레이드 후 재로딩하면 관계가 자동 복원, 어떤 복구 조작도 불요.
+- **normTags가 slash 태그를 씻어냄**(`metadata-validators.ts`): "모든 tags 재작성 지점은 반드시 여기를 통과" 게이트가 isTag를 썼는데, 분류 재작성 시 넣은 `hall/minor` 태그가 다음 증류/재라벨에 닿을 때 조용히 깎였다. 이제 2단계 room slug를 통과(3단계는 여전히 거부); `isRoomSlug`의 사실 소스를 가까운 해당 파일로 옮김(의존 순환 회피), rooms-registry의 re-export는 호환 유지.
+- **list-records의 2단계 tag 필터 오거부**(stats.ts tagSel와 같은 지뢰): `isRoomSlug`로 변경 — Hall 페이지에서 2단계 room을 눌러 기록 필터링하면 이전엔 400을 반환했다.
+- 빨간 테스트 선행 ×3(영속 루프 2단계 보존 / normTags 통과 / 통합 2단계 tag 필터), 빨강을 확인한 뒤 고쳐 초록 복귀.
+
+## [0.20.0-beta.16] — 2026-10-02
+
+> **자체 성장 미등록 slug를 곧장 hall에 편입**: 하단 "자체 성장 미등록" 영역의 각 chip을 이제 hall 헤더로 끌어다 놓을 수 있다 — 편입 + 그 하위류 지정이 한 단계로 끝난다.
+
+### 새로 추가
+
+- **grown chip 드래그/클릭 분류**: 미등록 slug(예 `git-commits`)를 hall 헤더로 끌거나(chip의 "담기" 버튼을 눌러 지정 상태로 들어간 뒤 대상 hall 클릭) → dryRun 미리보기 → 확인 실달. 의미 = **제자리 편입(from, source=grown) → `hall/하위류`로 rename**: 기록 tags는 따라 이동, 옛 이름은 대상 별칭에 들어가고, 항목은 active이며 ⭐를 달지 않는다(편입 신원). 자기 hall의 2단계 slug로 되떨어짐(예 `dsh-plugin/xxx`)= 제자리 편입.
+- 조합 순서를 통합 테스트에 박았다(markMered는 미등록 from에서 조기에 빠짐 — 반드시 먼저 from을 편입한 뒤 rename); execMerge는 미등록 from에 자동 편입 보완.
+
+## [0.20.0-beta.15] — 2026-10-02
+
+> 분류 실측 피드백 2연속 수정: ①개명 후 항목이 잘못 "퇴역"을 달음(주석 어휘표에서 빠진다); ②HTML5 드래그가 일부 webview에서 안 먹힘 → **클릭 지정 분류**를 주 경로로 신설.
+
+### 수정
+
+- **분류(개명) 후 항목에 retired 오표**: renameRoom이 merge 편성을 재사용하면서 `markMerged`의 "옛 항목을 퇴역으로 전환"까지 딸려 왔다 — 분류 끝난 새 room이 "퇴역"을 표시하고 **주석 어휘표에서 빠진다**(listActive 필터). 이제 rename 마무리에서 직전 상태를 복원(active 항목은 개명 후에도 active); 진짜 merge(합집합 의미)는 영향 없음. 빨간 테스트 선행(unit + HTTP 면 통합).
+
+### 변경
+
+- **클릭 지정 분류를 주 경로로**: room 줄의 "분류" 클릭 → 지정 상태 진입(버튼이 "hall 선택…"으로 변하고 모든 hall 헤더 점선 강조) → 대상 hall 헤더 클릭 → dryRun 미리보기 → 확인 실달. 드래그는 유지(지원되는 환경에서는 여전히 쓸 수 있음), 다만 의존하지 않는다.
+
+## [0.20.0-beta.14] — 2026-10-02
+
+> 기억 카드에 **노화 가중치**와 **호출 사용** 표시를 신설, 그리고 "노화 가중치 효과 통계" 데이터 축적을 시작. 기준(사용자 판정): **topN에 들어가야(컨텍스트에 주입되어야) 비로소 사용된 것**; 시도했으나 안 들어감 = 시도만 셈.
+
+### 새로 추가
+
+- **카드 필드**: "노화 N%" chip(읽기 경로 감쇠 계수 `max(0.5, 0.5^(Δ일/반감기))`, 호출 정렬과 같은 식 같은 소스; ≤60%는 빨강=늙음)+ "used/attempts" 계수(title에 최근 사용/시도 시각 포함). 도구줄에 집계 "호출 사용 used/attempted(rate%)" 신설.
+- **통계 면**: `RecallUsageStore`(recall-usage.json 사이드카, rooms-registry와 같은 가문 규율 — 손상 시 읽기 강등, 절대 호출 읽기 경로를 막지 않음); 매 라운드 호출을 주입/전부 억제/예산 0의 세 종착 상태에서 기록(후보 attempts++, 주입 used++, 타임스탬프는 최신); 메모리 즉시 + 디바운스 5s 원자 영속, 5만 건 초과 시 최근 시도 기준으로 폐기; 미장착 = 무비용 우회.
+- 계약: UiRecord에 `agingWeight`/`usage` 추가, ListRecordsResponse에 `usageSummary` 추가(선택 필드, 옛 클라이언트는 파괴 없음); 계약 키 수는 불변.
+
+### 효과 통계 기준(후속 분석용)
+- usageSummary: tracked(통계 있는 기억 수)/ attempted(Σ시도)/ used(Σ사용)/ rate(사용률%)
+- 세밀 분석(유형/연령대별 사용 분포, 반감기 튜닝 근거) 데이터는 이 버전부터 축적, 분석 뷰는 별도 논의.
+
+## [0.20.0-beta.13] — 2026-10-02
+
+> 분류 논리 보강: room을 기존 hall 아래에 넣기(종전엔 새 hall만 만들거나 다른 room에 병합해 신원을 지울 수 있었다). 패널은 **드래그 분류**를 지원 — room을 끌어 hall 헤더에 놓으면 된다.
+
+### 새로 추가
+
+- **Hall 페이지 드래그 분류**: room 줄을 끌 수(hiPriv 켜면 손잡이 커서), hall 헤더가 놓기 대상(점선 강조); 손을 떼면 = 미리 채워진 개명(major/minor) + 곧장 dryRun 미리보기, 확인 후 실달 — 기록은 따라 이동, 옛 이름은 별칭, 그룹 뷰에서는 곧 그 hall 아래로 걸림. 터치스크린/드래그 미지원 환경은 room 줄의 "분류" 버튼이나 개명 폼의 hall 빠른 선택 chips로 폴백.
+- 백엔드 수정: `renameSlug` 대상 검증 `isTag` → `isRoomSlug` — 종전엔 2단계 대상(major/minor)이 오거부되어 "hall 아래로 분류" 길이 사실상 통하지 않았고(또 rename 편성이 기록을 재작성한 뒤 등록부 개명 시 예외를 던져 반쪽 상태를 남김). C3 제거/변경 규율대로: 빨간 테스트 선행(unit + HTTP 면 통합 각 하나), 빨강 확인 후 고쳐 초록 복귀.
+
+### 수정
+
+- 상동: `renameSlug` 2단계 대상 검증(beta.5에 들어간 결손).
+
+## [0.20.0-beta.12] — 2026-10-02
+
+> lint 정리 + 제거 규율 성문(ENGINEERING-NOTES에 C3 신설). **기능 변경 없음**.
+
+### 유지 보수
+
+- **eslint 정리(13 error → 0)**: longtask 제거 잔재(stats.ts 죽은 import ×2, RecordsTab 죽은 state)+ 더 이전 배치의 부채(recluster.ts 죽은 인터페이스와 let, rooms-registry.ts / ruminate.ts / room-review.ts / 테스트 파일 두 개의 죽은 import와 let). 남은 warning 4개는 기저선 기존(primitives/tools의 any).
+- **ENGINEERING-NOTES에 C3 "제거도 TDD"**: 제거는 먼저 테스트로 새 기대를 표현(빨강) → 구현 제거(초록); lint는 삭제형 변경에서 반드시 돌려야 하는 문(unused import = 덜 제거된 것의 자동 탐지기).
+
+## [0.20.0-beta.11] — 2026-10-02
+
+> Hall·Room **통합 테스트** 도입(`tests/hall-room.integration.test.ts`: HTTP 면 전 연쇄 × 실제 저장소의 사용자 여정, 9 케이스), 통합 첫 실행에서 단위 테스트 사각지대 하나를 잡아 고쳤다.
+
+### 수정
+
+- **rooms-get 병합 뷰의 source를 `pre-registered`로 하드코딩**(beta.4 도입): 등록부 항목을 계수 목록에 합칠 때 출처를 고정해 썼는데, 편입(source=grown)된 항목이 패널 계수 chips에서 항시 ⭐ 사전등록 배지를 달았다 — 신원 왜곡. 이제 항목의 실제 출처를 씀(⭐는 사전등록에만; 편입은 grown 표시). 단위 테스트 사각지대 원인: rooms-registry 단위 테스트는 store 층만 해서, 단말 병합 줄이 grown 항목의 source를 주장하는 자가 없었다.
+
+### 테스트
+
+- `hall-room.integration.test.ts`: 빈 표 자체 성장 계수 → 2단계 등록/불법 slug 거부 → 편입 → 세 kind 내보내기 → merge dryRun 영쓰기→실달(백업 영속/퇴장 행 재작성/metadata 보존/장면 재계산 큐잉 source='room-merge')→ rename 별칭 → retire/복원 → 대분류 200 상한+소분류 미점액 → 손상 읽기 강등 빨간선(rooms-get은 막지 않음, 디스크에 역작성 안 함).
+
+## [0.20.0-beta.10] — 2026-10-02
+
+> **longtask(장기 작업 모드) 전면 제거**: 이 기능군의 소속은 본래 context-compression 쪽("압축 시작 제안"이 그 영역), pm에 잘못 실린 것 — beta.8에서 플로팅 공을 제거했고, 이번 버전에서 남은 백엔드를 전부 제거. pm은 순수 기억 영역으로 복귀. 장래에 "꼬리 즉시 증류" 같은 능력이 필요하면 pm 본위로 재설계해 별도 과제로 착수한다.
+
+### 제거
+
+- **엔드포인트 `longtask-hint-get` / `longtask-compress-tail`**(계약 키 48 → 46)및 `compressTailTurns`/디바운스 반추 폐루프: 컨텍스트 계량(`ContextUsageStore`), todo 표류 감지(`TodoRefStore`), 제안 판정이 함께 제거, `hooks/long-task.ts`, `store/context-usage.ts`, `store/todo-ref.ts` 세 파일 삭제(todo/write 이벤트의 declare module 확장 포함).
+- **`cfg.longTask.*` 설정 블록**(기본값 + Schema 두 곳): 옛 설정 파일의 longTask 키는 schema가 무시, 마이그레이션 불요.
+- **세션급 `longTask` 깃발과 꼬리 압축 수위선 `lastTailCompressedTurn`**(session-modes): 옛 session-modes.json의 잔여 키는 로드 필터가 자연히 무시.
+- **`session-mode-set`의 `mode`를 필수로 되돌림**(그 선택화 가능은 longTask 2택1을 위해 태어남); `longTask` 요청/응답 필드 삭제.
+- 보존: beta.9의 roomRegistry RPC 배선 수정(독립 성립); Hall 관리 페이지와 Room 분류 관리 면은 불변.
+
+## [0.20.0-beta.9] — 2026-10-02
+
+> 패널 RPC 전 연쇄의 deps 누락 수정:`roomRegistry`와 `longTaskDeps`가 rpcHandler 조립 때 sources에서 빠져, 패널 쪽 Room 관리/장기 작업 엔드포인트가 항시 "미장착"(도구 면은 직전달이라 영향 없음, 그래서 beta.4부터 도구는 쓸 수 있으나 패널 등록은 계속 오류).
+
+### 수정
+
+- **`registerMemoryRpc`의 rpcHandler가 `roomRegistry`/`longTask`를 빠뜨림**(beta.4 도입): HTTP 분배는 `buildEndpointDeps`로 통일되지만 sources는 7가지만 담았다 — `rooms-get`은 registry를 안 내림, `room-register`/`room-admin`은 "Room 등록부 미장착(플러그인 재초기화 필요)"를 던짐, `longtask-hint-get`/`longtask-compress-tail`은 항시 disabled. 이제 sources와 함께 내림; 회귀 테스트가 HTTP 면 전 연쇄를 고정(register → rooms-get 병합 → room-admin, rpc.test.ts).
+
+## [0.20.0-beta.8] — 2026-10-02
+
+> 플로팅 공 UI 제거: 부유 제안 패널의 소속은 본래 context-compression 쪽("압축 시작 제안"이 그 영역), pm에 잘못 실린 것 — beta.1부터 패키지와 함께 배포된 FAB를 이번 버전에서 제거.
+
+### 제거
+
+- **플로팅 공 + 제안 카드(`client/src/longtask-fab.ts`, beta.1부터 패키지와 함께)**: 통째 제거, 클라이언트는 두 좌석으로 복귀 — `settings.section`(기억 패널)+ `conversation.input.left`(단계 pill), 더 이상 앱 전역 플로팅 UI 없음. 장기 작업 모드 본체(컨텍스트 계량/todo 참조/꼬리 turn 압축)는 영향 없음; `longtask-hint-get`/`longtask-compress-tail` 엔드포인트는 백엔드 면으로 보존, 장기 작업 스위치와 수동 압축 진입은 정식화 때 기억 설정 분절에 착지.
+
+## [0.20.0-beta.7] — 2026-10-02
+
+> Room 분류 관리 세 번째 배(**관리 패널 면**): 전용 "Hall" 탭, hall(대분류)+ room(소분류)을 함께 관리 — 수동으로 Room을 보거나 관리할 때 agent 도구를 빌리지 않아도 된다.
+
+### 새로 추가
+
+- **"Hall" 관리 탭**("장면" 뒤): hall 그룹 트리 — `major/minor`는 접두 대분류로, standalone slug는 자체 hall(자기 자신이 hall이자 그 아래 유일한 room); hall 헤더 줄에 집계 계수 + 일괄 "+소분류"(미리 채움 `hall/`); room 줄은 ⭐사전등록/source/상태/별칭/계수를 표시, retired는 회색화. UI 용어 Hall/Room은 그룹 뷰로서, Wing(`metadata.hall` 영역) 및 인지 hall과는 무관(ADR-0020 §7 중의 해소).
+- **전 조작 UI 진입(고권한 memoryMutate 문)**: 2단계 slug 등록(제한 폼, placeholder `dsh-plugin` / `dsh-plugin/merge`); 자체 성장 slug **편입**(`source=grown`); **개명/병합**은 새 RPC로 — dryRun 미리보기(영향 건수+샘플) → "확인 실행" 실달, memory_room_admin 도구와 같은 편성(실행 전 자동 백업 + 완료 시 장면 재계산 큐잉); 퇴역/복원 한 번 클릭(복원은 2차 확인 없음, 퇴역은 확인); room별 기록 목록 CSV 내보내기; 어휘표/고아 내보내기 이 페이지로 수렴; 병합/개명에 "반추 유휴 시 실행" 안내.
+- **신규 엔드포인트 `dsh-memory/room-admin`**(merge/rename/retire; memoryMutate 문, 단말 측 예외 의미): 계약 키 47 → 48. `rooms-export`에 `kind='records'` 추가(Room별 기록 목록 내보내기, `tag` 필수); `room-register`에 선택 `source` 추가(편입 시 `grown`).
+- 기억 Tab Room 블록 축소: 관리 하위 패널 제거(고아 내보내기는 헤더 줄로 위로 이동), 안내는 Hall 페이지를 가리킴.
+
+### 수정
+
+- `rooms-export` records 분기 kind 타입 축소(TS2322)와 과거 문자 깨짐 오류 메시지; CHANGELOG beta.1-beta.5 중복 제목 줄 수정.
+
+## [0.20.0-beta.6] — 2026-10-01
+
+### 수정
+
+- **주석 어휘표가 등록부에 접속(beta.5 누락 보강)**: beta.5의 merge/rename/retire는 이미 착지했지만, 후보 주석기(`annotateOrphanCandidates`)의 어휘표는 여전히 순수 자체 성장 집계 — 사전등록 Room은 후보에 전혀 못 들어갔다. 이제 OrphanAnnotateIO가 registry를 담는다: 병합 어휘표 = 등록부 항목이 앞(count=0, label/description 첨부)+ 자체 성장 디렉터리, 상한 120; ruminate와 memory_room_admin annotate 두 경로 모두 인자 전달. **사전등록 Room이 이때부터 후보 주석에 실제 영향을 준다**.
+
+## [0.20.0-beta.5] — 2026-10-01
+
+> Room 분류 관리 두 번째 배(**파괴적 면**). dryRun 기본 true — merge/rename은 먼저 영향면을 미리보기, 확인 후 실달; 실행 전 `rooms-merge-backups/`에 자동 백업.
+
+### 새로 추가
+
+- **Room 등록부 2단계제**: slug가 `major` 또는 `major/minor` 2단계를 지원(예 `dsh-plugin`, `dsh-plugin/merge`); **대분류 상한 200**, 소분류 세분화는 대분류 점액을 쓰지 않음(총량 안전장치 2000). isTag 어휘표는 완화하지 않음(slash는 등록부 층에서만 허용).
+- **merge/rename/retire(도구 `memory_room_admin`, 고권한)**: merge는 커서로 모든 매칭 기록의 tags를 재작성(쓰기 전 재읽기-병합-재작성, roomCandidates/roomReview/hall/anchors 등 키 보존; 이미 퇴장한 행 포함, 계수 기준과 일치); rename = merge 1:1 + 등록부 개명(aliases가 옛 이름을 수용); retire는 어휘표 퇴역만(기존 수량 불변). merge/rename과 반추를 병행하면 서로 덮어쓴다 — 실행 시각을 어긋나게 하라(도구 안내와 ADR-0020 모두 선언함).
+- **재작성 안전 3종 세트**: dryRun은 기본 affected+미리보기만 반환하고 영쓰기; 실행 전 매칭 기록을 `rooms-merge-backups/<ts>-<slug>.json`에 자동 백업; 완료 시 자동 `invalidateRooms` + 영향받은 (family, scene)별로 장면 재계산 큐잉(`source='room-merge'`).
+- **패널 Room 관리 하위 패널**(고권한 켜면 등장): 등록 폼(slug/이름/설명, 새 RPC `room-register` 거침), 고아 목록 내보내기; 병합/퇴역 제안은 agent 도구로(dryRun 미보기가 더 상세).
+- 단말 면 46 → 47(`room-register`).
+
+## [0.20.0-beta.4] — 2026-10-01
+
+> Room 분류 관리 첫 번째 배(**영표류 면**): 등록부가 비면 beta.3과 동작이 글자 그대로 일치. merge/rename/retire 파괴적 면은 beta.5에 따른다(dryRun 기본 true는 한 버전 보존).
+
+### 새로 추가
+
+- **Room 등록부(`rooms-registry.json` 사이드카)**: 미리 기획된 Room을 사전 등록(slug/label/description); 손상/비면 → 순수 자체 성장 디렉터리로 강등 회피, 절대 패널과 주석기를 막지 않음; 상한 200으로 도배 방지. `rooms-get`은 단말 층에서 병합: 등록 항목은 count=0이어도 어휘표에 들고 `source`/`label`을 달고, 응답에 `registry` 전량 필드 신설(클라이언트는 선택 읽기).
+- **내보내기 엔드포인트 `dsh-memory/rooms-export`**(kind=rooms|orphans, CSV 직출): rooms = 등록부∪자체 성장 어휘표에 계수 첨부; orphans = Room 바인딩 없는 활성 기록 목록(후보/재검 상태 열 포함).
+- **도구 `memory_room_admin`**(action=list|register): list는 등록부+자체 성장 총람; register는 Room 사전 등록(고권한 문, 멱등 보완) — `memory_room_review`의 건별 재검과 조합하면, agent에게 "등록→사전 마킹→건별 확인"의 완결 분류 관리 진입이 생긴다.
+- 클라이언트: Room chip에 "사전등록/자체 성장" 출처 표식; 고아 chip에 재검 대기 의미.
+
+## [0.20.0-beta.3] — 2026-10-01
+
+### 새로 추가
+
+- **기록 패널 Room 분류 개선**: ①펼치기/접기(접기 = 헤더 + 앞 8개 고빈도 Room 미리보기, 개폐 상태 영속); ②펼침 상태 전량 페이지네이션(매 페이지 40, ◀▶ 넘김), 종전 "앞 40만 표시"의 경직 절단을 대체; ③**고아 기억 필터** — 선두 "미바인딩 · N" chip으로 Room 바인딩이 전혀 없는 기억만 봄(`list-records`에 `untagged` 필터 경로 신설, `rooms-get`에 `orphanCount` 신설, Room 계수와 같은 기준); ④필터 조건 즉시 가시 + 일괄 해제. 검색 경로에도 같은 고아 필터.
+
+## [0.20.0-beta.2] — 2026-10-01
+
+> dsh-0.2.0-beta 채널 +1: 반추 완전 context 최적화(repo 소프트 울타리/장면 프로젝트별 이전/폐루프). longtask(beta.1 참조)와 같은 패키지, 실머신 피드백 병합 수렴.
+
+### 새로 추가
+
+- **repo 소프트 울타리(ADR-0015, `recall.scopeFence.*`, 기본 끔)**: repoKey=basename(정규화한 cwd)을 쓸 때 계산해 L1 metadata(repo_key_name/repo_key_owner/applicability, DEFAULT는 백필 불요, FTS와 스냅샷 해시에 안 들어감)에 기록; 호출과 memory_search 출구에서 `this-repo`/`cross-project`로 소프트 감중 재정렬(×0.2 조정, **감중만 하고 배제하지 않음**, chat류와 미귀속 기록은 울타리 밖, 중복제거 경로는 센티널로 오입 방지). 영표류: 기본 끔일 때 호출 순서 sha1 대조가 일치.
+- **장면 프로젝트별 이전(L2 repo 감지 + 재클러스터)**: L2 통합 prompt에 repoKeyName/applicability를 보이게 해 — this-repo 기록은 더 이상 프로젝트 횡단 장면에 안 들어감; `scene_recluster_jobs` 작업 큐 + ruminate 유휴 단계 소비자(스냅샷 → 요약 투영 삭제 → 실패 시 통째 롤백, 새 LLM 채널 0); repo 귀속 보강 후에는 repoKey로 역조회해 영향 장면을 큐잉 재계산.
+- **압축 폐루프**: 꼬리 압축 큐잉 성공 후 10분 디바운스로 반추 한 번 촉발(플러싱→L2→L3→relabel→재클러스터 소비), "압축 기록이 증류 버킷에 고인다"의 끊김을 수정.
+
+## [0.20.0-beta.1] — 2026-10-01
+
+> dsh-0.2.0 라인의 첫 beta 채널 출시(`dsh-0.2.0-beta` tag): 장기 작업 모드 실머신 프리뷰. 아래 내용 외에도, 이번 버전은 종전 `[Unreleased]`에 parked된 모든 main 변경(활성 슬롯/출처 앵커/증거 리더/기억 퇴장 폐루프/3축 충돌 등)을 함께 담는다 — 이미 0.1.7 라인으로 출시됐지만 main 라인에는 대응 버전 번호가 아직 없다.
+
+### 새로 추가
+
+- **장기 작업 모드(`longTask.*`, 기본 끔) — "장시간 세션"의 3종 세트: 컨텍스트 계량, 작업 참조, 꼬리 압축, 그리고 비차단 플로팅 제안 패널 하나.**
+  - **컨텍스트 사용량(`store/context-usage.ts`)**: `assistant/message` 공식 `usage`의 입력 측(input + cache 읽기/쓰기)를 감시, **최신값** 의미를 취함(매 라운드 입력 측에 이미 전체 이력이 들어 있으니 누적하지 않음); `compaction/summary` 후 0으로 재계. 순수 메모리 per-session Map — 재시작 후 첫 assistant 메시지로 재건 가능, 영속화하면 만료 샘플만 되살린다.
+  - **todo 참조(`store/todo-ref.ts` + `hooks/long-task.ts`)**: 호스트 구조화 `todo/write` 이벤트(전량 스냅샷; 패키지 타입이 0.2.0-rc.1에서 미선언, 플러그인이 declare module로 자체 확장 — §E의 dsh-compaction 선례와 같음)를 감시. **장기 작업 세션에만**: 스냅샷을 pinned `todo` 슬롯 하나에 밀어 넣는다(`SlotStore.refreshByTitle` 관리 갱신 — 같은 주체가 반복 쓰려면 제자리에 갱신해야, ≤8 슬롯 상한 안에 닫힌 슬롯 잔해가 쌓임), slot-recall로 상주 주입 — 압축이 옛 컨텍스트를 밀어낸 뒤에도 작업 북극성은 남는다. 인접 스냅샷간에는 표면 Jaccard 표류 감지(같은 스냅샷 반복 쓰기는 신호를 희석하지 않음); body ≤512 바이트, 절단 시 명시.
+  - **꼬리 turn 압축(`longtask-compress-tail` 엔드포인트 + `compressTailTurns`)**: (압축 수위선, 최신 캡처 라운드] 구간의 최근 N 라운드를 즉시 `enqueue(force:true)`로 증류해 기억에 넣는다 — 증류 임계치를 기다리지 않고 꼬리 대화를 곧장 검색 가능 기억으로. 수위선(`SessionModeStore.lastTailCompressedTurn`)은 앞쪽으로만 전진, 반복 누름은 자연 멱등; off 등급은 완전히 투명; 앵커 없는 옛 데이터는 첫 압축(수위선 0)에만 포함 — 덜 거두되 중복 증류는 안 함.
+  - **제안 상태(`longtask-hint-get`)+ 플로팅 공(`client/src/longtask-fab.ts`)**: ego-browser식 vanilla overlay(FAB+패널, 드래그/위치 영속/뷰포트 클램핑), **제안은 차단하지 않음** — "컨텍스트 점유가 `contextThresholdPct`에 도달" 또는 "todo 표류가 `driftThreshold`에 도달"하고 장기 작업이 켜지지 않을 때만 숨쉬는 글로우를 점등; 패널 내: 장기 작업 스위치(임시, per-session, **mode 없음** — 스위치 전환이 사용자 단계를 리셋하지 않음), 점유/표류 진행바, 수동 꼬리 압축 버튼(장기 작업 켜야만 사용 가능), 작업 계수. 폴링 바쁠 때 2s / 한가할 때 5s, RPC 실패는 침묵; 시트 계약 불변(settings.section은 정확히 하나, body 싱글턴은 어떤 시트도 차지 않음).
+  - **`session-mode-set`의 `mode`가 선택으로 전환**: `longTask`와 2택1 필수 — 순수 장기 작업 스위치 전환만 하면 더 이상 단계를 강제로 안 보낸다(옛 클라이언트는 항시 mode를 전송, 동작 불변). 응답 `mode`는 현재 유효값으로 되돌림.
 
 ## [0.19.0] — 2026-09-29
 
