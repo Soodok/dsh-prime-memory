@@ -16,6 +16,108 @@ et les numéros de version respectent la [gestion sémantique de version](https:
 > **Convention des captures d'écran d'interface** : les entrées apportant des changements d'interface conservent une capture réelle
 > dans `assets/changelog/<numéro de version>/<numéro à deux chiffres>-<résumé>.png` et y font référence par un chemin relatif : on voit directement dans le journal à quoi ressemble l'interface de la nouvelle version.
 
+<!-- Lacune : les entrées 0.21.0 et 0.20.x ne sont pas encore traduites. -->
+
+## [0.24.0] — Non publié (ligne locale `0.24.0-local.0…3`, 2026-10-13)
+
+### Ajouté
+
+- **Vocabulaire des types avec source unique de vérité (`src/memory-types.ts`)** : les 29 types d'origine de la taxonomie mémoire de l'hôte + les 7 anciens du plugin + le parapluie `unclassified`, soit 37 types au total. Tout en **dérive** : l'allowlist du répertoire de projection, l'allowlist d'écriture de `memory_add`, les étiquettes du panneau, les chaînes d'énumération des prompts d'extraction et de déduplication, et les codes de type de la double implémentation TS/Python de memport. Jusqu'ici, le « jeu complet des types » était recopié à la main sur quatre sites qui évoluaient séparément : `memory_add` **réécrivait silencieusement** les classifications externes en `episodic`, tandis que le texte de memport promettait de « les passer telles quelles » — deux critères pour une même chose.
+- **Distillation de noms (`cfg.naming`)** : l'extraction produit sur place un `title` **défini séparément du** `content` (le title est le syntagme nominal qui répond « de quoi traite cette entrée », le content est la narration complète) ; le merge de déduplication produit en plus `merged_title`. À la persistance, le `title` n'est qu'un **candidat de nom** : il doit franchir la porte de forme `validateTitle` ; sinon il est quand même remis au générateur de noms — la source de vérité de l'unicité du nom ne dédouble pas ses critères parce qu'on accueille une source de plus.
+- **Jeu d'exemples few-shot au format standard (`src/prompts/examples.ts`)** : positifs typés + contre-exemples, avec budget maximum de longueur totale (les exemples sont un coût fixe payé à chaque ronde de distillation) ; les positifs eux-mêmes doivent franchir la porte et avoir le squelette complet, et les cas de test se nourrissent directement de `auditFewShot()` au lieu de recopier les critères à la main.
+- **Critère de squelette exécutable (`SKELETON_ELEMENTS` + `scoreSkeleton`)** : transforme le vœu écrit dans le prompt — « sans antécédents ni conséquences, incomplet ne compte pas comme utilisable » — en critère mesurable et utilisable pour fixer les valeurs par défaut. Limite déclarée : heuristique de mots-clés, valable uniquement pour une comparaison relative entre deux bras sur la même entrée ; ce n'est pas un score absolu de qualité.
+- **Squelette de répertoires + `_index.md` par type (`memory-md-skeleton.ts`)** : chaque répertoire de type porte un fichier index (nom de la classe + nombre d'entrées dans la base). Les répertoires vides sont recrachés par git et par l'archive comprimée, et aux yeux humains « ce répertoire n'existe pas » et « cette classe a 0 entrée » se ressemblent. Idempotent : contenu inchangé, zéro écriture et zéro rafraîchissement de mtime ; surface de projection fermée, zéro action.
+
+### Modifié
+
+- **Trois valeurs par défaut retournées selon la mesure A/B** (`narrativeTemplates.enabled` / `naming.enabled` / `naming.fewShot`). Le fondement vient de deux mesures **de sens opposé** : dans le chemin réel de distillation de conversations, sans exemples le squelette complet tombe à **0.000**（0/23）, avec exemples il monte à **0.703**（26/37） ; en revanche, ajouter des exemples aux tâches de renommage des entrées existantes leur retire **−0.113** (18/160 réponses manquantes). Conclusion : **les exemples ne traversent pas les tâches**, ils n'entrent que dans le prompt d'extraction, pas dans le script de renommage.
+- **Projection md activée par défaut** (`memExport.enabled`) : la prémisse entière du plan est « le fichier fait autorité de contenu + la base est index », la laisser éteinte par défaut revient à ne jamais l'utiliser. `mdSync.enabled` **reste éteint par défaut** — il écrit dans la base, le risque est asymétrique.
+- **Clé du rattachement workspace renommée `workspaceHints` → `workspaceSource`** : renommage sec, sans alias de compatibilité (cette clé n'est jamais sortie dans une version publiée, ajouter un alias revient à élever une seconde source de vérité). Activée par défaut ; le `path` routé stocke désormais **la racine du workspace** (l'ancienne valeur s'écrivait `E:\test\rewrite-agently\.agents`, et `targetFor` re-concaténait `.agents/memory` → produisait un arbre orphelin `.agents\.agents\memory\` ; la barrière « ne retomber sur une racine unique que si la racine n'existe pas » n'intercepte pas cette forme). Remplissage des entrées existantes sur machine réelle : **724/1166** ont obtenu leur rattachement, `hashRecords` littéralement inchangé.
+
+### Corrigé
+
+- **Le chargeur du registre écrasait la clé absolue dans `relPath`** : après N10 les clés du registre sont des chemins absolus, et cette ligne « réécrire selon la clé si incohérents » se déclenchait à chaque chargement ; en mesure réelle elle a contaminé **1167/1241** entrées. Symptômes en aval : l'archivage des orphelins construisait un répertoire illégal avec deux-points et les 75 déménagements tombaient tous en ENOENT. On dérive désormais depuis `root` + clé (nouvelle fonction `deriveRelPath`) ; le côté archivage ne fait plus confiance au `relPath` stocké.
+- **`--revert` ne couvrait pas les hooks** : `findArchivedOld` touchait directement `deps.hooks.exists`, mais `runCli`, en appelant revert, ne passait pas hooks (côté apply il y avait bien `deps.hooks ?? defaultHooks`, côté revert manquait). La première fois que le sandbox lançait un rollback, les 74 entrées échouaient en erreur. L'essentiel est l'asymétrie du dommage : si apply casse, `--revert` vous remet ; **si le rollback lui-même est cassé, la sauvegarde devient la seule sortie**.
+- **Les doublons entre racines court-circuitaient « si les deux côtés changent, ne rien toucher »** : `roots = racine de chute de l'enregistrement ∪ racines déjà enregistrées dans le registre` ; une même entrée peut avoir un fichier sous chacune des deux racines. La décision lisait la copie de l'ancienne racine, l'écriture passait par la copie de la nouvelle racine calculée par `targetFor` — ainsi les éditions humaines dans l'ancienne racine écrasaient la copie autoritaire, et le rapport avait l'air parfaitement conforme. Dorénavant on ne reconnaît que la racine de chute actuelle ; le reste est comptabilisé dans le nouveau champ `staleRootFiles` et affiché dans le panneau.
+- **Une collision de nom éjectait la mémoire entière de la base récupérable** : la forme `{ ...ancienEnregistrement, id: nouvelId }` portait « un nom déjà affecté à une autre ligne » à l'écriture → collision avec l'index partiel unique → le repli du lot en écritures individuelles continuait d'échouer → le fruit de merge de cette entrée **disparaissait en silence** (l'ancien enregistrement était déjà sorti, ce remplacement ne laissait rien). Le critère de renommage est passé de « name est vide » à **« ce nom ne lui appartient pas »**.
+- **Le compteur vectoriel « N entrées en attente d'embedding » ne retombait jamais à zéro alors que « reconstruire l'index : rien à faire »** : dans la vue `missing = total − embedded`, le dénominateur inclut les lignes retirées, et celles-ci légitimement n'ont pas de vecteur par construction ; les deux requêtes SQL qui pilotent le rattrapage excluent les lignes retirées, d'où sur le même écran « 114 en attente » et « rien à faire » côte à côte. Le dénominateur est unifié sur les lignes actives.
+- **La barrière de projection comptait le « parcouru » et non l'« agi »** : `maxRecords` faisait entrer dans le quota aussi les entrées jugées « inchangées », et un second clic rescannait les mêmes N premiers — le texte du panneau « recliquez pour continuer » était un mensonge (symptôme machine réelle : `已写 9 · 未变 291 · 剩余 866` constant). On ne compte plus que ce qui a touché le disque ; le total scanné est borné par `timeBudgetMs`.
+- **Persistance du registre en O(n²)** : chaque `set()` triait tout le registre et réécrivait atomiquement le JSON complet. Sur 1200 entrées sur le même disque, mesure **9442ms → 1954ms** (marqueur de sale + fenêtre d'agrégation + `flush()` forcé).
+- **`NAME_MAX`(40) et `NAME_CLIP_MAX`(28) séparés en deux nombres** : le compteur de caractères traitait ASCII et hanzi à égalité, `dsh-agent-teams` / `Python-3.13` mangeaient 15 unités avec un seul mot, des noms légitimes d'un ou deux mots étaient jugés `too-long` ; mais tout remonter à 40 faisait que `deriveName` recopiait la phrase narrative jusqu'au bout de l'énoncé (mesuré). Au passage, on a corrigé le 28 écrit en dur dans `validateTitle` (deux sources de vérité pour le même seuil).
+- **Trois faux positifs à la porte des noms** : la table des préfixes dépouillés est **dissociée** de la table des noms rejetés (les sujets nus « utilisateur/équipe » cessent d'abattre des syntagmes comme « le nom d'utilisateur du compte npm de l'utilisateur », 10 cas sur machine) ; `has-id-fragment` est resserré à « 4+ chiffres après un caractère non ASCII » (`ADR-0006`, `Han-1413141` passent, 4 cas sur machine).
+
+### Limites connues
+
+- Le renfort incrémental à la fin de la rumination s'appuie sur le diff de la base `id→updatedAt`, alors que relabel / retrait utilisent `patchMetadata` sans toucher `updated_time` ⇒ **une réécriture solo-metadata n'est pas reprojetée dans ce tour**.
+- La synchro inverse P2 doit encore deux pièces : le hook automatique au démarrage (changé en exposition endpoint + bouton seulement) et le lot `pending` qui n'entre pas dans la vue `conflicts` d'arbitrage.
+- **Les traductions en 8 langues ne sont pas à jour depuis 0.20.0** (cette passe n'ajoute que les entrées à partir de 0.22.0 ; le trou 0.20/0.21 reste ouvert, noté ailleurs).
+
+## [0.23.0] — Non publié (ligne locale `0.23.0-local.1…8`, 2026-10-12…13)
+
+### Ajouté
+
+- **Surface de projection md autoritaire (P0/P1/U/N10/N11)** : colonne `l1_records.name` (clé d'identité du fichier + index partiel unique) ; `renderRecord` + registre à double empreinte (`dbDigest`/`fileDigest`) + endpoints `mem-export` / `mem-reconcile` ; section « archives externes » du panneau ; racine de projection passée en **workspace d'abord** (`<ws>/.agents/memory/<type>/<nom>.memory.md`) ; la détection de péremption s'articule avec `.memory.md.disable`.
+- **P2 synchro inverse (fichier → index)** : **quadrant à trois voies** sur les deux digests du registre — si seul le fichier change, on le réintroduit dans la base et on le réécrit au rendu canonique (coupe la boucle d'écriture) ; si seule la base change, on réutilise `exportRecords` pour réécrire le fichier ; **si les deux changent, on ne touche ni l'un ni l'autre** et on accroche seulement `pending` ; `.disable` déclenche le retrait sans supprimer le fichier ; les fichiers nouveaux à provenance inconnue sont seulement comptés, pas importés (l'import doit passer par le noyau d'écriture). Endpoint `dsh-memory/mem-sync`.
+- **P3 archivage + suppression physique** : la porte de `exportThenPurge` passe du hash de la base entière à une **projection par lot** (en distillation concurrente, si le lot touchait n'importe quel enregistrement étranger, l'ancienne implémentation empêchait éternellement le nettoyage de supprimer) ; après suppression, on écrit un `retired.md` lisible par l'humain et on déplace les fichiers projetés du lot (`.disable` inclus) dans le dossier du snapshot ; `cleanup-retired` en dry-run rend **un aperçu de la liste à supprimer** ; la table d'index de la projection de graphe ajoute `forgetRecords` (jusqu'ici dans tout le dépôt on n'ajoutait sans jamais retirer — un enregistrement restauré depuis un snapshot restait marqué « déjà projeté » et **n'était jamais reprojeté**, le graphe de récupération perdait silencieusement cette entrée).
+- **P4.1 classe par défaut `unclassified` + P4.2 normalisation de la mise en forme du corps (`normalizeContentMd`)**. L'idempotence est une exigence dure : sans elle, la `fileDigest` du registre change à chaque ronde et la boucle d'écriture est introduite par le rendu lui-même. On ne touche que la mise en forme, pas la sémantique (pas de puces sur la prose, pas d'H1 inséré, pas de métadonnées dans le corps).
+- **Archivage des fichiers projetés orphelins `dsh-memory/mem-orphans`** : ne déplace que les fichiers que le registre a enregistrés comme « écrits par nous » et qu'aucun enregistrement ne réclame ; les nouveaux fichiers absents du registre **ne sont pas touchés** (ce sont peut-être des entrées humaines posées dans le répertoire de projection en attendant d'être resynchronisées). On ne supprime pas, on déplace, en préservant la forme relative et le texte d'origine.
+
+### Corrections de comportement (surface d'affichage des rappels)
+
+- Les entrées rappelées cessent de disparaître instantanément : la vue porte `body` / `retired`, on cesse d'arracher les lignes `session_recalled`, la pastille affiche l'annotation marginale barrée « déclarée obsolète ».
+- Au démarrage, on nettoie les résidus retirés déjà présents (sur machine, 725 lignes restaient sales dans `l1_fts`) ; l'invariant de retrait se complète de deux chemins d'écriture latéraux (corrige « après marquage obsolète, la surface de recherche ressuscite »).
+- Scoring des rappels de bout en bout : `-1..5` (0..5 pertinence ; `-1` déclare obsolète et retire) ; le score entre dans les indicateurs de maturité (`-1/1/2` plombent et font couler, `4/5` rehaussent et font remonter).
+- Première implémentation du routage de contenu par workspace (écosystème dsh → `rewrite-agently`, non-dsh → `agent-no-dsh` ; **écrit seulement `workspace_id`, ne touche ni `scope` ni `updated_time`**, et synchronise les colonnes de rattachement portées par chaque ligne `l1_fts`).
+
+### Discipline
+
+- Deux méga-fonctions memport scindées en deux rondes (Extract Function, comportement préservé, régression octet-à-octet sur l'étalon du CLI).
+- La discipline du contrat d'endpoint à **cinq modifications synchronisées** reste en vigueur (`MEMORY_ENDPOINTS ≡ switch ≡ double map de contract ≡ décompte de contract-keys ≡ config`) ; chaîne de comptage 55→56→57→58→59.
+
+## [0.22.2] — 2026-10-12
+
+### Ajouté
+
+- Thème tri-état (auto/clair/sombre) + bloc de redéfinition de tokens ; panneau à 11 onglets resserré sur une seule ligne.
+- Idempotence de `ext_key` pour `memory_import` (`l1_records.ext_key` + index partiel unique + récépissé `deduped`).
+- **Memport Connect** : analyse / pré-filtre / scan de `.mem` + registre de provenances + onglet Connect (alignement sur l'étalon sha256 entre implémentations).
+- **Cristallisation de compétences** : skill-store (sidecar JSON) + détection de candidats + injection du rappel de compétences + interrupteur du tableau `skillsEnabled`.
+- G4 arêtes causales du graphe (provoque / parce que / a corrigé / remplace, sans pousser `projectorVersion`).
+- G3 maturité dérivée à la lecture (badge sur la fiche d'enregistrement + annotation marginale dans la vue d'arbitrage de contradictions, n'intervient pas dans l'arbitrage automatique).
+- G1 de bout en bout sous porte pour `usageScenario` (extraction → dépôt dans `metadata.dsh_usage_scenario` → réordonnancement fin dans le rappel ; off laisse tout littéralement inchangé).
+- G2 gabarits narratifs par type (variantes de prompt sous porte ; off est préfixe de on).
+- Les deux axes wing / couloir cognitif ne se croisent pas (accesseurs orthogonaux + garde de régression avec domaines disjoints).
+- **G-live ensemble vivant de rappels de cette conversation** : sidecar persistant + endpoint en lecture seule `session-recalled` + liste en lecture seule dans la pastille.
+- Projection consciente de la session dans `memoryRecall` (source de données de la section « rappels de cette session » de la barre latérale du brief, `init(header).id`).
+- `cfg.slots.migrateLegacy` (éteint par défaut) : retire en douceur les slots rule « cloués en résidents alors que le contenu est déjà porté par un L1 actif ».
+
+### Corrigé
+
+- La réinjection de rumination faisait remonter ou grossir le compteur de pendantes (ruminate passe des messages vides, même sémantique que `enqueueSessionSlices`).
+- Dans le finalize de rumination et dans `doLightRefresh` : L3 forcé à courir vraiment + compteur remis à zéro + persistance par `state.save()` (corrige « les L2/L3 après rumination ne se vident pas et reviennent au redémarrage »).
+
+### Discipline
+
+- Toutes les capacités nouvelles sont éteintes par défaut ; en état off, produits et injections restent littéralement identiques ; le contrat d'affichage inter-plugins (projection `memorySlots`) reste câblé.
+
+## [0.22.1] — 2026-10-09
+
+### Corrigé
+
+- **Fond du calque passé en opaque** : le popover mémoire de la barre de saisie (`.dsh-mem-popover`) et les panneaux déroulant / filtre (`.dsh-mem-pop`) suivaient auparavant le `--dsw-specific-menu` de l'hôte, que l'hôte résout en une valeur de verre semi-transparent ⇒ le panneau laissait passer l'arrière-plan. Désormais la couche d'alias est superposée **sur un fond opaque `bg-primary`** (technique underlay), le panneau paraît solide quel que soit l'alpha de l'hôte.
+
+## [0.22.0] — 2026-10-09
+
+### Modifié
+
+- **Surface déclarative adaptée à 15rc** : 9 pairs dsh couvrent tous les rc publiés de l'hôte (`0.1.0-rc.2..0.2.0-rc.2`, vérifiés un à un par `npm view` et cohérents entre lignes), tous optionnels ; `engines >= 0.1.0-rc.2` sert de barrière grossière (la porte fine, ce sont les pairs), `package.json` et `dsh.plugin.json` synchronisés.
+- **Versions recollées entre les deux manifestes** : `dsh.plugin.json` avait dérivé sur `0.20.0-beta.6-dsh0.2.0.1`, ce lot l'aligne littéralement sur `package.json` (porte V1).
+- **`dsh.client.inject` réduit à `ui-primitives` uniquement** : `dsh-client-connection` n'existe en tant que paquet qu'à partir de 0.1.2 ; le déclarer faisait pendre toute l'entrée client sur 0.1.0/0.1.1 (`rpc.ts` résolvait déjà la connexion en paresse via `ctx.get`).
+
+### Discipline
+
+- Tout dépôt de type build reçoit l'injection `prepack: npm run build` — `npm pack` ne déclenche que prepack, pas `prepublishOnly` ; c'est l'une des trois couches de défense contre la fausse affaire stale-build.
+
 ## [0.19.0] — 2026-09-29
 
 ### Changements

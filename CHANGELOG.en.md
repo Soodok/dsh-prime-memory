@@ -7,6 +7,108 @@
 
 This file covers the **0.12.0** release notes and the current **unreleased** changes in English. For the full history, see [CHANGELOG.md](./CHANGELOG.md) (Chinese).
 
+<!-- Gap: entries for 0.21.0 and 0.20.x are not yet translated. -->
+
+## [0.24.0] — Unreleased (local line `0.24.0-local.0…3`, 2026-10-13)
+
+### Added
+
+- **Single source of truth for the type vocabulary (`src/memory-types.ts`)**: the 29 original names of the host memory taxonomy + the plugin's legacy 7 types + the `unclassified` fallback, 37 types in total. The projection-directory whitelist, the `memory_add` write whitelist, the panel labels, the enum strings in the extraction and dedup prompts, and the type codes in memport's TS/Python dual implementations are **all derived from it**. Previously the "full set of types" was hand-copied in four places that each evolved on its own: `memory_add` **silently rewrote** external classifications into `episodic`, while the memport copy promised "passed through as-is" — two contradictory accounts of the same thing.
+- **Name distillation (`cfg.naming`)**: extraction produces a `title` on the spot, **defined separately from** `content` (the title is the noun phrase answering "what is this entry about", the content is the full narrative body); the dedup merge also produces a `merged_title`. On write, `title` is only a **name candidate** and must pass the `validateTitle` shape gate — if it fails, the naming engine still handles it; the source of truth for name uniqueness does not split into two sets of criteria just because one more source appears.
+- **few-shot standard-format example set (`src/prompts/examples.ts`)**: per-type positive and negative examples, with a cap on the total length budget (examples are a fixed cost paid on every distillation round); the positive examples themselves must pass the gate and carry a complete skeleton, and the test cases consume `auditFewShot()` directly instead of hand-copying the criteria.
+- **Executable skeleton criteria (`SKELETON_ELEMENTS` + `scoreSkeleton`)**: turning "no cause-and-effect chain, an incomplete write does not count as usable" from a wish inside the prompt into a criterion that can be measured and used to set defaults. Declared limitation: a keyword heuristic, usable only for relative comparison between two arms on the same input — not an absolute quality score.
+- **Directory skeleton + a per-type `_index.md` (`memory-md-skeleton.ts`)**: each type directory holds one index file (type name + entry count in the library). Empty directories get dropped by git and by archives, while "there is no such directory" and "this type has 0 entries" look identical to a human. Idempotent: unchanged content means zero writes and no mtime bump; zero action while the projection surface is off.
+
+### Changed
+
+- **Three defaults flipped per A/B measurement** (`narrativeTemplates.enabled` / `naming.enabled` / `naming.fewShot`). The basis is two measurements in **opposite directions**: on the real-session distillation path, skeleton completeness is **0.000** (0/23) without examples and **0.703** (26/37) with them; while for the naming task of renaming existing entries, adding examples actually **−0.113** (18/160 missed answers). Conclusion: **examples must not cross tasks** — they only enter the extraction prompt, never the naming script.
+- **md projection on by default** (`memExport.enabled`): the whole plan rests on "files are the authority on content + the database is the index"; defaulting it off means defaulting it unused. `mdSync.enabled` **still defaults off** — it writes to the database, and the risk is asymmetric.
+- **The workspace-attribution config key renamed `workspaceHints` → `workspaceSource`**: a hard rename with no compatibility alias (the key has never shipped externally with any release; adding an alias means nurturing a second source of truth). On by default; the routing `path` now stores the **workspace root** (old values were written as `E:\test\rewrite-agently\.agents`, and `targetFor` appends `.agents/memory` again → producing a `.agents\.agents\memory\` orphan tree; the guardrail "fall back to a single root only when the root does not exist" cannot catch this shape). Backfill on a real machine gave **724/1166** existing records their attribution, with `hashRecords` byte-for-byte unchanged.
+
+### Fixed
+
+- **The ledger loader overwrote absolute keys into `relPath`**: since N10 the ledger keys are absolute paths, and the "on mismatch, rewrite from the key" line fired on every single load, measurably contaminating **1167/1241** entries; downstream symptoms were orphan archiving assembling an illegal directory containing a colon, and 75 moves all failing with ENOENT. Now derived from `root` + key (new `deriveRelPath`); the archiving side no longer trusts the stored `relPath`.
+- **`--revert` did not fall back to hooks**: `findArchivedOld` touched `deps.hooks.exists` directly, while `runCli` does not pass hooks when calling revert (the apply side has `deps.hooks ?? defaultHooks`, the revert side omitted it). The first rollback run in the sandbox errored out on all 74 entries. The point is the asymmetric harm: an apply failure is escaped via `--revert`, so **a broken rollback means the backup is the only way out**.
+- **Cross-root duplicate files bypassed "if both sides changed, touch neither"**: `roots = the record's landing root ∪ the roots the ledger has recorded`, so one record can have one file under each of two roots; the decision used the old root's copy while the write went to the new root's copy computed by `targetFor` — a human edit in the old root overwrote the authoritative copy, and the report looked entirely compliant. Now only the current landing root is acknowledged; the rest are counted in the new field `staleRootFiles` and displayed on the panel.
+- **A name collision pushed the whole memory out of the retrieval library**: the `{ ...old record, id: new id }` idiom wrote to the database carrying "a name already belonging to another row" → hit the partial unique index → the batch write fell back to per-row and still failed → that entry's merged product **silently vanished** (the old record had already retired, so this supersede left nothing behind). The naming criterion changed from "name is empty" to "**this name does not belong to it**".
+- **The vector "N pending" counter never reached zero while "rebuild index" said there was nothing to do**: the display-side `missing = total − embedded` denominator included retired rows, while retired rows legitimately have no vectors by design; the two SQL statements driving the backfill both exclude retired rows, so "pending 114" and "nothing to do" appeared on the same screen. The denominator is now unified on active rows.
+- **The projection guardrail was counting "traversal" instead of "action"**: `maxRecords` also charged entries judged "unchanged" against the quota, so the second click scanned the same first N — the panel's "click again to continue" was a lie (real-machine symptom: `已写 9 · 未变 291 · 剩余 866` stayed constant). Now only entries that touched disk are counted; total scan volume is bounded by `timeBudgetMs`.
+- **O(n²) ledger flush**: `set()` serialized the whole ledger to JSON and atomically rewrote it once per entry. On 1200 entries on the same disk, measured **9442ms → 1954ms** (dirty flag + batch window + forced `flush()`).
+- **`NAME_MAX`(40) and `NAME_CLIP_MAX`(28) split into two numbers**: the character counter priced ASCII and Han characters the same, so `dsh-agent-teams` / `Python-3.13` ate 15 units in a single word, and legitimate names of just one or two words were judged `too-long`; while setting both to 40 lets `deriveName` copy a narrative sentence into a sentence tail (observed in practice). Also removed the hard-coded 28 inside `validateTitle` (one threshold, two sources of truth).
+- **Three false kills by the name gate**: the preamble-strip table and the name-reject table were **separated** (the bare subjects 「用户/团队」 no longer mistakenly kill noun phrases like 「用户npm账号用户名」, 10 real-machine entries); `has-id-fragment` narrowed to "4+ digits following a non-ASCII character" (`ADR-0006`, `Han-1413141` now pass, 4 real-machine entries).
+
+### Known boundaries
+
+- Incremental projection at the end of rumination relies on an `id→updatedAt` baseline diff, while relabel / retirement go through `patchMetadata` and do not touch `updated_time` ⇒ **a metadata-only rewrite is not re-projected in that round**.
+- P2 reverse sync still owes two items: the startup automatic hook (changed to endpoint + button only) and the batch of `pending` entries not yet on the `conflicts` adjudication surface.
+- **The 8-language translations have not been kept up since 0.20.0** (this pass only backfilled the entries from 0.22.0 onward; the 0.20/0.21 gap remains, noted separately).
+
+## [0.23.0] — Unreleased (local line `0.23.0-local.1…8`, 2026-10-12…13)
+
+### Added
+
+- **md authoritative projection surface (P0/P1/U/N10/N11)**: the `l1_records.name` column (file identity key + partial unique index); `renderRecord` + the dual-fingerprint ledger (`dbDigest`/`fileDigest`) + the `mem-export` / `mem-reconcile` endpoints; the panel's "external archive" section; the projection root switched to **workspace-first** (`<ws>/.agents/memory/<类型>/<名>.memory.md`); staleness judgment now also couples with `.memory.md.disable`.
+- **P2 reverse sync (file → index)**: a **three-way quadrant** computed from the ledger's dual digest — only the file changed → backfill into the database and rewrite with the canonical render (breaking the write-back loop); only the database changed → reuse `exportRecords` to rewrite the file; **both changed → neither side is touched**, only `pending` is raised; `.disable` goes through retirement without deleting the file; unrecognized new files are only counted, never imported (import must pass through the write kernel). Endpoint `dsh-memory/mem-sync`.
+- **P3 archive + physical delete**: the `exportThenPurge` gate moved from a whole-database hash to a **batch-level projection** (with concurrent distillation, as soon as any record unrelated to the batch is changed, the old implementation made cleanup never able to delete anything); after deletion a human-readable `retired.md` is written + the batch's projected files (including `.disable`) moved into a snapshot directory; `cleanup-retired` dry run returns a **preview of the to-delete list**; the graph projection index table gained `forgetRecords` (previously the whole repo only ever added and never removed — records restored from a snapshot were treated as "already projected" because the projection row was still there, so **they were never re-projected**, and the retrieval graph silently lacked one entry without raising an error).
+- **P4.1 default class `unclassified` + P4.2 body layout standardization** (`normalizeContentMd`). Idempotence is a hard requirement: without it the ledger's `fileDigest` changes every round, and the write-back loop is introduced by the renderer itself. Layout only, no semantics (no bulletizing prose, no inserting an H1, no stuffing metadata into the body).
+- **Orphan projection file archive `dsh-memory/mem-orphans`**: only moves files "the ledger records us as having written, and that no record currently claims this path for"; unrecognized files absent from the ledger are **left alone** (they may be input a human placed in the projection directory waiting to be synced back). Never deleted, only moved, preserving the relative shape and the original text.
+
+### Behavior fixes (recall display surface)
+
+- Recall entries no longer vanish instantly: the view carries `body` / `retired`, the removal of `session_recalled` rows stopped, and the pill shows a "judged stale" strikethrough annotation.
+- Startup cleans up existing retirement residue (725 rows still dirty in `l1_fts` on this machine); the retirement invariant gained two bypass write paths (fixing "after marking invalid, it revives on the retrieval surface").
+- Recall scoring end to end: `-1..5` (0..5 relevance; `-1` declares stale and retires), scores feed the maturity metric (`-1/1/2` pull down and sink, `4/5` push up and float).
+- Workspace content routing landed for the first time (dsh ecosystem → `rewrite-agently`, non-dsh → `agent-no-dsh`; **only writes `workspace_id`, does not touch `scope`, does not touch `updated_time`**, and syncs the attribution columns carried by the `l1_fts` rows).
+
+### Discipline
+
+- Two giant memport functions split over two rounds (Extract Function, behavior preserved, CLI gold standard byte-for-byte regression).
+- The endpoint-contract **five-places-changed-together** discipline stayed in force (`MEMORY_ENDPOINTS ≡ switch ≡ contract dual map ≡ contract-keys count ≡ config`), count chain 55→56→57→58→59.
+
+## [0.22.2] — 2026-10-12
+
+### Added
+
+- Skin tri-state (auto/light/dark) + token override block; the panel's 11 Tabs tightened onto a single row.
+- `ext_key` idempotence for `memory_import` (`l1_records.ext_key` + partial unique index + `deduped` receipt).
+- **Memport Connect**: `.mem` parsing / pre-filtering / scanning + source registry + Connect Tab (cross-implementation sha256 gold-standard alignment).
+- **Skill crystallization**: skill-store (JSON sidecar) + candidate detection + skill recall injection + the board switch `skillsEnabled`.
+- G4 graph causal edges (导致 / 因为 / 修复了 / 取代, without bumping `projectorVersion`).
+- G3 maturity derived at read time (record-card badge + contradiction-adjudication view annotation, not part of automatic adjudication).
+- G1 `usageScenario` gating end to end (extraction → landing in `metadata.dsh_usage_scenario` → recall fine ranking; off stays byte-for-byte unchanged).
+- G2 per-type narrative templates (gated prompt variant; off is a prefix of on).
+- wing / cognition hall two axes do not cross (orthogonal accessors + disjoint value-domain regression lock).
+- **G-live live recall set of this session**: persistent sidecar + the `session-recalled` read-only endpoint + the pill read-only list.
+- `memoryRecall` session-aware projection (the data source of the brief sidebar's "recalled this session" section, `init(header).id`).
+- `cfg.slots.migrateLegacy` (off by default): softly retires rule slots that are "pinned as resident while their content is already carried by live L1".
+
+### Fixed
+
+- Rumination re-feed resetting or inflating the pending count (ruminate now passes empty messages, same semantics as `enqueueSessionSlices`).
+- The rumination finalize and `doLightRefresh`'s L3 forced real run + count zeroing + `state.save()` flush (fixing "pending L2/L3 not cleared after rumination, bouncing back on restart").
+
+### Discipline
+
+- All new capabilities off by default; in the off state the artifacts and injections are byte-for-byte unchanged; the cross-plugin display contract (the `memorySlots` projection) stays wired.
+
+## [0.22.1] — 2026-10-09
+
+### Fixed
+
+- **Popover underlay made opaque**: the memory popover in the input bar (`.dsh-mem-popover`) and the dropdown / filter panels (`.dsh-mem-pop`) previously followed the host's `--dsw-specific-menu`, which the host resolves to a translucent glass value ⇒ the panel let the background show through. Now an alias layer is stacked on an **opaque `bg-primary` underlay** (the underlay technique), so the panel is solid regardless of the host's alpha.
+
+## [0.22.0] — 2026-10-09
+
+### Changed
+
+- **Declaration surface adapted to 15rc**: 9 dsh peers covering all published host rcs (`0.1.0-rc.2..0.2.0-rc.2`, evidenced entry by entry via `npm view` and consistent across the line sets), all optional; `engines >= 0.1.0-rc.2` as a coarse fence (the precise gate is peers), `package.json` and `dsh.plugin.json` in sync.
+- **Dual-manifest version restored**: `dsh.plugin.json` had drifted at `0.20.0-beta.6-dsh0.2.0.1`, this batch aligned it byte-for-byte with `package.json` (the V1 gate).
+- **`dsh.client.inject` shrunk to `ui-primitives` only**: `dsh-client-connection` only exists as a package from 0.1.2 on, and declaring it would hang the entire client entry on 0.1.0/0.1.1 (`rpc.ts` has long lazily `ctx.get`s that connection).
+
+### Discipline
+
+- All build-type repos inject `prepack: npm run build` — `npm pack` only triggers prepack, not `prepublishOnly`; this is one of the three defense layers against the stale-build miscarriage.
+
 ## [0.19.0] — 2026-09-29
 
 ### Changed

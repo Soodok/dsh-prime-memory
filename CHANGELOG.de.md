@@ -16,6 +16,108 @@ die Versionsnummern folgen der [semantischen Versionierung](https://semver.org/)
 > **Konvention für UI-Screenshots**: Einträge mit Oberflächenänderungen archivieren echte Screenshots unter
 > `assets/changelog/<Versionsnummer>/<zweistellige Nummer>-<Kurzbeschreibung>.png` und verweisen im Eintrag per relativer Pfadangabe darauf — im Changelog sieht man direkt, wie die neue Version aussieht.
 
+<!-- Lücke: Die Einträge für 0.21.0 und 0.20.x sind noch nicht übersetzt. -->
+
+## [0.24.0] — Unveröffentlicht (lokale Linie `0.24.0-local.0…3`, 2026-10-13)
+
+### Hinzugefügt
+
+- **Einzelne wahre Quelle des Typwortschatzes (`src/memory-types.ts`)**: die Originalnamen der 29 Wirtsgedächtnisklassen + die alten 7 Plugin-Klassen + `unclassified` als Auffangklasse, zusammen 37 Klassen. Die Whitelist des Projektionsverzeichnisses, die Schreib-Whitelist von `memory_add`, die Panel-Beschriftungen, die Enumerationsstrings der Extraktions- und Deduplizierungs-Prompts sowie die Typcodes der TS/Python-Zwillingsimplementierung von memport **leiten sich sämtlich daraus ab**. Zuvor war das „vollständige Typverzeichnis" an vier Stellen abgeschrieben und jeweils für sich weitergewachsen: `memory_add` schrieb fremde Klassifikationen **still in `episodic` um**, während der memport-Text „unverändert durchreichen" versprach — zwei Kaliber für dieselbe Sache.
+- **Namensverdichtung (`cfg.naming`)**: die Extraktion erzeugt den `title` unmittelbar vor Ort, **getrennt definiert** von `content` (title ist die Nominalphrase, die beantwortet „worüber handelt dieser Eintrag", content ist der vollständige Erzähltext). Der Deduplizierungs-Merge erzeugt zusätzlich `merged_title`. Beim Speichern ist `title` bloß ein **Namens-Kandidat** und muss das Formtor `validateTitle` passieren; bei Ablehnung geht er weiterhin an den Namensgeber — die wahre Quelle der Namens-Eindeutigkeit bekommt nicht, weil eine weitere Herkunft dazukam, zwei Bewertungsskalen.
+- **Beispielset im Few-shot-Standardformat (`src/prompts/examples.ts`)**: Musterbeispiele nach Typ + Gegenbeispiele, Gesamtlänge mit Budgetobergrenze (Beispiele sind eine fixe Kosten, die jede Verdichtungsrunde zahlt). Die Musterbeispiele müssen selbst das Tor passieren und das Skelett vollständig haben; die Testfälle ziehen direkt `auditFewShot()` heran, statt die Kriterien abzuschreiben.
+- **Ausführbare Skelett-Kriterien (`SKELETON_ELEMENTS` + `scoreSkeleton`)**: macht aus dem Wunsch im Prompt „ohne Ursache und Folge, unvollständig geschrieben, unbrauchbar" ein messbares Kriterium, das sich zur Festlegung der Defaults verwenden lässt. Deklarierte Grenze: Keyword-Heuristik, nur für den relativen Vergleich zweier Arme bei derselben Eingabe brauchbar, kein absoluter Qualitätswert.
+- **Verzeichnisgerüst + `_index.md` je Klasse (`memory-md-skeleton.ts`)**: in jedes Typverzeichnis eine Indexdatei (Klassenname + Anzahl der Einträge im Bestand). Leere Verzeichnisse werden von git und von Archivpaketen ausgespuckt, und „es gibt dieses Verzeichnis nicht" sieht für Menschen genauso aus wie „diese Klasse hat 0 Einträge". Idempotent: ohne Inhaltsänderung kein Schreibvorgang und kein mtime-Update; wenn die Projektionsseite abgeschaltet ist, gar keine Aktion.
+
+### Geändert
+
+- **Drei Defaults nach A/B-Messung umgelegt** (`narrativeTemplates.enabled` / `naming.enabled` / `naming.fewShot`). Grundlage sind zwei Messungen mit **entgegengesetzter Richtung**: im echten Sitzungsverdichtungspfad ohne Beispiele Skelett-Vollständigkeit **0.000** (0/23), mit Beispiele **0.703** (26/37); beim Umbenennen bestehender Einträge, also der Namensaufgabe, senkten Beispiele den Wert dagegen um **−0.113** (18/160 unbeantwortet). Fazit: **Beispiele dürfen nicht über Aufgaben hinweg verwendet werden** — sie gehören nur in den Extraktions-Prompt, nicht in das Namensskript.
+- **md-Projektion standardmäßig an** (`memExport.enabled`): die ganze Planung steht auf der Prämisse „Datei ist die Autorität für den Inhalt + Datenbank ist der Index"; default aus hieße default unbenutzt. `mdSync.enabled` bleibt **weiter standardmäßig aus** — es schreibt in die Datenbank, das Risiko ist asymmetrisch.
+- **Umbenennung der workspace-Zugehörigkeits-Konfigurationsseite `workspaceHints` → `workspaceSource`**: harter Umbau ohne Kompatibilitäts-Alias (der Key war nie mit einer Veröffentlichung nach außen gegangen; ein Alias hieße eine zweite Tatsachenquelle heranziehen). Standardmäßig an; der routing-`path` speichert nun die **workspace-Wurzel** (der alte Wert lautete `E:\test\rewrite-agently\.agents`, und `targetFor` hängt zusätzlich `.agents/memory` an → ergibt einen verwaisten Baum `.agents\.agents\memory\`; die Leitplanke „nur wenn die Wurzel fehlt, auf die Einzelwurzel zurückfallen" fängt diese Form nicht). Rückfüllung des Bestands auf der echten Maschine: **724/1166** Einträge bekamen ihre Zugehörigkeit, `hashRecords` Zeichen für Zeichen unverändert.
+
+### Behoben
+
+- **Der Ledger-Loader überschrieb absolute Keys in `relPath`**: seit N10 sind die Ledger-Keys absolute Pfade, und der Satz „bei Abweichung neu schreiben, mit dem Key als Maßstab" wurde bei jedem Laden zwingend ausgelöst — Verschmutzung gemessen an **1167/1241** Einträgen. Die nachgelagerten Symptome: die Archivierung verwaister Dateien baute einen illegalen Verzeichnisnamen mit Doppelpunkt zusammen, und 75 Umzüge schlugen sämtlich mit ENOENT fehl. Jetzt Ableitung aus `root` + Key (neu: `deriveRelPath`); die Archivseite vertraut dem gespeicherten `relPath` nicht mehr.
+- **`--revert` ohne hooks-Absicherung**: `findArchivedOld` greift direkt auf `deps.hooks.exists`, während `runCli` beim revert-Aufruf keine hooks mitgibt (auf der apply-Seite gibt es `deps.hooks ?? defaultHooks`, auf der revert-Seite fehlte es). Im Sandbox-Lauf warf der erste Rollversuch 74 Fehler. Der springende Punkt ist die asymmetrische Schadenslage: Wenn apply schiefgeht, zieht man sich mit `--revert` zurück — **ein defekter Rollback heißt, das Backup ist der einzige Ausweg**.
+- **Wurzelübergreifende Dubletten umgingen „bei Änderung auf beiden Seiten nichts tun"**: `roots = Zielwurzel des Eintrags ∪ die vom Ledger vermerkten Wurzeln`; derselbe Eintrag kann unter zwei Wurzeln je eine Datei haben. Die Bewertung nimmt die Datei der alten Wurzel, das Schreiben auf die Platte die von `targetFor` berechnete Fassung der neuen Wurzel — dadurch überschreiben die von einem Menschen in der alten Wurzel gemachten Editierungen die maßgebliche Fassung, und der Bericht sah völlig konform aus. Jetzt wird nur die aktuelle Zielwurzel anerkannt; der Rest zählt in das neue Feld `staleRootFiles` und erscheint im Panel.
+- **Namenskollision drängte den ganzen Gedächtniseintrag aus dem Suchbestand**: die Schreibweise `{ ...alter Eintrag, id: neue id }` schreibt mit einem „bereits zu einer anderen Zeile gehörenden Namen" in die DB → Kollision auf dem partiellen Unique-Index → nach gebündeltem Fehlschlag zeilenweise Wiederholung, immer noch Fehler → das Merge-Ergebnis dieses Eintrags **verschwindet stillschweigend** (der alte Eintrag ist bereits ausgeschieden, von dieser Ersetzung bleibt nichts). Das Namens-Kriterium wurde von „name ist leer" auf **„dieser Name gehört ihm nicht"** umgestellt.
+- **Vektor „nachzuziehen N" geht niemals auf null, während „Index-Rebuild nichts zu tun" meldet**: im Anzeigeteil enthält der Nenner von `missing = total − embedded` ausgeschiedene Zeilen, und ausgeschiedene Zeilen haben designgemäß berechtigt keinen Vektor; die beiden SQL, die das Nachziehen antreiben, schließen ausgeschiedene Zeilen aus. Auf demselben Bildschirm erschienen zugleich „nachzuziehen 114" und „nichts zu tun". Der Nenner wurde auf aktive Zeilen vereinheitlicht.
+- **Die Projektionsleitplanke zählte „Durchlauf" statt „Aktion"**: `maxRecords` rechnete auch die als „unverändert" bewerteten Einträge ins Kontingent — der zweite Klick scannte wieder dieselben ersten N Einträge. Der Panel-Satz „nochmal klicken zum Fortsetzen" war eine Lüge (Symptom auf echter Maschine: `已写 9 · 未变 291 · 剩余 866` blieb konstant). Jetzt zählen nur Einträge, die die Platte berührt haben; die Gesamtmenge des Scans deckt `timeBudgetMs` ab.
+- **Ledger-Fortschreibung O(n²)**: `set()` schrieb pro Eintrag einmal das gesamte JSON atomar neu. Bei 1200 Einträgen auf derselben Platte gemessen **9442ms → 1954ms** (Dirty-Flag + Batching-Fenster + erzwungenes `flush()`).
+- **`NAME_MAX`(40) und `NAME_CLIP_MAX`(28) in zwei Zahlen getrennt**: die Zeichenzählung behandelt ASCII und Chinesisch gleich teuer; `dsh-agent-teams` / `Python-3.13` verbrauchen als ein Wort 15 Punkte, und zulässige Namen von faktisch ein, zwei Wörtern fielen durch `too-long`. Einheitlich auf 40 zu setzen ließ dagegen `deriveName` Erzählsätze bis zum Satzende abschreiben (gemessen). Nebenbei das hart geschriebene 28 in `validateTitle` korrigiert (zwei Tatsachenquellen für denselben Schwellwert).
+- **Drei Fehltötungen am Namens-Tor**: Abschneide-Vorliste und Namens-Ablehnungsliste wurden **getrennt geführt** (ein nacktes Subjekt wie „Benutzer/Team" tötet jetzt Nominalphrasen wie „Benutzer npm-Konto Benutzername" nicht mehr mit, 10 Fälle auf echter Maschine); `has-id-fragment` wurde auf „4+ Ziffern nach einem Nicht-ASCII-Zeichen" verengt (`ADR-0006`, `Han-1413141` passieren jetzt, 4 Fälle auf echter Maschine).
+
+### Bekannte Grenzen
+
+- Die inkrementelle Projektion beim Ausklingen des Wiederkäuens hängt an der `id→updatedAt`-Baseline-Differenz, während Umbenennung und Ausscheiden über `patchMetadata` laufen und `updated_time` nicht anfassen ⇒ **metadata-only-Umschreibung wird in derselben Runde nicht neu projiziert**.
+- Die P2-Rückwärtssynchronisation schuldet noch zwei Punkte: der automatische Haken beim Start (inzwischen auf Endpunkt + Schaltfläche umgestellt) und der `pending`-Trupp, der die `conflicts`-Wartefläche für Schlichtungen nicht erreicht.
+- **Die Übersetzungen in 8 Sprachen sind seit 0.20.0 nicht nachgezogen** (diesmal wurden nur die Einträge ab 0.22.0 nachgetragen; die Lücke bei 0.20/0.21 besteht weiter, separat vermerkt).
+
+## [0.23.0] — Unveröffentlicht (lokale Linie `0.23.0-local.1…8`, 2026-10-12…13)
+
+### Hinzugefügt
+
+- **Maßgebliche md-Projektionsseite (P0/P1/U/N10/N11)**: Spalte `l1_records.name` (Datei-Identitätsschlüssel + partieller Unique-Index); `renderRecord` + Doppel-Fingerabdruck-Ledger (`dbDigest`/`fileDigest`) + die Endpunkte `mem-export` / `mem-reconcile`; der Panel-Abschnitt „Externes Archiv"; die Projektionswurzel auf **workspace zuerst** umgestellt (`<ws>/.agents/memory/<Typ>/<Name>.memory.md`); die Bewertung als veraltet ist mit `.memory.md.disable` gekoppelt.
+- **P2 Rückwärtssynchronisation (Datei → Index)**: anhand der beiden Ledger-Digests ein **Dreifelder-Schema** — nur die Datei geändert → Rückspeisung in die Datenbank und Umschreiben in der Normdarstellung (glättet die Schreib-Rückschleife); nur die Datenbank geändert → wiederverwendet `exportRecords` und schreibt die Datei neu; **beide geändert → beide Seiten bleiben unberührt**, nur `pending` wird gesetzt. `.disable` geht den Ausscheidungsweg, ohne die Datei zu löschen; neue Dateien unklarer Herkunft werden nur gezählt, nicht übernommen (der Import muss den Schreib-Kern passieren). Endpunkt `dsh-memory/mem-sync`.
+- **P3 Archivierung + physisches Löschen**: das Gate von `exportThenPurge` wurde vom Datenbank-Gesamthash auf die **Batch-Projektion** umgestellt (sobald eine nebenläufige Verdichtung irgendetwas vom Batch Unabhängiges geändert hat, ließ die alte Implementierung das Aufräumen niemals etwas löschen); nach dem Löschen schreibt sie das menschenlesbare `retired.md` + verschiebt die projizierten Dateien des Batches (einschließlich `.disable`) ins Snapshot-Verzeichnis; der Trockenlauf von `cleanup-retired` gibt eine **Vorschau der Löschliste** zurück; in der Graph-Projektions-Tabelle neu `forgetRecords` (zuvor wuchs der ganze Bestand nur und nahm nie ab — aus einem Snapshot wiederhergestellte Einträge galten wegen ihrer fortbestehenden Projektionszeile als „bereits projiziert" und wurden **nie neu projiziert**; im Suchgraph fehlte still ein Eintrag, ohne einen Fehler zu melden).
+- **P4.1 Standardklasse `unclassified` + P4.2 Normalisierung des Layouts im Haupttext** (`normalizeContentMd`). Idempotenz ist harte Anforderung: ohne Idempotenz ändert sich der `fileDigest` des Ledgers jede Runde, und die Schreib-Rückschleife brächte der Renderer selbst ein. Nur Layout, keine Semantik (Prosa nicht in Bullets, kein eingeschobenes H1, keine Metadaten im Haupttext).
+- **Archivierung verwaister Projektionsdateien `dsh-memory/mem-orphans`**: verschickt nur Dateien, von denen „das Ledger vermerkt, dass wir sie geschrieben haben, und im Augenblick kein Eintrag diesen Pfad beansprucht". Dateien unklarer Herkunft, die nicht im Ledger stehen, bleiben **unberührt** (das können Eingaben sein, die ein Mensch ins Projektionsverzeichnis gelegt hat und die auf ihre Rücksynchronisation warten). Nicht gelöscht, nur verschoben; die relative Form und der Originaltext bleiben erhalten.
+
+### Verhaltenskorrektur (Recall-Anzeigefläche)
+
+- Aufgerufene Einträge verschwinden nicht mehr augenblicklich: der view trägt `body` / `retired`, das Abreißen der `session_recalled`-Zeilen wurde eingestellt, die pill zeigt die Durchstreich-Notiz „als veraltet bewertet".
+- Bereinigung der Bestandsreste beim Start (auf diesem Rechner gemessen: 725 Zeilen waren in `l1_fts` noch schmutzig); die Ausscheidens-Invariante deckt jetzt zwei Umwege-Schreibpfade ab (behebt „nach der Ungültig-Markierung in der Suchseite wieder auferstanden").
+- Recall-Bepunktung Ende-zu-Ende: `-1..5` (0..5 Relevanz; `-1` erklärt veraltet und scheidet aus), die Bewertung fließt in die Reife-Metrik ein (`-1/1/2` drücken und versenken, `4/5` heben und lassen auftauchen).
+- Workspace-Inhalts-Routing erstmals gelandet (dsh-Ökosystem → `rewrite-agently`, nicht dsh → `agent-no-dsh`; **nur `workspace_id` geschrieben, `scope` und `updated_time` unberührt**, und die Zugehörigkeitsspalten der `l1_fts`-Zeile mit synchronisiert).
+
+### Disziplin
+
+- Zwei überlange memport-Funktionen in zwei Runden aufgeteilt (Extract Function, Verhalten erhalten, byte-genaue Regression gegen den CLI-Goldstandard).
+- Die Disziplin „Endpunkt-Vertrag an **fünf Stellen gleichzeitig** ändern" wirkt weiter (`MEMORY_ENDPOINTS ≡ switch ≡ contract-Doppel-map ≡ contract-keys-Zählung ≡ config`), Zählkette 55→56→57→58→59.
+
+## [0.22.2] — 2026-10-12
+
+### Hinzugefügt
+
+- Haut in drei Zuständen (auto/light/dark) + Token-Override-Block; Panel mit 11 Tabs auf eine Zeile verdichtet.
+- `ext_key`-Idempotenz für `memory_import` (`l1_records.ext_key` + partieller Unique-Index + `deduped`-Quittung).
+- **Memport Connect**: `.mem`-Parsing / Vorfilter / Scan + Herkunfts-Registry + Connect-Tab (sha256-Goldstandard implementierungsübergreifend ausgerichtet).
+- **Skill-Kristallisation**: skill-store (JSON-Sidecar) + Kandidatenerkennung + Skill-Abruf-Injektion + Schalter `skillsEnabled` im Board.
+- G4 kausale Graph-Kanten (führt zu / weil / reparierte / ersetzt); `projectorVersion` wird nicht hochgezählt.
+- G3 Reife-Ableitung beim Lesen (Badge auf der Eintragskarte + Notiz in der Ansicht zur Konflikt-Schlichtung, nicht an automatischen Schlichtungen beteiligt).
+- G1 `usageScenario`-Gating Ende-zu-Ende (Extraktion → `metadata.dsh_usage_scenario` → Feinranking beim Abruf; off zeichengleich unverändert).
+- G2 typ-spezifische Erzähltemplates (gefilterte Prompt-Variante; off ist Präfix von on).
+- Die zwei Achsen wing / kognitiver Saal vermischen sich nicht (orthogonale Accessoren + Regressionssperre auf disjunkte Wertebereiche).
+- **G-live aktive Abrufmenge dieser Sitzung**: persistenter Sidecar + schreibgeschützter Endpunkt `session-recalled` + schreibgeschützte pill-Liste.
+- Sitzungsbezogene Projektion von `memoryRecall` (Datenquelle für den Abschnitt „Abruf in dieser Sitzung" in der brief-Seitenleiste, `init(header).id`).
+- `cfg.slots.migrateLegacy` (standardmäßig aus): scheidet rule-Slots weich aus, die als permanente angepinnt sind, deren Inhalt inzwischen von lebenden L1-Einträgen getragen wird.
+
+### Behoben
+
+- Die Rückspülung durch Wiederkauen setzte die Anzahl offener Aufgaben zurück oder vermehrte sie (ruminate übergibt jetzt eine leere Nachricht, gleiche Semantik wie `enqueueSessionSlices`).
+- finalize des Wiederkauens und `doLightRefresh`: erzwungener echter L3-Lauf + Zähler-Nullsetzung + `state.save()` auf die Platte (behebt „nach L2/L3-Wiederkauen nicht gelöscht und nach Neustart wieder da").
+
+### Disziplin
+
+- Alle neuen Fähigkeiten standardmäßig aus; im off-Zustand bleiben Erzeugnisse und Injektion zeichengleich unverändert. Die plugin-übergreifende Anzeigevereinbarung (`memorySlots`-Projektion) bleibt verdrahtet.
+
+## [0.22.1] — 2026-10-09
+
+### Behoben
+
+- **Unterseite der Overlays undurchsichtig**: das Memory-Overlay in der Eingabeleiste (`.dsh-mem-popover`) sowie Drop-down- / Filter-Panels (`.dsh-mem-pop`) folgten vorher dem Wirtswert `--dsw-specific-menu`, den der Host als halbtransparenten Glaswert auflöst ⇒ das Panel ließ den Hintergrund durchscheinen. Jetzt liegt die Alias-Schicht auf einem **undurchsichtigen `bg-primary`-Grund** (underlay-Technik), wodurch das Panel unabhängig vom Alpha des Hosts solide wirkt.
+
+## [0.22.0] — 2026-10-09
+
+### Geändert
+
+- **Deklarationsseite an 15rc angepasst**: die 9 dsh-peers decken alle veröffentlichten Host-rc ab (`0.1.0-rc.2..0.2.0-rc.2`, einzeln per `npm view` belegt und je Linie deckungsgleich), alle optional; `engines >= 0.1.0-rc.2` als grober Zaun (das präzise Tor sind die peers), `package.json` und `dsh.plugin.json` synchron.
+- **Versionen der Doppel-Manifiste geradegezogen**: `dsh.plugin.json` war zuvor auf `0.20.0-beta.6-dsh0.2.0.1` weggedriftet; in diesem Batch zeichengleich mit `package.json` abgeglichen (V1-Tor).
+- **`dsh.client.inject` auf `ui-primitives` only verkleinert**: `dsh-client-connection` existiert als Paket erst ab 0.1.2; es zu deklarieren würde den gesamten client-Einstieg auf 0.1.0/0.1.1 hängen lassen (`rpc.ts` holt sich diese Verbindung längst lazily über `ctx.get`).
+
+### Disziplin
+
+- Allen build-Typ-Repos `prepack: npm run build` eingegeben — `npm pack` löst nur prepack aus, nicht `prepublishOnly`; das ist eine der drei Verteidigungslinien gegen den stale-build-Irrtum.
+
 ## [0.19.0] — 2026-09-29
 
 ### Geändert

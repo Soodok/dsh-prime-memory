@@ -16,6 +16,108 @@ y los números de versión obedecen al [versionado semántico](https://semver.or
 > **Convención de capturas de interfaz**: las entradas que traen cambios de interfaz conservan capturas reales
 > en `assets/changelog/<número de versión>/<número de dos dígitos>-<resumen>.png` y las citan en el texto con una ruta relativa: en el registro de cambios se ve directamente cómo luce la interfaz de la nueva versión.
 
+<!-- Brecha: las entradas de 0.21.0 y 0.20.x aún no están traducidas. -->
+
+## [0.24.0] — Sin publicar (línea local `0.24.0-local.0…3`, 2026-10-13)
+
+### Añadido
+
+- **Vocabulario de tipos con fuente única de verdad (`src/memory-types.ts`)**: los 29 nombres originales de la taxonomía de memoria del huésped + los 7 antiguos del plugin + el paraguas `unclassified`, 37 tipos en total. De ella se derivan **todos**: el allowlist del directorio de proyección, el allowlist de escritura de `memory_add`, las etiquetas del panel, las cadenas de enumeración de los prompts de extracción y de deduplicación, y los códigos de tipo de la doble implementación TS/Python de memport. Hasta ahora el «conjunto completo de tipos» estaba transcrito a mano en cuatro sitios que evolucionaban por separado: `memory_add` **reescribía en silencio** las clasificaciones externas a `episodic`, mientras el texto de memport prometía «pasarlas tal cual» — dos criterios para la misma cosa.
+- **Destilación de nombres (`cfg.naming`)**: la extracción emite en el acto un `title`, **definido por separado del** `content` (el title es el sintagma nominal que responde «¿de qué trata esta entrada?», el content es la narración completa); el merge de deduplicación emite además `merged_title`. Al persistir, el `title` es solo un **candidato de nombre**: debe superar la puerta de forma `validateTitle`; si no la supera, se entrega igualmente al generador de nombres — la fuente de verdad de la unicidad del nombre no desdobla criterios por admitir una fuente más.
+- **Juego de ejemplos few-shot en formato estándar (`src/prompts/examples.ts`)**: positivos por tipo + contraejemplos, con presupuesto máximo de longitud total (los ejemplos son un coste fijo que se paga en cada ronda de destilación); los propios positivos deben superar la puerta y traer el esqueleto completo, y los casos de prueba se alimentan directamente de `auditFewShot()` en lugar de transcribir los criterios a mano.
+- **Criterio de esqueleto ejecutable (`SKELETON_ELEMENTS` + `scoreSkeleton`)**: convierte el deseo escrito en el prompt —«sin antecedentes ni consecuencias, si no está completo no vale como utilizable»— en un criterio medible y utilizable para fijar valores por defecto. Limitación declarada: heurística de palabras clave, solo apta para comparación relativa entre dos brazos sobre la misma entrada; no es una puntuación absoluta de calidad.
+- **Esqueleto de directorios + `_index.md` por tipo (`memory-md-skeleton.ts`)**: cada directorio de tipo guarda un fichero índice (nombre de la clase + número de entradas en la base). Los directorios vacíos se los tragan git y el archivo comprimido, y a ojos humanos «no existe ese directorio» e «esta clase tiene 0 entradas» tienen el mismo aspecto. Idempotente: si el contenido no cambia, cero escrituras y no se pinta el mtime; con la superficie de proyección cerrada, cero acción.
+
+### Cambiado
+
+- **Tres valores por defecto girados según la medición A/B** (`narrativeTemplates.enabled` / `naming.enabled` / `naming.fewShot`). El fundamento son dos mediciones **de direcciones opuestas**: en la ruta real de destilación de conversaciones, sin ejemplos el esqueleto completo queda en **0.000**（0/23）, con ejemplos sube a **0.703**（26/37）; en cambio, a las tareas de renombrar entradas existentes, añadir ejemplos las resta **−0.113** (faltan 18/160 respuestas). Conclusión: **los ejemplos no cruzan de tarea**, solo entran en el prompt de extracción, no en el guion de nombramiento.
+- **Proyección md activada por defecto** (`memExport.enabled`): la premisa entera del plan es «los ficheros son la autoridad del contenido + la base es el índice», dejarla apagada por defecto equivale a no usarla nunca. `mdSync.enabled` **sigue apagado por defecto** — escribe en la base, el riesgo es asimétrico.
+- **Renombrada la clave del origen workspace `workspaceHints` → `workspaceSource`**: renombrado seco, sin alias de compatibilidad (esta clave nunca salió en ninguna versión publicada, añadir un alias equivale a criar una segunda fuente de verdad). Activada por defecto; la ruta enrutada `path` ahora guarda **la raíz del workspace** (el valor viejo se escribía como `E:\test\rewrite-agently\.agents`, y `targetFor` volvía a concatenar `.agents/memory` → arrojaba un árbol huérfano `.agents\.agents\memory\`; la barrera «retroceder a una única raíz solo si la raíz no existe» no intercepta esta forma). Relleno de las entradas existentes en dispositivo real: **724/1166** obtuvieron su origen, `hashRecords` literalmente invariante.
+
+### Corregido
+
+- **El lector del libro mayor sobrescribía la clave absoluta en `relPath`**: tras N10 las claves del libro son rutas absolutas, y esa cláusula de «reescribir usando la clave si son inconsistentes» se disparaba en cada carga; en medición real contaminó **1167/1241** entradas. Síntoma aguas abajo: el archivado de huérfanos construía un directorio ilegal con dos puntos y las 75 mudanzas daban todas ENOENT. Ahora se deriva desde `root` + clave (nueva función `deriveRelPath`) y el lado del archivado ya no confía en el `relPath` almacenado.
+- **`--revert` no respaldaba los hooks**: `findArchivedOld` accedía directo a `deps.hooks.exists`, pero `runCli` al invocar revert no pasaba hooks (en apply sí estaba `deps.hooks ?? defaultHooks`, en revert faltaba). La primera vez que el sandbox corría un rollback fallaban las 74 entradas con error. Lo importante es la asimetría del daño: si apply se cae, `--revert` te devuelve; **si el propio rollback está roto, la copia de seguridad es la única salida**.
+- **Duplicados entre raíces se saltaban «si ambos lados cambian, no tocar»**: `roots = raíz de caída del registro ∪ raíces ya registradas en el libro mayor`; una misma entrada puede tener un fichero bajo dos raíces distintas. La decisión leía la copia de la raíz vieja, mientras la escritura usaba la copia de la raíz nueva que calcula `targetFor` — así las ediciones humanas de la raíz vieja pisaban la copia autoritativa y el informe se veía completamente conforme. Ahora solo se reconoce la raíz de caída actual; el resto se contabiliza en el nuevo campo `staleRootFiles` y se muestra en el panel.
+- **Una colisión de nombre expulsaba la memoria completa de la base recuperable**: la forma `{ ...registroViejo, id: idNuevo }` llevaba «un nombre que ya pertenece a otra fila» a escribir → chocaba contra el índice parcial único → el rebote por lotes a escritura individual seguía fallando → el producto de merge de esa entrada **desaparecía en silencio** (el registro viejo ya había salido; este reemplazo no dejaba nada). El criterio de nombrado cambió de «el nombre está vacío» a **«este nombre no le pertenece»**.
+- **El contador vectorial «N entradas pendientes de embedding» nunca llegaba a cero mientras «reconstruir índice: nada que hacer»**: en la vista `missing = total − embedded` el denominador incluye filas retiradas, y las retiradas legítimamente no tienen vector por diseño; las dos consultas SQL que impulsan el completado excluyen filas retiradas, así que en la misma pantalla salían «faltan 114» y «nada que hacer» a la vez. El denominador se unifica en filas activas.
+- **La barrera de proyección contaba lo recorrido, no lo ejecutado**: `maxRecords` incluía en la cuota también las entradas calificadas como «sin cambio», así que el segundo clic escaneaba otra vez los mismos N primeros — el texto del panel «otro clic para continuar» era mentira (síntoma real: `已写 9 · 未变 291 · 剩余 866` constante). Ahora solo cuenta las que tocaron disco; el total escaneado lo acota `timeBudgetMs`.
+- **El libro mayor se escribía en O(n²)**: cada `set()` ordenaba todo el libro y reescribía el JSON completo de forma atómica. Con 1200 entradas en el mismo disco se midió **9442ms → 1954ms** (marcador de sucio + ventana de agrupamiento + `flush()` forzoso).
+- **`NAME_MAX`(40) y `NAME_CLIP_MAX`(28) separados en dos números**: el contador de caracteres trataba igual a ASCII y a hanzi, `dsh-agent-teams` / `Python-3.13` se comían 15 unidades con una sola palabra, y nombres legítimos de una o dos palabras caían como `too-long`; pero un único 40 hacía que `deriveName` copiara la frase de narración hasta el final del enunciado (medido). De paso se corrigió el 28 fijado a mano dentro de `validateTitle` (dos fuentes de verdad para el mismo umbral).
+- **Tres falsos positivos en la puerta de nombres**: la tabla de prefijos que se despojan queda **separada** de la tabla de nombres rechazados (los sujetos desnudos «usuario/equipo» dejan de matar sintagmas como «el nombre de usuario de la cuenta npm del usuario», 10 casos en dispositivo real); `has-id-fragment` se estrechó a «4+ dígitos tras un carácter no ASCII» (`ADR-0006`, `Han-1413141` pasan, 4 casos en dispositivo real).
+
+### Límites conocidos
+
+- El refuerzo incremental al final de la rumiación depende del diff sobre la base `id→updatedAt`, mientras relabel / retiro usan `patchMetadata` y no tocan `updated_time` ⇒ **una reescritura solo-metadata no re-proyecta en esa ronda**.
+- La sincronización inversa P2 debe todavía dos piezas: el hook automático al arrancar (cambiado a exponer solo endpoint + botón) y el lote `pending` que no entra en la vista `conflicts` para arbitrar.
+- **Las traducciones a 8 idiomas no se han actualizado desde 0.20.0** (esta pasada solo se añaden las entradas desde 0.22.0; el hueco 0.20/0.21 sigue abierto y queda anotado aparte).
+
+## [0.23.0] — Sin publicar (línea local `0.23.0-local.1…8`, 2026-10-12…13)
+
+### Añadido
+
+- **Superficie de proyección md autoritativa (P0/P1/U/N10/N11)**: columna `l1_records.name` (clave de identidad del fichero + índice parcial único); `renderRecord` + libro mayor de doble huella (`dbDigest`/`fileDigest`) + endpoints `mem-export` / `mem-reconcile`; sección «archivo externo» del panel; raíz de proyección cambiada a **workspace primero** (`<ws>/.agents/memory/<tipo>/<nombre>.memory.md`); la detección de obsoleto se enlaza con `.memory.md.disable`.
+- **P2 sincronización inversa (fichero → índice)**: **cuadrante de tres partes** según las dos digests del libro mayor — si solo cambió el fichero, se reintroduce en la base y se reescribe con el renderizado canónico (corta el bucle de escritura); si solo cambió la base, reutiliza `exportRecords` para reescribir el fichero; **si ambos cambian, ninguna de las dos se toca** y solo se cuelga `pending`; `.disable` dispara retiro sin borrar el fichero; los ficheros nuevos de procedencia desconocida solo cuentan, no entran en la base (la importación debe pasar por el núcleo de escritura). Endpoint `dsh-memory/mem-sync`.
+- **P3 archivado + borrado físico**: la puerta de `exportThenPurge` cambió del hash de la base entera a **proyección por lote** (con destilaciones concurrentes, si tocaban cualquier registro ajeno al lote, la implementación vieja hacía que la limpieza nunca pudiera borrar); tras borrar se escribe un `retired.md` legible para humanos y se trasladan los ficheros proyectados del lote (incluido `.disable`) al directorio de instantánea; `cleanup-retired` en dry-run devuelve **una vista previa de la lista a borrar**; la tabla de índices de la proyección de grafo añade `forgetRecords` (hasta ahora en todo el repositorio solo se añadían y nunca se quitaban — un registro restaurado desde instantánea seguía apareciendo en la proyección y se trataba como «ya proyectado», por lo que **nunca se re-proyectaba** y el grafo de recuperación perdía esa entrada en silencio).
+- **P4.1 clase por defecto `unclassified` + P4.2 normalización del formato del cuerpo (`normalizeContentMd`)**. La idempotencia es requisito duro: sin idempotencia la `fileDigest` del libro cambia cada ronda y el bucle de escritura lo introduce el propio renderizador. Solo formato, no semántica (no convierte prosa en viñetas, no inserta H1, no mete metadatos en el cuerpo).
+- **Archivado de ficheros proyectados huérfanos `dsh-memory/mem-orphans`**: solo mueve los ficheros que el libro registra como «escritos por nosotros» y que ahora ningún registro reclama; los ficheros nuevos que no están en el libro **no se tocan** (puede que sean entradas humanas colocadas en el directorio de proyección esperando ser sincronizadas de vuelta). No borra, solo traslada, conservando la forma relativa y el texto original.
+
+### Correcciones de comportamiento (vista de recuperación)
+
+- Las entradas recuperadas dejan de desaparecer al instante: la vista trae `body` / `retired`, se deja de arrancar filas `session_recalled`, la pill muestra la anotación marginal tachada «declarada obsoleta».
+- Limpieza al arrancar de residuos retirados ya existentes (en máquina local se midieron 725 filas aún sucias en `l1_fts`); se completan las dos vías laterales de escritura del invariante de retiro (arregla «tras marcar obsoleto, revive en la superficie de búsqueda»).
+- Puntuación de recuperación de extremo a extremo: `-1..5` (0..5 relevancia; `-1` declara obsoleto y retira); la puntuación entra en los indicadores de madurez (`-1/1/2` hunden y hacen bajar, `4/5` elevan y hacen subir).
+- Primera caída del enrutado de contenido por workspace (ecosistema dsh → `rewrite-agently`, no dsh → `agent-no-dsh`; **solo escribe `workspace_id`, no toca `scope`, no toca `updated_time`**, y sincroniza las columnas de pertenencia que lleva cada fila de `l1_fts`).
+
+### Disciplina
+
+- Dos megafunciones de memport divididas en dos rondas (Extract Function, comportamiento conservado, regresión byte a byte del oro del CLI).
+- La disciplina de contrato de endpoint de **cinco cambios sincronizados** sigue en vigor (`MEMORY_ENDPOINTS ≡ switch ≡ doble mapa de contract ≡ recuento de contract-keys ≡ config`); cadena de recuentos 55→56→57→58→59.
+
+## [0.22.2] — 2026-10-12
+
+### Añadido
+
+- Modo triple de tema (auto/claro/oscuro) + bloque de reescritura de tokens; panel de 11 pestañas apretado a una sola fila.
+- Idempotencia de `ext_key` en `memory_import` (`l1_records.ext_key` + índice parcial único + recibo `deduped`).
+- **Memport Connect**: análisis / prefiltro / escaneo de `.mem` + registro de procedencias + pestaña Connect (alineación con el oro sha256 entre implementaciones).
+- **Cristalización de habilidades**: skill-store (sidecar JSON) + detección de candidatos + inyección de recuperación de habilidades + interruptor del tablero `skillsEnabled`.
+- G4 aristas causales del grafo (provoca / porque / arregló / reemplaza, sin subir `projectorVersion`).
+- G3 madurez derivada en lectura (insignia en la ficha de registro + anotación marginal en la vista de arbitraje de contradicciones, no interviene en el arbitraje automático).
+- G1 de extremo a extremo con puerta en `usageScenario` (extracción → se deposita en `metadata.dsh_usage_scenario` → reordenamiento fino en la recuperación; off deja todo literalmente igual).
+- G2 plantillas narrativas por tipo (variantes de prompt bajo puerta; off es prefijo de on).
+- Los ejes wing / pasillo cognitivo no se cruzan (accesores ortogonales + seguro de regresión con rangos disjuntos).
+- **G-live conjunto vivo de recuperación de esta conversación**: sidecar persistente + endpoint de solo lectura `session-recalled` + lista de solo lectura en la pill.
+- Proyección con conciencia de sesión en `memoryRecall` (fuente de datos de la sección «recuperado en esta sesión» del panel lateral brief, `init(header).id`).
+- `cfg.slots.migrateLegacy` (apagado por defecto): retira suavemente los slots rule «afianzados como residentes cuyo contenido ya lo lleva un L1 activo».
+
+### Corregido
+
+- La reinyección de la rumiación revertía el contador de pendientes o lo multiplicaba (ruminate pasa mensajes vacíos, misma semántica que `enqueueSessionSlices`).
+- En el finalize de la rumiación y en `doLightRefresh`: L3 forzado a correr de verdad + contador a cero + persistencia con `state.save()` (arregla «pendiente no se limpia tras rumiar L2/L3 y al reiniciar reaparece»).
+
+### Disciplina
+
+- Todas las capacidades nuevas vienen apagadas por defecto; en estado off, los productos y las inyecciones quedan literalmente iguales; el contrato de exhibición entre plugins (proyección `memorySlots`) sigue cableado.
+
+## [0.22.1] — 2026-10-09
+
+### Corregido
+
+- **Fondo de la superposición cambiado a opaco**: el popover de memoria de la barra de entrada (`.dsh-mem-popover`) y los paneles de desplegable / filtro (`.dsh-mem-pop`) antes seguían al `--dsw-specific-menu` del huésped, y el huésped lo resuelve en un valor de vidrio semitransparente ⇒ el panel dejaba pasar el fondo. Ahora la capa de alias se superpone **sobre un fondo opaco `bg-primary`** (técnica de underlay), de modo que el panel se ve sólido sea cual sea el alpha del huésped.
+
+## [0.22.0] — 2026-10-09
+
+### Cambiado
+
+- **Superficie de declaración adaptada a 15rc**: 9 peers dsh cubren todos los rc del huésped publicados (`0.1.0-rc.2..0.2.0-rc.2`, probados uno a uno con `npm view` y consistentes entre líneas), todos opcionales; `engines >= 0.1.0-rc.2` hace de cerca gruesa (la puerta fina son los peers), sincronizados `package.json` y `dsh.plugin.json`.
+- **Versiones realineadas entre los dos manifiestos**: `dsh.plugin.json` había derivado a `0.20.0-beta.6-dsh0.2.0.1`, en este lote se iguala literalmente a `package.json` (puerta V1).
+- **`dsh.client.inject` reducido a `ui-primitives` únicamente**: `dsh-client-connection` solo existe como paquete desde 0.1.2; declararlo colgaba toda la entrada client en 0.1.0/0.1.1 (`rpc.ts` ya resolvía perezosamente esa conexión con `ctx.get`).
+
+### Disciplina
+
+- En todo repositorio de tipo build se inyecta `prepack: npm run build` — `npm pack` solo dispara prepack, no `prepublishOnly`; es una de las tres capas de defensa contra el falso stale-build.
+
 ## [0.19.0] — 2026-09-29
 
 ### Cambios
