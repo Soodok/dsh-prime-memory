@@ -21,8 +21,19 @@ const hintsOf = (raw: Record<string, unknown> = {}): Hints =>
   (memorySchema as unknown as (v: unknown) => { workspaceHints: Hints })(raw).workspaceHints;
 
 describe('cfg.workspaceHints', () => {
-  it('默认关（关时新蒸馏不写任何归属）', () => {
-    expect(hintsOf().enabled).toBe(false);
+  it('默认开（用户口径：谈到本仓/dsh 生态的记忆要归本仓 workspace，不要全托底到单根）', () => {
+    // 旧默认值是 false（当时叫“hints”，归属靠不可靠的来源链推）。主判据已换成内容路由后，
+    // 关着就等于"新记录永远没归属"——实测 0/1166，而用户明确要求本仓相关记忆落本仓。
+    expect(hintsOf().enabled).toBe(true);
+  });
+
+  it('默认路由的 path 是 workspace 根，不得自带 .agents（否则落点会双叠）', () => {
+    // `targetFor` 会在 path 后拼 `.agents/memory`；旧默认值写成 `...\.agents` 就会得到
+    // `.agents\.agents\memory\`，而护栏只查根存在与否，拦不住这种形状。
+    for (const r of hintsOf().routes) {
+      expect(r.path.toLowerCase().endsWith('\\.agents'), r.path).toBe(false);
+      expect(r.path.toLowerCase().endsWith('/.agents'), r.path).toBe(false);
+    }
   });
 
   it('默认路由表 = 用户给的两条归类规则，且 dsh 侧在前', () => {

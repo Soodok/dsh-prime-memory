@@ -683,6 +683,10 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
+    /**
+     * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
+     * 而不是全托底到 `<dataDir>/memories`）。默认路由表就是用户给的两条归类规则（路径可改，不需改码）。
+     */
     workspaceHints: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         routes: Schema<({
@@ -690,7 +694,15 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
             anyOf?: string[] | null | undefined;
             noneOf?: string[] | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
-            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            /**
+             * 归到哪个 workspace（**workspace 根**，绝对路径；写入前过 normalizeWorkspacePath）。
+             *
+             * 存的不包含 `.agents/memory`：投射落点由 `targetFor` 算，它会在本值后拼上
+             * `WORKSPACE_SUBDIR = ['.agents','memory']`。旧默认值把它写成了
+             * `E:\test\rewrite-agently\.agents`，于是落点变成 `.agents\.agents\memory\`——
+             * 而 `.agents` 目录确实存在，"目录不存在则退回单根"的护栏救不了这种形状，
+             * 等于在仓里挂一棵没人认领的孤儿树。新增用例钉住这个不变式。
+             */
             path: Schema<string, string, "defined">;
             /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
             anyOf: Schema<string[], string[], "defined">;
@@ -706,7 +718,15 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
             anyOf?: string[] | null | undefined;
             noneOf?: string[] | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
-            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            /**
+             * 归到哪个 workspace（**workspace 根**，绝对路径；写入前过 normalizeWorkspacePath）。
+             *
+             * 存的不包含 `.agents/memory`：投射落点由 `targetFor` 算，它会在本值后拼上
+             * `WORKSPACE_SUBDIR = ['.agents','memory']`。旧默认值把它写成了
+             * `E:\test\rewrite-agently\.agents`，于是落点变成 `.agents\.agents\memory\`——
+             * 而 `.agents` 目录确实存在，"目录不存在则退回单根"的护栏救不了这种形状，
+             * 等于在仓里挂一棵没人认领的孤儿树。新增用例钉住这个不变式。
+             */
             path: Schema<string, string, "defined">;
             /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
             anyOf: Schema<string[], string[], "defined">;
@@ -1317,6 +1337,10 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
         maxRecords: Schema<number, number, "defined">;
         timeBudgetMs: Schema<number, number, "defined">;
     }>>, "plain">;
+    /**
+     * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
+     * 而不是全托底到 `<dataDir>/memories`）。默认路由表就是用户给的两条归类规则（路径可改，不需改码）。
+     */
     workspaceHints: Schema<Schemastery.ObjectS<NoInfer<{
         enabled: Schema<boolean, boolean, "defined">;
         routes: Schema<({
@@ -1324,7 +1348,15 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
             anyOf?: string[] | null | undefined;
             noneOf?: string[] | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
-            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            /**
+             * 归到哪个 workspace（**workspace 根**，绝对路径；写入前过 normalizeWorkspacePath）。
+             *
+             * 存的不包含 `.agents/memory`：投射落点由 `targetFor` 算，它会在本值后拼上
+             * `WORKSPACE_SUBDIR = ['.agents','memory']`。旧默认值把它写成了
+             * `E:\test\rewrite-agently\.agents`，于是落点变成 `.agents\.agents\memory\`——
+             * 而 `.agents` 目录确实存在，"目录不存在则退回单根"的护栏救不了这种形状，
+             * 等于在仓里挂一棵没人认领的孤儿树。新增用例钉住这个不变式。
+             */
             path: Schema<string, string, "defined">;
             /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
             anyOf: Schema<string[], string[], "defined">;
@@ -1340,7 +1372,15 @@ export declare const memorySchema: Schema<Schemastery.ObjectS<NoInfer<{
             anyOf?: string[] | null | undefined;
             noneOf?: string[] | null | undefined;
         } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
-            /** 归到哪个 workspace（绝对路径；写入前过 normalizeWorkspacePath）。 */
+            /**
+             * 归到哪个 workspace（**workspace 根**，绝对路径；写入前过 normalizeWorkspacePath）。
+             *
+             * 存的不包含 `.agents/memory`：投射落点由 `targetFor` 算，它会在本值后拼上
+             * `WORKSPACE_SUBDIR = ['.agents','memory']`。旧默认值把它写成了
+             * `E:\test\rewrite-agently\.agents`，于是落点变成 `.agents\.agents\memory\`——
+             * 而 `.agents` 目录确实存在，"目录不存在则退回单根"的护栏救不了这种形状，
+             * 等于在仓里挂一棵没人认领的孤儿树。新增用例钉住这个不变式。
+             */
             path: Schema<string, string, "defined">;
             /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
             anyOf: Schema<string[], string[], "defined">;

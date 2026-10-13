@@ -9,12 +9,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import { routeConflictsWithProvenance, routeWorkspace, type WorkspaceRoute } from '../src/workspace-route.js';
+import { WORKSPACE_SUBDIR, targetFor } from '../src/store/memory-md.js';
+import { memorySchema } from '../src/config.js';
+import { resolve } from 'node:path';
 
-/** 与 config.ts 默认表同形（win32 归一会把盘符与小写化，断言里用同样形式）。 */
-const ROUTES: WorkspaceRoute[] = [
-  { path: 'E:\\test\\rewrite-agently\\.agents', anyOf: ['dsh', 'cordis', 'prime-memory', 'brief-sidebar', 'host farm'], noneOf: [] },
-  { path: 'E:\\test\\agent-no-dsh', anyOf: ['hanako', 'hanaagent', 'openhanako', 'inferglow', 'pi-agent'], noneOf: ['dsh'] },
-];
+/**
+ * 路由表**取自真配置默认值**，不在此手抄一份。
+ *
+ * 上一版这里写死了与 `config.ts` 同形的三条字面量，结果默认路由表改了这里不会红——
+ * “断言与拄本一致、拄本不与事实一致”，等于把刚发生的双 `.agents` 缺陷留在看不见的位置。
+ */
+const DEFAULTS = (memorySchema as unknown as (v: unknown) => Record<string, unknown>)({});
+const HINTS = DEFAULTS.workspaceHints as { enabled: boolean; routes: WorkspaceRoute[] };
+const ROUTES: WorkspaceRoute[] = HINTS.routes;
 
 describe('routeWorkspace', () => {
   it('谈到 dsh 生态 → 归 rewrite-agently\\.agents', () => {
@@ -26,6 +33,36 @@ describe('routeWorkspace', () => {
   it('只谈 Hanako/inferglow 且全程无 dsh → 归 agent-no-dsh', () => {
     expect(routeWorkspace('Hanako 1.0.0-beta 的 asar 是明文未加密的', ROUTES)).toContain('agent-no-dsh');
     expect(routeWorkspace('inferglow 的 seed 包里有 pi-agent 0.84.4', ROUTES)).toContain('agent-no-dsh');
+  });
+
+  it('mine-dsh-plugins 下的插件内容归本仓 workspace（用户口径）', () => {
+    // 只提目录名不提 dsh- 前缀的那类记忆也要能接住：路由表里显式列了 mine-dsh-plugins。
+    expect(routeWorkspace('mine-dsh-plugins 里某个插件的目录结构', ROUTES)).toContain('rewrite-agently');
+    expect(routeWorkspace('dsh-session-steward 的设置卡不派发', ROUTES)).toContain('rewrite-agently');
+  });
+
+  it('内容路由默认开（用户口径：不要全托底到 <dataDir>/memories）', () => {
+    expect(HINTS.enabled).toBe(true);
+  });
+
+  it('默认路由的 path 是 workspace 根：拼上 WORKSPACE_SUBDIR 后不得出现 .agents 套 .agents', () => {
+    // 旧默认值写成 `E:\test\rewrite-agently\.agents`，而 `targetFor` 会再拼一层
+    // `.agents/memory` → 落点变成 `.agents\.agents\memory\`。护栏只查根存在与否，
+    // 救不了这种形状（`.agents` 确实存在），等于在仓里挂一棵孤儿树。
+    for (const route of ROUTES) {
+      const root = resolve(route.path, ...WORKSPACE_SUBDIR);
+      expect(/[/\\]\.agents[/\\]\.agents([/\\]|$)/i.test(root), root).toBe(false);
+      expect(route.path.toLowerCase().endsWith('\\.agents'), route.path).toBe(false);
+    }
+  });
+
+  it('有 workspace_id 的记录落点在 workspace 根下，不在单根（N10 口径）', () => {
+    const t = targetFor(
+      { id: 'r1', content: 'x', type: 'work_fact', name: '测试条目', workspaceId: 'E:\\test\\rewrite-agently' },
+      undefined, 'C:\\tmp\\data',
+    );
+    expect(t.inWorkspace).toBe(resolve(t.root).toLowerCase().includes('rewrite-agently'));
+    expect(t.root.replace(/\\/g, '/')).toContain('.agents/memory');
   });
 
   it('同一段内容既谈 Hanako 又谈 DSH → 归 DSH 侧（用户口径，排序即优先级）', () => {
