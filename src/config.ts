@@ -453,7 +453,18 @@ export function liveSettingsSchema(): VolatileRef<MemoryLiveSettings> {
   return (typeof maybe.volatile === 'function' ? maybe.volatile() : node) as VolatileRef<MemoryLiveSettings>;
 }
 
-export const memorySchema = Schema.object({
+/**
+ * 导出面形状：宿主按 Standard Schema 接口消费它，测试把它当函数调（取默认值解算结果）。
+ *
+ * 为何不靠推断：`memorySchema` 的 `live` 节经 `.volatile()` 会把 schemastery 的 Mode 推成
+ * 'volatile'，而 `SchemaOutput<…,'volatile'> = Volatile<T>` 里的那个 `Volatile` 来自 cordis
+ * 私带的那份 cosmokit（只在 `.pnpm` 私有目录可寻址）⇒ 导出的 d.ts 无法命名该类型，tsc 报
+ * TS2742，`npm run build` 与 `npm pack` 整链失败（实测 HEAD 亦然，本包并非这次才红）。
+ * 显式标注成本包自己声明的形状，既保住「可调用 + 可挂属性」的实际用法，又让 d.ts 可移植。
+ */
+export type ConfigSchema = ((value: unknown) => MemoryConfig) & Record<string, unknown>;
+
+export const memorySchema: ConfigSchema = Schema.object({
   dataDir: Schema.string().default(''),
   family: Schema.union(['auto', 'chat', 'work']).default('auto'),
   // §E 可见范围:默认 global(既有部署不传该键 = 行为与改动前逐字一致)。
@@ -704,7 +715,7 @@ export const memorySchema = Schema.object({
   benchControl: Schema.boolean().default(false),
   // 运行时开关:整个 volatile 节,设置页自动成表(0.1.7 起,见 liveSettingsSchema)
   live: liveSettingsSchema(),
-});
+}) as unknown as ConfigSchema;
 
 export function resolveDataDir(cfg: MemoryConfig): string {
   if (cfg.dataDir) return cfg.dataDir;
