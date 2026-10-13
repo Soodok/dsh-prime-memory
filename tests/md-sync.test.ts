@@ -223,4 +223,35 @@ describe('syncFromFiles 边界', () => {
     expect(await readFile(idx, 'utf8')).toContain('工作事实');
     expect(hashRecords(store.all())).toBe(before);
   });
+
+  it('同一条记录在两个根下各一份时：旧根那份不回灌、权威那份不被覆盖（真机双根往返报出的缺陷）', async () => {
+    // 形状：换过 `memExport.root` / 迁库之后，账本里同时留着旧根与新根的键，而
+    // `roots` 是“记录落点根 ∪ 账本记过的根”，两份文件都会进循环。旧逻辑拿旧根那份
+    // 判象限、却往 `targetFor` 算出的新根那份写——结果旧根里人写的编辑能绕过
+    // “两边都变就不动”把权威那份盖掉。现在非权威落点一律不动，计入 `staleRootFiles`。
+    const { dataDir, store, ledger, sync } = await setup();
+    const 权威前 = hashRecords(store.all());
+    // 再以第二个根导出一次：账本里就有了同一记录的两个根各自的条目（旧根残片）。
+    const 旧根 = join(dataDir, 'old-memories');
+    await exportRecords({ records: store.all(), cfgRoot: 旧根, dataDir, ledger, maxRecords: 300, timeBudgetMs: 60_000 });
+
+    const rec0 = store.all()[0]!;
+    const stale = ledger.allWithKeys().find((e) => e.entry.id === rec0.id && e.path.startsWith(旧根));
+    expect(stale, '旧根应该有一份条目').toBeTruthy();
+    const MARK = '人在旧根补的一句，不该被任何一侧采纳。';
+    await writeFile(stale!.path, `${await readFile(stale!.path, 'utf8')}
+
+${MARK}
+`, 'utf8');
+
+    const rep = await sync();
+    // 不回灌、不重写，且旧根那份被计成陈旧文件
+    expect(rep.imported).toBe(0);
+    expect(rep.rendered).toBe(0);
+    expect(rep.staleRootFiles).toBeGreaterThanOrEqual(1);
+    // 库逐字未动
+    expect(hashRecords(store.all())).toBe(权威前);
+    // 旧根那份也没被动（人不裁决机器不许动，它的处置是孤儿归档）
+    expect(await readFile(stale!.path, 'utf8')).toContain(MARK);
+  });
 });

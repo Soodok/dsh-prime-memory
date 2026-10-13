@@ -78,7 +78,9 @@ function lineOfSync(rep: SyncReport): string {
   // 遍历防护拦下的条目必须说出来：它们落在投射根以外（链接/越界目录），不说就等于静默丢弃，
   // 而“报告说一致”与“实际根本没看那批目录”在人眼里长得一样。
   const links = rep.skippedLinks > 0 ? ` · 防护拦下 ${rep.skippedLinks} 个链接/越界条目（未读）` : '';
-  return head + tail + extra + links + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
+  // 陈旧根那份既没回灌也没被写，不说出去就会被当成“已经同步过了”：它实际在等孤儿归档。
+  const stale = rep.staleRootFiles > 0 ? ` · 陈旧根 ${rep.staleRootFiles} 个文件未参与同步（交给孤儿归档）` : '';
+  return head + tail + extra + links + stale + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
 }
 
 function lineOfOrphans(rep: OrphanReport): string {

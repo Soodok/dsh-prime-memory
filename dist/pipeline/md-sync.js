@@ -31,7 +31,7 @@
  * 是有意的，不是 bug。
  */
 import { opendir, readFile, realpath, stat } from 'node:fs/promises';
-import { join, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { DISABLE_SUFFIX, digest, recordDigest, targetFor } from '../store/memory-md.js';
 import { exportRecords } from '../store/memory-md-export.js';
 import { parseMdFile } from '../store/memory-md-parse.js';
@@ -191,6 +191,7 @@ export async function syncFromFiles(deps) {
         remaining: 0,
         capped: false,
         skippedLinks: 0,
+        staleRootFiles: 0,
         samples: [],
     };
     const sample = (path, action) => {
@@ -216,7 +217,7 @@ export async function syncFromFiles(deps) {
     const files = [];
     for (const root of roots) {
         for (const f of await listProjectionFiles(root, guard))
-            files.push(f);
+            files.push({ root, abs: f });
     }
     report.skippedLinks = guard.links;
     // 护栏掉过文件 = 本轮结论只覆盖一部分，必须说出去（和墙钟截断同一个口径）。
@@ -225,7 +226,8 @@ export async function syncFromFiles(deps) {
         report.capped = true;
         report.remaining = guard.dropped;
     }
-    for (const abs of files) {
+    for (const item of files) {
+        const abs = item.abs;
         // 两条护栏都在循环顶部查：写在末尾会被 continue 跳过（导出侧的测试抓过这个 bug）。
         if (now() - startedAt > deps.timeBudgetMs) {
             report.capped = true;
@@ -245,6 +247,23 @@ export async function syncFromFiles(deps) {
         const fileName = abs.slice(Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\')) + 1);
         const entry = ledger.get(abs);
         const rec = pickRecord(store, entry?.id ?? '', fileName);
+        // ---- 只挡"跳根重复"：文件所在根不是这条记录当前的落点根 ----
+        // 根集合是「记录算出的落点根 ∪ 账本记过的根」，所以换过 `memExport.root`、迁库、
+        // workspace 根与单根并存留残片时，同一条记录会在**两个根**下各有一份文件。旧那份不是
+        // 无足轻重的：它带着自己的账本条目进循环，而象限判定拿它跟库比，**写盘却走
+        // `targetFor` 算出的新根那份**（`exportRecords` 不读扫描到的路径）。结果是旧根里人写的
+        // 编辑能绕过“两边都变就不动”把新根那份覆盖掉——而报告里看起来一切合规。
+        // 刻意只比**根**不比全路径：人手在同一个根里的嵌套目录放文件（或放 `.disable`）仍是
+        // 既有语义，不能在本修复里顺手收窄掉。非当前根的那份本质是孤儿，交给 `mem-orphans` 归档。
+        // 比较用 `resolve` 不折叠大小写：判错时只会多拦不拦（stale = 什么都不做），方向安全。
+        if (rec !== undefined) {
+            const authRoot = targetFor(rec, cfgRoot, dataDir, logger).root;
+            if (resolve(authRoot) !== resolve(item.root)) {
+                report.staleRootFiles += 1;
+                sample(abs, 'stale: 所在根不是该记录当前的落点根（两侧都不动，交给孤儿归档）');
+                continue;
+            }
+        }
         // ---- `.disable` → 退场（后缀本身就是裁决，不参与指纹比较） ----
         if (fileName.endsWith(DISABLE_SUFFIX)) {
             if (rec === undefined) {
