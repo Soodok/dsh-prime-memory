@@ -145,12 +145,24 @@ export function suppressAutoSettingsForm(ctx: Context): void {
   });
 }
 
+/**
+ * 读 live 节的当前值。两种形状都得接：
+ * - 新 schemastery：`liveSettingsSchema()` 成功标了 `.volatile()`，宿主给 `Volatile<T>`（有 `.get()`）。
+ * - 老 schemastery（0.1.5-rc.3 解析到的 4.0.2，无 `.volatile()`）：config.ts 的探测不标，
+ *   宿主直接给配置对象本体——没有 `.get()`，当成冻结快照读即可。
+ * 不兼容这一形就是在老线报 `ref.get is not a function`（把加载期崩换成运行期崩）。
+ */
+export function readLiveRef(ref: unknown): MemoryLiveSettings {
+  const maybe = ref as { get?: () => MemoryLiveSettings } | null | undefined;
+  return typeof maybe?.get === 'function' ? maybe.get() : (maybe as MemoryLiveSettings);
+}
+
 export function registerLiveSettings(ctx: Context, config: MemoryConfig, logger: MemoryLogger): LiveSettingsHandle {
   // 读面:volatile 引用恒在(由 Config schema 默认值兜底),读数现取现解析,
   // 无进程内缓存——旧「服务就绪探测 / scope 复用 / 实例判活」整套机制随
   // 命令式注册面一起删除(0.1.7 无注册,自然无 already-registered 竞态)。
   const ref = config.live;
-  const read = (): MemoryLiveSettings => resolveSettings(ref.get());
+  const read = (): MemoryLiveSettings => resolveSettings(readLiveRef(ref));
 
   // 变更诊断(替代旧 scope.watch):宿主把 volatile-only 变更提交进引用后,
   // 向持有 fiber 广播一次 loader/volatile-update(路径为键数组,只关心 live 节)。

@@ -55,4 +55,12 @@ export declare const MEMORY_ENTRY_ID = "dsh-memory";
  *  关掉宿主按 volatile 字段自动生成的表单页,避免同一个插件出现两份设置入口。
  *  settings 服务缺失/未挂 configure 时静默跳过(自动表单页照常生成,无害)。 */
 export declare function suppressAutoSettingsForm(ctx: Context): void;
+/**
+ * 读 live 节的当前值。两种形状都得接：
+ * - 新 schemastery：`liveSettingsSchema()` 成功标了 `.volatile()`，宿主给 `Volatile<T>`（有 `.get()`）。
+ * - 老 schemastery（0.1.5-rc.3 解析到的 4.0.2，无 `.volatile()`）：config.ts 的探测不标，
+ *   宿主直接给配置对象本体——没有 `.get()`，当成冻结快照读即可。
+ * 不兼容这一形就是在老线报 `ref.get is not a function`（把加载期崩换成运行期崩）。
+ */
+export declare function readLiveRef(ref: unknown): MemoryLiveSettings;
 export declare function registerLiveSettings(ctx: Context, config: MemoryConfig, logger: MemoryLogger): LiveSettingsHandle;

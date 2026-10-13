@@ -1,6 +1,6 @@
 {
   "name": "dsh-prime-memory",
-  "version": "0.24.0-local.5",
+  "version": "0.24.0-local.7",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public",
@@ -125,9 +125,11 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/cordis-plugin-loader": "^1.0.5",
+    "@deepseek-ai/cosmokit": "1.8.5",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.1",
     "@deepseek-ai/dsh-agent-default-model": "0.2.0-rc.1",
     "@deepseek-ai/dsh-client-connection": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-compaction": "0.2.0-rc.1",
     "@deepseek-ai/dsh-home-paths": "0.2.0-rc.1",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.1",
     "@deepseek-ai/dsh-session": "0.2.0-rc.1",
@@ -143,7 +145,6 @@
     "globals": "^17.12.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.69.0",
-    "vitest": "^4.1.11",
-    "@deepseek-ai/dsh-compaction": "0.2.0-rc.1"
+    "vitest": "^4.1.11"
   }
 }

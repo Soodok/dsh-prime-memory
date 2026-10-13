@@ -5,7 +5,18 @@
  * 键名/默认值/取值范围是部署面契约(patch.yml 按"整行替换,不深合并"覆盖),不可更名。
  */
 import Schema from '@deepseek-ai/schemastery';
-import type { Volatile } from '@deepseek-ai/cordis';
+/**
+ * volatile 引用的本地结构声明——故意不从 cordis 输 `Volatile<T>`。
+ *
+ * 那个类型别名内部引用了 cosmokit 的私有名，拿它做导出成员的标注会让 d.ts 直接报
+ * TS2742 “inferred type cannot be named”（实测：往 devDeps 加 cosmokit 也不消错，
+ * 因为引用路径是 `.pnpm/@deepseek-ai+cosmokit@x` 这种私有目录）——整包 `npm run build`
+ * 卡住，而 build 是 `tsc && build-client && copy-client`，tsc 一红就掐断前端产物。
+ * 本插件只用 `.get()`，结构上兼容宿主给的真 `Volatile<T>`。
+ */
+export interface VolatileRef<T> {
+  get(): T;
+}
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import type { EffortChoice, LayerRouteKey, MemoryLiveSettings, StaticFallbackEntry } from './contract.js';
 import type { ExtractMode, ScopeMode } from './types.js';
@@ -365,7 +376,7 @@ export interface MemoryConfig {
    *  原为 settings 服务 `dsh-memory` 命名空间,见 src/settings.ts 头注)。
    *  读取走 `config.live.get()`(每次操作取一次),写入走设置页或
    *  settings-set RPC(经 `fiber.update` 持久化到 profile patch)。 */
-  live: Volatile<MemoryLiveSettings>;
+  live: VolatileRef<MemoryLiveSettings>;
 }
 
 /**
@@ -378,7 +389,7 @@ export interface MemoryConfig {
  *
  * ⚠️ 不得在节内再标 `.volatile()`(volatile 嵌套 volatile 会被宿主拒绝)。
  */
-export function liveSettingsSchema() {
+export function liveSettingsSchema(): VolatileRef<MemoryLiveSettings> {
   const budget = () => Schema.number().min(0).max(1_000_000).default(0);
   // 层链条目形状与 distillChain 相同(档位必填、'' = 跟随);写入校验另在
   // settings-set 门做逐层 requireExplicitHead(schema 层只管形状默认,语义门在 host)
@@ -387,7 +398,7 @@ export function liveSettingsSchema() {
     model: Schema.string().default(''),
     reasoningEffort: Schema.union([...EFFORT_CHOICES]).default(''),
   });
-  return Schema.object({
+  const node = Schema.object({
     enabled: Schema.boolean().default(true),
     capture: Schema.boolean().default(true),
     distill: Schema.boolean().default(true),
@@ -433,7 +444,13 @@ export function liveSettingsSchema() {
     toolRuminate: Schema.boolean().default(true),
     toolConflict: Schema.boolean().default(true),
     toolMutate: Schema.boolean().default(true),
-  }).volatile();
+  });
+  // 探测后再标：`Schema.object(...).volatile()` 只在新版 schemastery 上有（格内实测：
+  // cordis/schemastery 4.0.4 有、0.1.5-rc.3 解析到的 4.0.2 没有）。直接调用会让**整插件**
+  // 在老线 load-failure——不是降级，是起不来。未标时读侧走 readLiveRef 的兜底路径：
+  // 开关仍然生效（取宿主注入的冻结值），只是改值需要重启而不是热更。
+  const maybe = node as unknown as { volatile?: () => unknown };
+  return (typeof maybe.volatile === 'function' ? maybe.volatile() : node) as VolatileRef<MemoryLiveSettings>;
 }
 
 export const memorySchema = Schema.object({

@@ -32,7 +32,7 @@ export function liveSettingsSchema() {
         model: Schema.string().default(''),
         reasoningEffort: Schema.union([...EFFORT_CHOICES]).default(''),
     });
-    return Schema.object({
+    const node = Schema.object({
         enabled: Schema.boolean().default(true),
         capture: Schema.boolean().default(true),
         distill: Schema.boolean().default(true),
@@ -78,7 +78,13 @@ export function liveSettingsSchema() {
         toolRuminate: Schema.boolean().default(true),
         toolConflict: Schema.boolean().default(true),
         toolMutate: Schema.boolean().default(true),
-    }).volatile();
+    });
+    // 探测后再标：`Schema.object(...).volatile()` 只在新版 schemastery 上有（格内实测：
+    // cordis/schemastery 4.0.4 有、0.1.5-rc.3 解析到的 4.0.2 没有）。直接调用会让**整插件**
+    // 在老线 load-failure——不是降级，是起不来。未标时读侧走 readLiveRef 的兜底路径：
+    // 开关仍然生效（取宿主注入的冻结值），只是改值需要重启而不是热更。
+    const maybe = node;
+    return (typeof maybe.volatile === 'function' ? maybe.volatile() : node);
 }
 export const memorySchema = Schema.object({
     dataDir: Schema.string().default(''),
