@@ -80,7 +80,9 @@ function lineOfSync(rep: SyncReport): string {
   const links = rep.skippedLinks > 0 ? ` · 防护拦下 ${rep.skippedLinks} 个链接/越界条目（未读）` : '';
   // 陈旧根那份既没回灌也没被写，不说出去就会被当成“已经同步过了”：它实际在等孤儿归档。
   const stale = rep.staleRootFiles > 0 ? ` · 陈旧根 ${rep.staleRootFiles} 个文件未参与同步（交给孤儿归档）` : '';
-  return head + tail + extra + links + stale + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
+  // 同记录多路径且两份都被改：机器不替人挑，但必须说出来——不说就会被当成“同步过了”。
+  const multi = rep.multiPath > 0 ? ` · 同记录多路径 ${rep.multiPath} 份未动（先跑孤儿归档再同步）` : '';
+  return head + tail + extra + links + stale + multi + (rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '');
 }
 
 function lineOfOrphans(rep: OrphanReport): string {

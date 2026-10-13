@@ -62,6 +62,15 @@ function noteLink(guard, path, reason) {
 function errCode(err) {
     return err?.code;
 }
+/**
+ * 文件基名（Windows 与 POSIX 分隔符都吃）。
+ *
+ * 预扫分组与主循环都靠它把路径映到记录（`pickRecord` 按 `name` 认人），
+ * 两处各写一份切法的话，一边改了另一边没改就会让同一文件在两处映射到不同记录。
+ */
+function baseName(abs) {
+    return abs.slice(Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\')) + 1);
+}
 /** 列出一个根下的投射文件（含 `.disable`）。根不存在/没权限 → 空数组，不抛。 */
 async function listProjectionFiles(root, guard) {
     const out = [];
@@ -192,6 +201,7 @@ export async function syncFromFiles(deps) {
         capped: false,
         skippedLinks: 0,
         staleRootFiles: 0,
+        multiPath: 0,
         samples: [],
     };
     const sample = (path, action) => {
@@ -226,6 +236,60 @@ export async function syncFromFiles(deps) {
         report.capped = true;
         report.remaining = guard.dropped;
     }
+    // ---- 多路径预扫：「两边都变就不动」得能看见对面那一份 ----
+    // 改名后旧路径文件与旧账本条目都还在（搬走它们的是 `mem-orphans`，不是同步），于是同一
+    // 条记录在一轮里被两个条目独立判象限：两份都被改过 = 两次「仅文件变」回灌，后跑的赢，
+    // 前一份人写的编辑静默丢失。真机沙箱实测就是这个形状（旧路径被改 → `imported 1`，
+    // 库里正文来自已被改名那一侧，而权威路径那份还是旧内容）。
+    // 判据：按记录分组，组内**多于一份**与账本基线不一致 → 整组不动，计入 `multiPath` 挂账。
+    // 只有一份被改时照旧回灌（那是人真的在编辑这条记忆，只是编辑了旧路径——回灌后下一轮
+    // 由导出把内容写进权威路径，旧残片交给孤儿归档）。
+    // `.disable` 不参与分组：它只表达退场、不回灌内容，混进来会把 N11 的失效凭证
+    // 当成「另一份编辑」，把退场机制锁死。
+    const textCache = new Map();
+    const blocked = new Set();
+    const groups = new Map();
+    for (const { abs } of files) {
+        if (abs.endsWith(DISABLE_SUFFIX))
+            continue;
+        const rec = pickRecord(store, ledger.get(abs)?.id ?? '', baseName(abs));
+        if (rec === undefined)
+            continue;
+        const list = groups.get(rec.id);
+        if (list)
+            list.push(abs);
+        else
+            groups.set(rec.id, [abs]);
+    }
+    for (const [recId, list] of groups) {
+        if (list.length < 2)
+            continue;
+        let changed = 0;
+        const texts = [];
+        for (const abs of list) {
+            try {
+                const text = await readFile(abs, 'utf8');
+                texts.push([abs, text]);
+                const e = ledger.get(abs);
+                if (e === undefined || e.fileDigest !== digest(text))
+                    changed++;
+            }
+            catch {
+                // 读不出就不参评（主循环会按既有口径计入 skipped）
+            }
+        }
+        if (changed < 2)
+            continue;
+        report.multiPath += list.length;
+        for (const [abs, text] of texts) {
+            blocked.add(abs);
+            textCache.set(abs, text);
+        }
+        logger?.warn(`[memory] md 同步挂账：记录 ${recId} 有 ${list.length} 份投射文件、其中 ${changed} 份被改，` +
+            `两侧都不动（先跑孤儿归档抹掉旧残片，下一轮就只剩一份）`);
+        for (const abs of list)
+            sample(abs, `同记录多路径(${recId}) ${list.length} 份里 ${changed} 份被改 → 不动，等人裁决`);
+    }
     for (const item of files) {
         const abs = item.abs;
         // 两条护栏都在循环顶部查：写在末尾会被 continue 跳过（导出侧的测试抓过这个 bug）。
@@ -235,16 +299,21 @@ export async function syncFromFiles(deps) {
             break;
         }
         report.scanned += 1;
+        if (blocked.has(abs)) {
+            // 已在预扫里计入 multiPath 并留了样本：本轮什么都不动，也不能再当成 skipped。
+            continue;
+        }
+        const cached = textCache.get(abs);
         let text = '';
         try {
-            text = await readFile(abs, 'utf8');
+            text = cached ?? await readFile(abs, 'utf8');
         }
         catch (err) {
             report.skipped += 1;
             logger?.warn(`[memory] md 同步跳过（读不出）: ${abs} - ${err instanceof Error ? err.message : String(err)}`);
             continue;
         }
-        const fileName = abs.slice(Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\')) + 1);
+        const fileName = baseName(abs);
         const entry = ledger.get(abs);
         const rec = pickRecord(store, entry?.id ?? '', fileName);
         // ---- 只挡"跳根重复"：文件所在根不是这条记录当前的落点根 ----
