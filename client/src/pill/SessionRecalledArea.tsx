@@ -70,7 +70,7 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
     <div className="dsh-mem-sinfo">
       <div
         style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)', marginBottom: 6 }}
-        title="本会话召回注入、且目前仍在上下文里的记忆（压缩/清空后自动消失，不是常驻）"
+        title="本会话召回注入过的记忆（压缩后仍保留在本列表里，清空会话才清除；不是常驻注入）"
       >
         {'本会话召回 ' + records.length + ' 条'}
       </div>

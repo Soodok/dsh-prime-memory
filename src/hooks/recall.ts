@@ -332,7 +332,12 @@ export function registerRecall(
   ctx.on('agent/created', async (payload) => {
     if (payload.source === 'compact' || payload.source === 'clear') {
       dedupe.reset(payload.agent.id);
-      stores.recalled?.reset(String((payload.agent as { session?: { id?: unknown } }).session?.id ?? payload.agent.id));
+      // 压缩与清空**不同对待**：摘要替换不得抹掉本会话的召回历史（尤其已判过时的裁决凭证），
+      // 只有用户主动清空才整表清。去重与占用账本仍按原样重置（那两者关心“能不能重新注入”）。
+      stores.recalled?.reset(
+        String((payload.agent as { session?: { id?: unknown } }).session?.id ?? payload.agent.id),
+        payload.source === 'compact' ? 'compact' : 'clear',
+      );
       const led = ledgerFor(payload.agent.id);
       resetForCompaction(led);
       occupancyStore.save(payload.agent.id, led); // stock 归零 ⇒ 流水条目删除

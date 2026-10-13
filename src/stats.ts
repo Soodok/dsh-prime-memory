@@ -688,8 +688,10 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         rec = stores.l1.getByIds([id])[0];
         const retiredAt = new Date().toISOString();
         retired = stores.l1.retire([id], { at: retiredAt, reason: 'obsolete' }) > 0;
-        // 不再摘除：条目要留在列表里显示删除线（文本仍在上下文，直到压缩）；
-        // 检索侧已由 detachL1FromRetrieval 阻断再注入。
+        // 不再摘除：条目要留在列表里显示删除线。检索侧已由 detachL1FromRetrieval 阻断再注入。
+        // 并且标成**受保护**：这张列表不再被压缩清掉，但仍有上限淘汰——判过时的条目
+        // 是人的裁决凭证，不能因为“后面又召回了几条”而被挤出去。
+        stores.recalled?.protect(sessionId, [id]);
         if (cfg.recallFeedback?.announce !== false && stores.notices !== undefined && rec !== undefined) {
           const title = (rec.content.split('\n').find((l) => l.trim().length > 0) ?? rec.content).trim().slice(0, 120);
           stores.notices.push(sessionId, { id, title, at: Date.now() });

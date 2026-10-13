@@ -4,7 +4,10 @@
  * 语义（对齐"当前会话召回后对 session 有影响的条目"，且**旧会话重开也有效**）：
  * - 每次召回**实际注入**（recall.ts 注入成功点）按 **sessionKey**（=agent.session?.id ?? agent.id，
  *   与 pill 的 sessionId、投影 header.id 同源）记入；
- * - 上下文压缩/清空（agent/created source=compact|clear）按 sessionKey **reset**；
+ * - 上下文压缩/清空（agent/created source=compact|clear）按 sessionKey 处理，**两者不同**：
+ *   `clear`（用户主动清空会话）整表清；`compact`（摘要替换）**不清列表**——这张表是
+ *   「本会话召回过什么」的历史，而不是「此刻上下文里还有什么」；尤其**已判过时的条目
+ *   是人对这条记忆的裁决凭证**，随压缩消失等于把判定历史抹掉（2026-10-13 用户口径）。
  * - **写穿持久化到 `session-recalled.json`**（独立 sidecar，与 recall-dedupe 同款：串行原子写 +
  *   未知版本/损坏只读降级、失败绝不抛进召回热路径）→ 重启/旧会话重开时 `init()` 载回，卡不空。
  *
@@ -20,12 +23,20 @@ import { RECALL_DEDUPE_IDS_CAP, RECALL_DEDUPE_SESSION_CAP } from './recall-dedup
 
 interface RecalledEntry {
   ids: Set<string>;
+  /**
+   * 受保护条目（人已判过时/软退场的）：淘汰上限不得动它们。
+   *
+   * 为什么单独记一份而不是现场查库：这个存储只持有 id，退场态在 `l1_records.valid_to` 里；
+   * 让存储去依赖 L1Store 会把一个 sidecar 存成检索层的下游。退场发生时由调用方
+   * （`recall-feedback` 那条路径）`protect()` 一下，信息就在它手上。
+   */
+  protectedIds: Set<string>;
   updatedAt: number;
 }
 
 interface RecalledFile {
   version: typeof SESSION_RECALLED_FILE_VERSION;
-  sessions: Record<string, { recordIds: string[]; updatedAt: number }>;
+  sessions: Record<string, { recordIds: string[]; protectedIds?: string[]; updatedAt: number }>;
 }
 
 /** 条目过期清理（90 天，与 recall-dedupe 同量级）。 */
@@ -74,7 +85,12 @@ export class SessionRecalledStore {
     for (const [sid, entry] of Object.entries(data.sessions)) {
       if (!Array.isArray(entry?.recordIds)) continue;
       if (now - (entry.updatedAt ?? 0) > PRUNE_MS) continue;
-      this.entries.set(sid, { ids: new Set(entry.recordIds), updatedAt: entry.updatedAt ?? now });
+      this.entries.set(sid, {
+        ids: new Set(entry.recordIds),
+        // 旧文件没这个字段（不升版本号：升了会让老文件整体进只读降级），默认空集。
+        protectedIds: new Set(Array.isArray(entry.protectedIds) ? entry.protectedIds : []),
+        updatedAt: entry.updatedAt ?? now,
+      });
     }
   }
 
@@ -83,17 +99,39 @@ export class SessionRecalledStore {
     if (!sessionKey || recordIds.length === 0) return;
     let entry = this.entries.get(sessionKey);
     if (!entry) {
-      entry = { ids: new Set(), updatedAt: 0 };
+      entry = { ids: new Set(), protectedIds: new Set(), updatedAt: 0 };
       this.entries.set(sessionKey, entry);
     }
     for (const id of recordIds) {
       entry.ids.add(id);
+      // 淘汰只能淘汰**没被判过时的**：受保护条目数本身超顶时宁可超顶，也不能把人的裁决
+      // 凭证挤掉（那等于“因为后面又召回了几条，所以之前那条的判定历史丢了”）。
       while (entry.ids.size > RECALL_DEDUPE_IDS_CAP) {
-        const oldest = entry.ids.values().next().value;
+        const oldest = [...entry.ids].find((x) => !entry!.protectedIds.has(x));
         if (oldest === undefined) break;
         entry.ids.delete(oldest);
+        entry.protectedIds.delete(oldest);
       }
     }
+    entry.updatedAt = Date.now();
+    this.rev++;
+    this.writeChain = this.writeChain.then(() => this.persist());
+  }
+
+  /**
+   * 标为受保护（判过时/软退场）：条目留在列表里，且不受上限淘汰与压缩清理影响。
+   * id 不在本会话列表里时忽略（不凭这个调用新建条目）。
+   */
+  protect(sessionKey: string, recordIds: readonly string[]): void {
+    const entry = this.entries.get(sessionKey);
+    if (!entry) return;
+    let touched = false;
+    for (const id of recordIds) {
+      if (!entry.ids.has(id) || entry.protectedIds.has(id)) continue;
+      entry.protectedIds.add(id);
+      touched = true;
+    }
+    if (!touched) return;
     entry.updatedAt = Date.now();
     this.rev++;
     this.writeChain = this.writeChain.then(() => this.persist());
@@ -104,8 +142,15 @@ export class SessionRecalledStore {
     return entry ? [...entry.ids] : [];
   }
 
-  /** 压缩/清空：注入内容已离开上下文，清该会话活召回集（写穿）。 */
-  reset(sessionKey: string): void {
+  /**
+   * 上下文事件：按原因区分。`'clear'`（用户主动清空）整表清；`'compact'`（摘要替换）**不动**。
+   *
+   * 旧实现两种都整表清，于是“压缩过一次”就把本会话召回历史（含已判过时的裁决凭证）抹平，
+   * 而列表上那些条目本来就是为了让人看见“这条我判过”才保留删除线的。
+   * 压缩仍然重置**去重与占用账本**（那两者关心的是“能不能重新注入”，与这张展示表无关）。
+   */
+  reset(sessionKey: string, reason: 'compact' | 'clear' = 'clear'): void {
+    if (reason !== 'clear') return;
     if (!this.entries.has(sessionKey)) return;
     this.entries.delete(sessionKey);
     this.rev++;
@@ -114,8 +159,8 @@ export class SessionRecalledStore {
 
   /**
    * 注：曾有 `remove(sessionKey, recordIds)` 供「声明过时」单条摘除，已删。
-   * 理由：用户判过时后条目得留在召回列表里显示删除线（文本仍在上下文，直到压缩），
-   * 所以**只有** `reset`（压缩/清空）能让条目离开这张列表。
+   * 理由：用户判过时后条目得留在召回列表里显示删除线，所以**只有** `reset(…, 'clear')`
+   * 能让条目离开这张列表（判过时的还受 `protectedIds` 保护，连淘汰都走不到它）。
    */
 
   size(): number {
@@ -175,7 +220,11 @@ export class SessionRecalledStore {
     const sessions: RecalledFile['sessions'] = {};
     for (const [sid, e] of this.entries) {
       if (e.ids.size === 0) continue;
-      sessions[sid] = { recordIds: [...e.ids], updatedAt: e.updatedAt };
+      // 不落这个字段 = 保护只活在内存里，重启后判过时的条目又变回可被淘汰的普通条目。
+      // 空集不写键：让没保护条目的会话与改动前的文件形状逐字一致（零漂移）。
+      sessions[sid] = e.protectedIds.size > 0
+        ? { recordIds: [...e.ids], protectedIds: [...e.protectedIds], updatedAt: e.updatedAt }
+        : { recordIds: [...e.ids], updatedAt: e.updatedAt };
     }
     return { version: SESSION_RECALLED_FILE_VERSION, sessions };
   }
