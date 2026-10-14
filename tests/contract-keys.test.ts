@@ -67,6 +67,7 @@ const ENDPOINTS = [
   'dsh-memory/room-register',
   'dsh-memory/room-admin',
   'dsh-memory/wing-backfill',
+  'dsh-memory/keyword-backfill',
   'dsh-memory/session-stats',
   'dsh-memory/settings-get',
   'dsh-memory/settings-set',
@@ -158,10 +159,10 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 60 contracted endpoints, records-delete and graph included', () => {
-    // 60 = 原 59 + `mem-run-status`（md 投影长任务的进度面，导出改为自己滚到完后需要）。
-    expect(ENDPOINTS.length).toBe(60);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(60);
+  it('exposes exactly the 61 contracted endpoints, records-delete and graph included', () => {
+    // 61 = 60 + `keyword-backfill`（关键词蒸馏回填，喂 l1_fts 关键词轴的产出方）。
+    expect(ENDPOINTS.length).toBe(61);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(61);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {

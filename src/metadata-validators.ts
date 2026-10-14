@@ -93,6 +93,35 @@ export function normUsageScenario(v: unknown, max = 3): string[] {
   return out;
 }
 
+/** 关键词检索轴的磁盘保留键（喂 `l1_fts.keywords` 列，读取侧见 `sqlite.ftsKeywordText`）。 */
+export const KEYWORDS_METADATA_KEY = 'dsh_keywords';
+
+/** 单个关键词最大字符数：按“词”太主观，用字符上限兜住整句泄漏（CJK 复合术语通常 ≤12）。 */
+const KEYWORD_MAX_CHARS = 24;
+
+/**
+ * 关键词归一 + 去重（忽略大小写）+ 长度钳 + 上限。**所有 `dsh_keywords` 写回点必须过这里**。
+ *
+ * 与 `normUsageScenario` 同范式（关键词是自然语言术语/标识符，非 slug，不做字符集校验），
+ * 只是上限更紧（≤5）、单条更短。非数组/空→`[]`（缺字段中性，不抛——防单条产出失败波及整批）。
+ */
+export function normKeywords(v: unknown, max = 5): string[] {
+  if (!Array.isArray(v) || max <= 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (typeof raw !== 'string') continue;
+    const t = raw.trim();
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t.slice(0, KEYWORD_MAX_CHARS));
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /**
  * 读 **Wing（生活域）**。⚠️ 磁盘键是 `metadata.hall`——历史别名，存的其实是 **wing 值**。
  * 只认词表内的合法 wing（8 角 + general），否则 undefined。

@@ -225,6 +225,15 @@ export class L1Store {
     return this.db.patchL1Metadata(id, metadata);
   }
 
+  /**
+   * 写 metadata_json + 顺带重索引 `l1_fts`（关键词回填专用）。
+   * 与 `patchMetadata` 的区分：后者只改主表（适合 tags/room/relabel 这类不进 fts 的元数据）；
+   * 本方法额外重跑该行的 fts 插入，让新写的 `dsh_keywords` 立刻进 BM25 关键词轴。
+   */
+  patchMetadataAndReindex(id: string, metadata: Record<string, unknown>): boolean {
+    return this.db.patchL1MetadataAndReindex(id, metadata);
+  }
+
   /** repo 归属修补(ADR-0015 T3.3;人工消歧用)。CAS:expectRepoKeyName 非空时要求当前值匹配。 */
   patchRepoKey(
     id: string,

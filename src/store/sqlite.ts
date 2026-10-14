@@ -1656,6 +1656,57 @@ export class MemoryDb {
     }
   }
 
+  /**
+   * 更新 metadata_json 后**顺带重索引该行的 `l1_fts`**（关键词回填专用）。
+   *
+   * `patchL1Metadata` 本身不碰 fts——多数写回点（tags / room / relabel）不需要、也不想付这个代价；
+   * 但关键词轴若只写元数据不重索引，`ftsKeywordText` 读不到新 `dsh_keywords`，那条 BM25 轴
+   * 对存量记录永远空。故把「写元数据 + 重索引」焊在一个方法里，杜绝“写了关键词但检索看不到”。
+   *
+   * 退场/不存在的行：只从 fts 删除（幂等），不插入。fts 不可用时降级为纯 `patchL1Metadata`。
+   * 参数列表与 `stmtL1FtsInsert` / `backfillL1Fts` 逐位对齐（同三处列清单，漏一列静默丢索引）。
+   */
+  patchL1MetadataAndReindex(id: string, metadata: Record<string, unknown>): boolean {
+    const ok = this.patchL1Metadata(id, metadata);
+    if (!ok || this.degraded || !this.ftsAvailable) return ok;
+    try {
+      const r = this.db
+        .prepare(
+          `SELECT record_id, content, type, priority, scene_name, session_id, version,
+                  timestamp_str, timestamp_start, timestamp_end, metadata_json, family,
+                  scope, workspace_id FROM l1_records
+           WHERE record_id = ? AND NOT (${retiredL1Sql()})`,
+        )
+        .get(id) as Record<string, unknown> | undefined;
+      // 退场/缺失行：只确保从 fts 剔除（幂等），不插入；活跃行：删旧行再按当前（含新关键词）元数据重插。
+      this.stmtL1FtsDelete.run(id);
+      if (r) {
+        this.stmtL1FtsInsert.run(
+          tokenizeForFts(ftsKeywordText(parseMetadataJson(String(r.metadata_json ?? '{}')))),
+          tokenizeForFts(String(r.content ?? '')),
+          String(r.content ?? ''),
+          String(r.record_id ?? ''),
+          String(r.type ?? ''),
+          Number(r.priority ?? 50),
+          String(r.scene_name ?? ''),
+          String(r.session_id ?? 'default'),
+          Number(r.version ?? 0),
+          String(r.timestamp_str ?? ''),
+          String(r.timestamp_start ?? ''),
+          String(r.timestamp_end ?? ''),
+          String(r.metadata_json ?? '{}'),
+          String(r.family ?? 'chat'),
+          normScope(r.scope),
+          String(r.workspace_id ?? ''),
+        );
+      }
+    } catch (err) {
+      // 重索引失败不回滚元数据写（关键词已落主表）；下次全量 FTS 重建会对齐，并留痕。
+      this.logger?.warn(`${TAG} 关键词重索引失败(id=${id}，元数据已写、fts 待重建对齐): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return ok;
+  }
+
   /** 全量读取(调试/迁移/重嵌入用;检索请走 FTS/向量)。 */
   getAllL1(): MemoryRecord[] {
     if (this.degraded) return [];

@@ -100,6 +100,9 @@ export class WorkerMemoryBackend {
     async patchMetadata(id, metadata) {
         return this.call('patchMetadata', [id, metadata]);
     }
+    async patchMetadataAndReindex(id, metadata) {
+        return this.call('patchMetadataAndReindex', [id, metadata]);
+    }
     async size() {
         return this.call('size', []);
     }

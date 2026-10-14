@@ -17,6 +17,17 @@
   - **建议状态(`longtask-hint-get`)以纯端点提供**:判定 = 上下文占用达 `contextThresholdPct` 或 todo 漂移达 `driftThreshold`(部署配置可调);配合 `longtask-compress-tail` 作手动压缩入口。
   - **撤下浮动球 UI(`client/src/longtask-fab.ts`;beta.1 起曾随包发布)**:悬浮建议面板的归属本在 context-compression 侧(「建议启动压缩」是其领域),pm 属误载——2026-10-02 用户裁定撤下。撤下不违座位契约(settings.section 恰一个 + 输入栏 pill,body 单例不占座位),但全应用级 overlay 会与其他插件的悬浮 UI 抢占屏幕角落;长任务开关与手动压缩入口待长任务定版时落记忆设置分节。
   - **`session-mode-set` 的 `mode` 转为可选**:与 `longTask` 二选一必传——纯切长任务开关不再被迫发送档位(旧客户端恒传 mode,行为不变)。响应 `mode` 改回当前生效值。
+## [0.25.0] — 2026-10-14
+
+### 新增
+
+- **关键词蒸馏回填（`metadata.dsh_keywords` 产出方）**：此前 `l1_fts` 预留的 `keywords` 检索轴因无产出方而休眠。新增独立回填批扫 `src/keyword-backfill.ts`（镜像 wing 回填：单飞/后台/有界/失败原记录不动），对缺 `dsh_keywords` 的存量 L1 逐块送 LLM 提炼关键词与使用场景，经 `normKeywords`（≤5、去重、长度钳）归一后写回。端点 `dsh-memory/keyword-backfill`（立即返回 `{started,running,enabled,updated,failed}`），面板（WingWheel）加「关键词回填」按钮。配置 `keyword.enabled` **默认关**——关时不回填、`l1_fts` 逐字不变（零漂移）。
+- **`patchMetadataAndReindex`（关键词轴真能生效的关键）**：`patchMetadata` 只改 `l1_records`、不碰 `l1_fts`，回填若走它则写了关键词但 BM25 永远看不到。新增按行重索引（贯穿 MemoryDb→L1Store→backend 接口→InProc/Worker→worker 分派），回填写完元数据顺带重跑该行 fts 插入，新关键词立即进检索轴。测试含反向对照（纯 patchMetadata 不命中 / AndReindex 命中）。
+
+### 变更
+
+- **输入区弹窗不再渲染本会话召回列表**：WingWheel 移除 `SessionRecalledArea`——召回展示已由 brief-sidebar 接管，输入区弹窗再渲染一份属重复（组件文件保留以备回滚）。
+
 ## [0.24.2] — 2026-10-14
 
 ### 新增

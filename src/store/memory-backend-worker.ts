@@ -123,6 +123,10 @@ export class WorkerMemoryBackend implements MemoryBackend {
     return this.call<boolean>('patchMetadata', [id, metadata]);
   }
 
+  async patchMetadataAndReindex(id: string, metadata: Record<string, unknown>): Promise<boolean> {
+    return this.call<boolean>('patchMetadataAndReindex', [id, metadata]);
+  }
+
   async size(): Promise<number> {
     return this.call<number>('size', []);
   }

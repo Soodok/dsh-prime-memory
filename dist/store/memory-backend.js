@@ -21,6 +21,9 @@ export class InProcMemoryBackend {
     async patchMetadata(id, metadata) {
         return this.l1.patchMetadata(id, metadata);
     }
+    async patchMetadataAndReindex(id, metadata) {
+        return this.l1.patchMetadataAndReindex(id, metadata);
+    }
     async size() {
         return this.l1.size;
     }

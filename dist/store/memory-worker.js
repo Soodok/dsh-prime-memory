@@ -60,6 +60,9 @@ else {
                     case 'patchMetadata':
                         reply(id, true, handle.patchL1Metadata(String(args[0]), args[1]));
                         return;
+                    case 'patchMetadataAndReindex':
+                        reply(id, true, handle.patchL1MetadataAndReindex(String(args[0]), args[1]));
+                        return;
                     case 'size':
                         reply(id, true, handle.countL1());
                         return;

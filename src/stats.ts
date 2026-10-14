@@ -53,6 +53,7 @@ import { isRoomSlug } from './metadata-validators.js';
 import { InProcMemoryBackend, type MemoryBackend } from './store/memory-backend.js';
 import { isWingCorner } from './store/session-modes.js';
 import { startWingBackfill } from './wing-backfill.js';
+import { startKeywordBackfill, keywordBackfillState } from './keyword-backfill.js';
 import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
 import { computeMaturity } from './util/maturity.js';
@@ -102,6 +103,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/room-register',
   'dsh-memory/room-admin',
   'dsh-memory/wing-backfill',
+  'dsh-memory/keyword-backfill',
   'dsh-memory/session-stats',
   'dsh-memory/settings-get',
   'dsh-memory/settings-set',
@@ -1356,6 +1358,18 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         logger: deps.logger,
       });
       return r;
+    }
+    case 'dsh-memory/keyword-backfill': {
+      // 门控关：不启动，如实报 enabled=false（面板据此提示“先开关键词回填开关”）。
+      if (!cfg.keyword?.enabled) return { started: false, running: false, enabled: false, updated: 0, failed: 0 };
+      const r = startKeywordBackfill({
+        ctx: deps.ctx,
+        cfg: deps.cfg,
+        backend: stores.backend ?? new InProcMemoryBackend(stores.l1),
+        logger: deps.logger,
+      });
+      const st = keywordBackfillState();
+      return { started: r.started, running: r.running, enabled: true, updated: st.updated, failed: st.failed };
     }
 
     // ── 会话级统计(悬浮卡信息区;热路径端点,见 SessionInfoSource 的零 I/O 硬规则) ──

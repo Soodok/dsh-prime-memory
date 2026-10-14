@@ -305,6 +305,17 @@ export declare class MemoryDb {
     /** 打标作业完成/失败(失败保留行供诊断;重算由下一次触发再入队)。 */
     finishSceneRecluster(jobId: string, ok: boolean): void;
     patchL1Metadata(id: string, metadata: Record<string, unknown>): boolean;
+    /**
+     * 更新 metadata_json 后**顺带重索引该行的 `l1_fts`**（关键词回填专用）。
+     *
+     * `patchL1Metadata` 本身不碰 fts——多数写回点（tags / room / relabel）不需要、也不想付这个代价；
+     * 但关键词轴若只写元数据不重索引，`ftsKeywordText` 读不到新 `dsh_keywords`，那条 BM25 轴
+     * 对存量记录永远空。故把「写元数据 + 重索引」焊在一个方法里，杜绝“写了关键词但检索看不到”。
+     *
+     * 退场/不存在的行：只从 fts 删除（幂等），不插入。fts 不可用时降级为纯 `patchL1Metadata`。
+     * 参数列表与 `stmtL1FtsInsert` / `backfillL1Fts` 逐位对齐（同三处列清单，漏一列静默丢索引）。
+     */
+    patchL1MetadataAndReindex(id: string, metadata: Record<string, unknown>): boolean;
     /** 全量读取(调试/迁移/重嵌入用;检索请走 FTS/向量)。 */
     getAllL1(): MemoryRecord[];
     getL1ByIds(ids: string[]): MemoryRecord[];

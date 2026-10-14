@@ -29,6 +29,7 @@ export declare class WorkerMemoryBackend implements MemoryBackend {
     getByIds(ids: string[]): Promise<MemoryRecord[]>;
     list(opts: L1ListOpts): Promise<L1ListResult>;
     patchMetadata(id: string, metadata: Record<string, unknown>): Promise<boolean>;
+    patchMetadataAndReindex(id: string, metadata: Record<string, unknown>): Promise<boolean>;
     size(): Promise<number>;
     dispose(): Promise<void>;
 }

@@ -9,6 +9,17 @@
 
 이 파일은 **0.12.0** 릴리스 노트와 현재 **미출시** 변경 사항의 한국어판입니다. 전체 이력은 [CHANGELOG.md](./CHANGELOG.md)（中文）를 참조하세요.
 
+## [0.25.0] — 2026-10-14
+
+### 신규
+
+- **키워드 증류 백필(`metadata.dsh_keywords` 산출측)**: `l1_fts` 에 예약된 `keywords` 축은 산출측이 없어 휴면이었습니다. 신규 모듈 `src/keyword-backfill.ts`(wing 백필 미러: 단일비행/후대/유계/실패시 원 기록불변)가 `dsh_keywords` 누락 L1 을 chunk 로 LLM 에 보내 키워드와 사용 시나리오를 뽑고 `normKeywords`(≤5、중복 제거、길이鉗制)로 정규화 후 기입。新 엔드 `dsh-memory/keyword-backfill`、패널(WingWheel)에 “키워드 백필” 버튼。설정 `keyword.enabled` **기본关**——关 시 백필 없음、`l1_fts` 글자 그대로 동일(영 드리프트)。
+- **`patchMetadataAndReindex`**: `patchMetadata` 는 `l1_records` 만更新하고 `l1_fts` 에 안 닿아서 이대로 백필하면 BM25 가 영영 못 봄。행별 FTS 재인덱싱(MemoryDb→L1Store→backend→InProc/Worker→worker 분派 관통)추가, 새 키워드가 즉시 검색축에。테스트에역方向 대조(순수 patchMetadata 불命中 / AndReindex 命中) 포함。
+
+### 변경
+
+- **입력영 팝업에서 본 대화召回 목록 렌더를中止**: WingWheel 의 `SessionRecalledArea` 제거——召回 表示은 brief-sidebar 가接管,重复 제거(컴포넌트 파일은 롤백용 유지)。
+
 ## [0.24.2] — 2026-10-14
 
 ### 신규

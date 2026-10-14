@@ -32,6 +32,15 @@ export { isCognitiveHall, COGNITIVE_HALLS, type CognitiveHall } from './cognitiv
  * 非数组或空→ `[]`（缺字段中性，不抛——防单条抽取失败波及整切片重试）。
  */
 export declare function normUsageScenario(v: unknown, max?: number): string[];
+/** 关键词检索轴的磁盘保留键（喂 `l1_fts.keywords` 列，读取侧见 `sqlite.ftsKeywordText`）。 */
+export declare const KEYWORDS_METADATA_KEY = "dsh_keywords";
+/**
+ * 关键词归一 + 去重（忽略大小写）+ 长度钳 + 上限。**所有 `dsh_keywords` 写回点必须过这里**。
+ *
+ * 与 `normUsageScenario` 同范式（关键词是自然语言术语/标识符，非 slug，不做字符集校验），
+ * 只是上限更紧（≤5）、单条更短。非数组/空→`[]`（缺字段中性，不抛——防单条产出失败波及整批）。
+ */
+export declare function normKeywords(v: unknown, max?: number): string[];
 /**
  * 读 **Wing（生活域）**。⚠️ 磁盘键是 `metadata.hall`——历史别名，存的其实是 **wing 值**。
  * 只认词表内的合法 wing（8 角 + general），否则 undefined。

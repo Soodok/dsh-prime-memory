@@ -9,6 +9,17 @@
 
 本ファイルは **0.12.0** リリースノートと現在の**未リリース**変更の日本語版です。全履歴は [CHANGELOG.md](./CHANGELOG.md)（中文）を参照してください。
 
+## [0.25.0] — 2026-10-14
+
+### 追加
+
+- **キーワード蒸留フィッシュバック（`metadata.dsh_keywords` の産出側）**：`l1_fts` に予約された `keywords` 检索軸は産出側がなく休止状態でした。新モジュール `src/keyword-backfill.ts`（wing 回填を镜像：単飛/後台/有界/失敗時原記録不変）で `dsh_keywords` 缺失の存量 L1 を chunk で LLM に贈り、`normKeywords`（≤5、重複除去、長さ鉗制）で正规化して書き戻す。新端点 `dsh-memory/keyword-backfill`、パネル（WingWheel）に「キーワード回填」ボタン。設定 `keyword.enabled` はデフォルト**关**——关時は回填なし、`l1_fts` 逐字不変（ゼロドリフト）。
+- **`patchMetadataAndReindex`**：`patchMetadata` は `l1_records` のみ更新し `l1_fts` に触れないため、これで回填すると BM25 に永遠に見えない。行別 FTS 重索引（MemoryDb→L1Store→backend→InProc/Worker→worker 分派を貫通）を追加し、新キーワードが即座に检索軸に入る。テストは反向対照（純 patchMetadata は不命中 / AndReindex は命中）入り。
+
+### 変更
+
+- **输入区ポップアップで本会话召回リストの描画を廃止**：WingWheel から `SessionRecalledArea` を除去——召回表示は brief-sidebar が接管済みのため重复排除（コンポーネントファイルはロールバック用に保持）。
+
 ## [0.24.2] — 2026-10-14
 
 ### 追加

@@ -7,6 +7,17 @@
 
 This file covers the **0.12.0** release notes and the current **unreleased** changes in English. For the full history, see [CHANGELOG.md](./CHANGELOG.md) (Chinese).
 
+## [0.25.0] — 2026-10-14
+
+### Added
+
+- **Keyword-distillation backfill (producer for `metadata.dsh_keywords`)**: the `keywords` axis reserved in `l1_fts` had no producer and stayed dormant. New independent batch scan `src/keyword-backfill.ts` (mirrors wing-backfill: single-flight / background / bounded / failures leave records untouched) sends existing L1 records missing `dsh_keywords` to the LLM in chunks, normalizes via `normKeywords` (≤5, dedupe, length clamp) and writes back. New endpoint `dsh-memory/keyword-backfill`; a "Keyword Backfill" button in the WingWheel panel. Config `keyword.enabled` defaults **off** — off means no backfill and `l1_fts` byte-for-byte unchanged (zero drift).
+- **`patchMetadataAndReindex`**: `patchMetadata` only updates `l1_records`, never `l1_fts`, so backfilling through it would write keywords BM25 never sees. Added per-row FTS re-indexing (threaded through MemoryDb→L1Store→backend→InProc/Worker→worker dispatch) so new keywords enter the retrieval axis immediately. Test includes a reverse control (plain patchMetadata does not match; AndReindex does).
+
+### Changed
+
+- **Input-area popup no longer renders the session recall list**: WingWheel drops `SessionRecalledArea` — recall display is now owned by brief-sidebar, so a second copy in the input popup was redundant (component file kept for rollback).
+
 ## [0.24.2] — 2026-10-14
 
 ### Added

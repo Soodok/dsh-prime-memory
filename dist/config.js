@@ -226,6 +226,10 @@ export const memorySchema = Schema.object({
     usageScenario: Schema.object({
         enabled: Schema.boolean().default(false),
     }),
+    // 关键词蒸馏回填：默认关（关时不回填、不产 dsh_keywords、FTS 逐字不变）；护栏复用 backfill。
+    keyword: Schema.object({
+        enabled: Schema.boolean().default(false),
+    }),
     // 类型叙述模板（G2）：默认**开**；开时抽取 prompt 追加分类型 content 骨架（关时仍逐字不变）。
     // 默认值从关改开的理由写在上方接口注释：只给定义实测骨架齐备 0/23，
     // 而"没前因后果就不算可用"是用户定的判据，所以默认值要按可用性定而不是按保守定。

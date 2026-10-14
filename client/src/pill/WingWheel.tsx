@@ -19,7 +19,7 @@ import type { RpcFn } from '../rpc.js';
 import type { WingOverviewResponse } from '../../../src/contract.js';
 import { ensureThemeStyle } from '../theme.js';
 import { SessionInfoArea } from './SessionInfoArea.js';
-import { SessionRecalledArea } from './SessionRecalledArea.js';
+// SessionRecalledArea 已从输入区弹窗移除（召回展示由 brief-sidebar 接管）；组件文件保留以备回滚。
 
 /** 轮盘几何（px）：容器边长 / 中心 / 固定半径。 */
 const SIZE = 196;
@@ -97,6 +97,9 @@ export function WingWheel(props: {
   const isOff = props.mode === 'off';
   const [overview, setOverview] = useState<WingOverviewResponse | null>(null);
   const [backfillBusy, setBackfillBusy] = useState(false);
+  // 关键词回填：忙碌态 + 完成后的结果行（本区串按文件惯例硬编码中文，同 wing 回填）。
+  const [kwBusy, setKwBusy] = useState(false);
+  const [kwSummary, setKwSummary] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   // 回填后的轮询计时器（卸载时统一清除）
   const timersRef = useRef<number[]>([]);
@@ -164,6 +167,46 @@ export function WingWheel(props: {
         setLocalError('回填失败：' + String((e && (e as Error).message) || e));
         finish();
       });
+  };
+
+  /**
+   * 关键词蒸馏回填：对缺 `dsh_keywords` 的存量记忆批量补关键词，喂 FTS 关键词轴。
+   * 进口同一端点带单飞守卫：运行中重复调只读状态不重启，首次 running=false 即停——不会误触发二次扫描。
+   */
+  const keywordBackfill = () => {
+    if (kwBusy) return;
+    setKwBusy(true);
+    setKwSummary(null);
+    setLocalError(null);
+    let polls = 0;
+    const finish = () => setKwBusy(false);
+    const showResult = (v: { updated?: number; failed?: number }) => {
+      const fail = v.failed ?? 0;
+      setKwSummary(`关键词回填完成：成功 ${v.updated ?? 0} 条${fail > 0 ? `，失败 ${fail} 条` : ''}`);
+    };
+    const failMsg = (m: string) => { setLocalError(m); finish(); };
+    const tick = () => {
+      polls++;
+      props
+        .rpc('dsh-memory/keyword-backfill', {})
+        .then((r: { ok?: boolean; value?: { enabled?: boolean; running?: boolean; updated?: number; failed?: number }; error?: { message?: string } }) => {
+          const v = r && r.ok ? r.value : null;
+          if (!v) { failMsg('关键词回填失败'); return; }
+          if (!v.enabled) { failMsg('关键词回填未开启：请先在设置里打开 keyword.enabled'); return; }
+          if (!v.running) { showResult(v); finish(); return; }
+          if (polls >= 20) { showResult(v); finish(); return; }
+          timersRef.current.push(window.setTimeout(tick, 3000));
+        })
+        .catch(() => failMsg('关键词回填失败'));
+    };
+    props
+      .rpc('dsh-memory/keyword-backfill', {})
+      .then((r: { ok?: boolean; value?: { enabled?: boolean; running?: boolean }; error?: { message?: string } }) => {
+        if (!r || !r.ok) { failMsg(r && r.error ? '关键词回填失败：' + r.error.message : '关键词回填失败'); return; }
+        if (!r.value || !r.value.enabled) { failMsg('关键词回填未开启：请先在设置里打开 keyword.enabled'); return; }
+        timersRef.current.push(window.setTimeout(tick, 3000));
+      })
+      .catch((e: unknown) => failMsg('关键词回填失败：' + String((e && (e as Error).message) || e)));
   };
 
   // ── 离散换挡：档位永远是整数角；中心(智能)同样是可停档位，沿辐条径向滑入 ──
@@ -558,14 +601,37 @@ export function WingWheel(props: {
         />
       </div>
 
+      {/* 关键词回填（keyword 检索轴产出方）*/}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 10,
+        }}
+      >
+        <span style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)' }}>
+          {kwSummary || '为存量记忆补检索关键词'}
+        </span>
+        <ActionButton
+          label={kwBusy ? '回填中…' : '关键词回填'}
+          title="对缺 dsh_keywords 的存量记忆批量补关键词，喂 FTS 关键词检索轴（需先开 keyword.enabled）"
+          disabled={kwBusy}
+          onClick={() => keywordBackfill()}
+        />
+      </div>
+
       {props.error || localError ? (
         <div style={{ fontSize: 11, color: 'var(--dsh-mem-danger)', marginTop: 8 }}>
           {props.error || localError}
         </div>
       ) : null}
 
-      {/* 本会话召回（G-live）：普通只读列表，不挂任何常驻槽位语义 */}
-      <SessionRecalledArea rpc={props.rpc} sessionId={props.sessionId} />
+      {/*
+        本会话召回列表已移除：召回展示已由 brief-sidebar 接管，输入区弹窗再渲染一份就是重复。
+        组件文件 ./SessionRecalledArea 保留（未删），如需回滚恢复本行即可。
+      */}
 
       {/* 会话信息区 */}
       <SessionInfoArea rpc={props.rpc} sessionId={props.sessionId} />

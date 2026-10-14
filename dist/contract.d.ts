@@ -647,6 +647,18 @@ export interface WingBackfillResponse {
     started: boolean;
     running: boolean;
 }
+/** dsh-memory/keyword-backfill（关键词蒸馏回填，后台任务；门控关时 enabled=false 不启动）。 */
+export interface KeywordBackfillResponse {
+    /** true = 本次触发启动了新任务；false = 已有任务在跑或门控关。 */
+    started: boolean;
+    running: boolean;
+    /** 门控 `cfg.keyword.enabled`；关时不启动，面板据此提示先开开关。 */
+    enabled: boolean;
+    /** 本进程累计成功回填条数（重启归零；观测用）。 */
+    updated: number;
+    /** 失败/跳过数。 */
+    failed: number;
+}
 /** dsh-memory/session-stats(悬浮卡信息区;热路径端点)。 */
 export interface SessionStatsRequest {
     sessionId: string;
@@ -1650,6 +1662,7 @@ export interface DshMemoryRequestMap {
     'dsh-memory/room-register': RoomRegisterRequest;
     'dsh-memory/room-admin': RoomAdminRequest;
     'dsh-memory/wing-backfill': Record<string, never>;
+    'dsh-memory/keyword-backfill': Record<string, never>;
     'dsh-memory/session-stats': SessionStatsRequest;
     'dsh-memory/settings-get': Record<string, never>;
     'dsh-memory/settings-set': SettingsSetRequest;
@@ -1712,6 +1725,7 @@ export interface DshMemoryResponseMap {
     'dsh-memory/room-register': RoomRegisterResponse;
     'dsh-memory/room-admin': RoomAdminResponse;
     'dsh-memory/wing-backfill': WingBackfillResponse;
+    'dsh-memory/keyword-backfill': KeywordBackfillResponse;
     'dsh-memory/session-stats': SessionStatsResponse;
     'dsh-memory/settings-get': SettingsGetResponse;
     'dsh-memory/settings-set': SettingsSetResponse;

@@ -50,6 +50,8 @@ export interface MemoryBackend {
     list(opts: L1ListOpts): Promise<L1ListResult>;
     /** **只**更新 metadata_json(不动 content,不重算嵌入)。 */
     patchMetadata(id: string, metadata: Record<string, unknown>): Promise<boolean>;
+    /** 写 metadata_json + 重索引该行的 `l1_fts`（关键词回填专用；新 `dsh_keywords` 要立刻进 BM25 轴）。 */
+    patchMetadataAndReindex(id: string, metadata: Record<string, unknown>): Promise<boolean>;
     /** L1 记录总数(巡检进度分母)。 */
     size(): Promise<number>;
     /** 释放后端(worker 实现会 terminate 线程)。 */
@@ -68,6 +70,7 @@ export declare class InProcMemoryBackend implements MemoryBackend {
     getByIds(ids: string[]): Promise<MemoryRecord[]>;
     list(opts: L1ListOpts): Promise<L1ListResult>;
     patchMetadata(id: string, metadata: Record<string, unknown>): Promise<boolean>;
+    patchMetadataAndReindex(id: string, metadata: Record<string, unknown>): Promise<boolean>;
     size(): Promise<number>;
     dispose(): Promise<void>;
 }

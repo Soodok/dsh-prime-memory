@@ -205,6 +205,18 @@ export interface MemoryConfig {
     enabled: boolean;
   };
   /**
+   * 关键词蒸馏回填（keyword 检索轴的产出方）：**独立回填批扫**，为缺 `metadata.dsh_keywords` 的
+   * L1 记录批量补关键词，喂 `l1_fts` 的关键词轴（`ftsKeywordText` 读该键）。由
+   * `dsh-memory/keyword-backfill` 端点触发，镜像 wing 回填（单飞/后台/有界）。
+   *
+   * **默认关**：关时不回填、不产该键、`l1_fts.keywords` 列逐字不变（零漂移）。护栏复用 `backfill`。
+   * 注：写回走 `patchMetadata` 只改主表，回填会**额外重索引该记录的 fts 行**（见 keyword-backfill），
+   * 否则关键词轴对存量记录不生效。
+   */
+  keyword: {
+    enabled: boolean;
+  };
+  /**
    * 类型叙述模板（G2）：抽取时按 7 类型各自的“前因后果”骨架写 content。
    *
    * 默认从 false 改 **true**（用户定的可用性判据：“没有前因后果、写不全就不算可用”）。
@@ -605,6 +617,10 @@ export const memorySchema: ConfigSchema = Schema.object({
   }),
   // 使用场景（G1）：默认关；开时抽取 prompt 追加 usageScenario 指令（off 逐字不变）。
   usageScenario: Schema.object({
+    enabled: Schema.boolean().default(false),
+  }),
+  // 关键词蒸馏回填：默认关（关时不回填、不产 dsh_keywords、FTS 逐字不变）；护栏复用 backfill。
+  keyword: Schema.object({
     enabled: Schema.boolean().default(false),
   }),
   // 类型叙述模板（G2）：默认**开**；开时抽取 prompt 追加分类型 content 骨架（关时仍逐字不变）。

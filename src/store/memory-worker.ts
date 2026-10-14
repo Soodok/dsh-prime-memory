@@ -67,6 +67,9 @@ if (typeof data.dbPath !== 'string' || data.dbPath === '') {
           case 'patchMetadata':
             reply(id, true, handle.patchL1Metadata(String(args[0]), args[1] as Record<string, unknown>));
             return;
+          case 'patchMetadataAndReindex':
+            reply(id, true, handle.patchL1MetadataAndReindex(String(args[0]), args[1] as Record<string, unknown>));
+            return;
           case 'size':
             reply(id, true, handle.countL1());
             return;
