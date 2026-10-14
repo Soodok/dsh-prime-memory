@@ -7,6 +7,26 @@
 
 This file covers the **0.12.0** release notes and the current **unreleased** changes in English. For the full history, see [CHANGELOG.md](./CHANGELOG.md) (Chinese).
 
+## [0.24.1] — 2026-10-14
+
+### Added
+
+- **Suffix invariant for the projection (`convergeDisabledSuffix`)**: `.memory.md` vs `.memory.md.disable` is decided solely by "is this record retired in the library" — independent of `name` and of which path retired it. Every record is reconciled through three checks (file existence, current suffix, fingerprint match). A hand-made `.disable` is a file-side retirement proof (the library cannot see it while P2 is off), so it is only reported as `both`, never touched.
+- **The library→file hook moved into `L1Store` (`store/memory-md-sync.ts`)**: `setFileSyncHook` fires at the four confluence points (`appendNew` / `retire` / `restore` / `rename`) instead of the eight call sites where event hooks used to hang — on a real machine 920 retired records had only 8 `.disable` files, all from the recall panel path. Machine-side retirements (merge supersede, conflict loss) and model-side `memory_add` now follow automatically, and new call sites cannot be forgotten.
+- **Rename follows the file**: after `rename()` the projection moves to the new name (the `.disable` sibling travels with it) and the ledger key is rewritten; if the old path had no file the new name is written instead, and an occupied target is reported rather than overwritten.
+- **Rolling projection with a progress bar (`store/memory-md-run.ts`, new endpoint `dsh-memory/mem-run-status`)**: one click pushes the export cursor to the end of the table and then the suffix cursor, with cross-round `maxPasses` / `totalBudgetMs` guards; if the budget runs out it says how many files remain instead of stopping silently. The panel reuses the ruminate/rebuild progress bar.
+
+### Changed
+
+- **Per-click file-update budget**: `memExport.maxRecords` default 300 → **2000**, plus a runtime knob `live.mdExportMaxRecords` (0 = follow the deployment default, no restart). The panel's misleading "single-action guardrail" is renamed to **"per-click file update budget"**, counted in files, and echoed from the server's actually applied `appliedMaxRecords`.
+
+### Fixed
+
+- **The quota counted traversal, not disk actions** — unchanged entries consumed budget, so a second click rescanned the same first N; at 1210 records backfilling meant four clicks.
+- **O(n²) ledger writes**: the converger flushed the ledger per rename (the ledger is one atomic JSON rewrite), so 300 records meant 300 full rewrites and the wall-clock budget split the job into several clicks. Now: mark dirty in the loop, flush once at the end.
+- **Adjacent fires stepping on each other**: projection work is now serialized in the background. Previously each fire opened its own promise, so `appendNew` followed immediately by `retire` overlapped — the second task's converger saw "no such file" before the first one wrote it, and the retired record stayed on `.memory.md` until the next full export.
+- **Permanent duplicates after revival**: the "both files exist" case for a live record only reported and never reconciled. The stale `.disable` is now removed only when all three hold: same ledger id, its bytes unchanged since we wrote it, and the `.memory.md` copy is exactly the current render.
+
 ## [0.24.0] — Unreleased (local line `0.24.0-local.0…3`, 2026-10-13)
 
 ### Added

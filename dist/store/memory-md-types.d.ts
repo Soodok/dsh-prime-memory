@@ -25,7 +25,36 @@ export interface MemExportReport {
     capped: boolean;
 }
 /**
- * `dsh-memory/mem-export` 的响应 = 导出报告 + 命名回填计数。
+ * 后缀不变式收敛报告（库里的“是否有效” ⇄ 文件后缀）。
+ *
+ * 口径：投射文件的后缀**只由这条记录在库里是否退场决定**，与 `name` 字段无关、
+ * 与“是哪条路径把它退场的”也无关。所以这个计数面不挂在某个按钮的事件后面，
+ * 而是每次导出都按「文件存在性 + 当前后缀 + 指纹一致性」重算一遍。
+ */
+export interface SuffixReport {
+    /** 本次遍历过的记录数（含什么都不做的）。 */
+    scanned: number;
+    /** 已退场但盘上还是 `.memory.md` → 已改名。 */
+    renamed: number;
+    /** 在库但只剩 `.disable`（且账本认得是我们写的）→ 已改回。 */
+    revived: number;
+    /** 改名前发现文件与账本指纹不符（人动过正文）；**仍照改**，改名不丢字节。 */
+    edited: number;
+    /** 后缀已经对上，没碰盘。 */
+    already: number;
+    /** 两份都在（或 `.disable` 不是我们写的）：语义相冲，**保守不动**，交人裁决。 */
+    both: number;
+    /** 盘上根本没有对应文件（从没导出过）：不凭空造。 */
+    absent: number;
+    /** 路径越界 / 单条失败（都各自留痕，不阻断整批）。 */
+    skipped: number;
+    /** 因护栏未处理到的剩余条数。 */
+    remaining: number;
+    /** 是否因墙钟/条数护栏提前收工（>0 时 UI 提示“再点一次继续”）。 */
+    capped: boolean;
+}
+/**
+ * `dsh-memory/mem-export` 的响应 = 导出报告 + 命名回填计数 + 后缀收敛计数。
  *
  * 为什么要单开一个类型：投射默认开后，导出这条路径现在会先做一步**写库**的命名回填
  * （给 `name` 为空的记录派生全库唯一的文件身份名）。它只改 `name`——内容/类型/退场态都不动，
@@ -37,9 +66,49 @@ export interface MemExportResponse extends MemExportReport {
     named: number;
     /** 起名算出来但落库失败的条数（下轮会重试）。 */
     nameFailed: number;
+    /** 导出后紧跟的后缀收敛结果（退场记录的文件该带 `.disable`）。 */
+    suffix: SuffixReport;
+    /**
+     * 本次实际滚了几轮（一轮 = 一次有界遍历）。
+     *
+     * 要报这个：`written`/`renamed` 是各轮累加的，人得知道“一次点击背后跑了 4 轮”
+     * 才不会把面板上的时长误读成“一次只能做这么多”。
+     */
+    passes: number;
+    /**
+     * 本次**实际生效**的单次动作护栏（包了 `live.mdExportMaxRecords` 覆盖后的值）。
+     *
+     * 为什么报而不是让人自己算：面板上那个旋钮经 `effectiveCfg` 落地，人看到的数字
+     * 必须是被应用过的那个，否则“改了但没生效”与“改了且生效”在报告上长得一样。
+     */
+    appliedMaxRecords: number;
 }
 /**
- * 孤儿投射文件扫描报告（P4.4）。
+ * 投影长任务的进度快照（`dsh-memory/mem-run-status` 的响应）。
+ *
+ * 形状住在这里而不是执行侧：`contract.ts` 要 import 它但不能把 `node:fs` 拖进
+ * client 编译程序（同本文件头的纪律）。
+ */
+export interface MdRunStatus {
+    running: boolean;
+    /** 当前阶段：导出（库→文件）/ 收敛（后缀对齐）/ 已结束。 */
+    phase: 'idle' | 'export' | 'converge' | 'done' | 'failed';
+    /** 第几轮（一轮 = 一次有界遍历）。 */
+    pass: number;
+    /** 两阶段合计已推进的条数（分母 = `total`×2，两阶段各算一遍全表）。 */
+    done: number;
+    total: number;
+    written: number;
+    renamed: number;
+    /** 人读的一行进度说明。 */
+    detail: string;
+    startedAt: string;
+    endedAt: string;
+    /** 出错或总预算用尽的说明（非空 = 需要再点一次续跑）。 */
+    notice?: string;
+}
+/**
+ * 孤儿投射文件遍历报告（P4.4）。
  *
  * “孤儿”只算**有账可查且没人认领**的路径：账本里没有的来路不明文件（人自己放进投射目录
  * 等着被同步的输入）一律不报也不动，所以这里没有“陌生文件”这一项——那个计数在同步侧。

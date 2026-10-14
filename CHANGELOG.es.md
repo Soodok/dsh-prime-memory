@@ -16,6 +16,21 @@ y los números de versión obedecen al [versionado semántico](https://semver.or
 > **Convención de capturas de interfaz**: las entradas que traen cambios de interfaz conservan capturas reales
 > en `assets/changelog/<número de versión>/<número de dos dígitos>-<resumen>.png` y las citan en el texto con una ruta relativa: en el registro de cambios se ve directamente cómo luce la interfaz de la nueva versión.
 
+## [0.24.1] — 2026-10-14
+
+### Añadido
+- **Invariante de sufijo de la proyección (`convergeDisabledSuffix`)**: `.memory.md` / `.memory.md.disable` depende solo de «si el registro está retirado en la biblioteca», sin relación con `name` ni con la ruta que lo retiró. Se comprueba por entrada: existencia del fichero, sufijo actual, huella coincidente. Un `.disable` hecho a mano es prueba del lado fichero: solo se informa como `both`, no se toca.
+- **El gancho biblioteca→fichero se recoge en `L1Store` (`store/memory-md-sync.ts`)**: `setFileSyncHook` se dispara en los cuatro puntos de confluencia (`appendNew` / `retire` / `restore` / `rename`) en lugar de los ocho sitios de llamada; en máquina real 920 retirados tenían solo 8 `.disable`, todos del panel de recall. Los retiros automáticos (fusión, conflicto perdido) y el `memory_add` del modelo se propagan solos.
+- **El fichero sigue al renombrado**: tras `rename()` la proyección se muda al nombre nuevo (el hermano `.disable` viaja con él) y se reescribe la clave del libro mayor; si el camino viejo no tenía fichero se escribe el nuevo nombre, y si el destino está ocupado solo se avisa.
+- **Ejecución en rollo con barra de progreso (`store/memory-md-run.ts`, nuevo endpoint `dsh-memory/mem-run-status`)**: un clic empuja el cursor de exportación hasta el final de la tabla y luego el de convergencia, con topes entre pasadas `maxPasses` / `totalBudgetMs`; lo que queda se dice en `notice`.
+### Cambiado
+- **Presupuesto de actualización por clic**: `memExport.maxRecords` de 300 → **2000**, más el mando en caliente `live.mdExportMaxRecords` (0 = sigue el valor desplegado, sin reiniciar). El rótulo engañoso «barandilla de acción única» pasa a **«presupuesto de actualización de ficheros»**, unidad «ficheros/clic», con el valor realmente aplicado `appliedMaxRecords`.
+### Corregido
+- El presupuesto contaba el recorrido, no las acciones en disco (los «sin cambio» gastaban cuota): 1210 registros exigían cuatro clics.
+- Escritura del libro mayor O(n²): un `flush()` por renombrado (el libro es un JSON reescrito entero) → ahora marca sucia en el bucle y un único `flush()` al final.
+- Dos disparos consecutivos se pisaban → la proyección se **serializa** en segundo plano; antes la segunda tarea veía «no hay fichero» antes de que la primera lo escribiera y el retirado se quedaba en `.memory.md`.
+- Duplicados permanentes tras reactivar → el `.disable` obsoleto solo se borra si se cumplen «misma id en el libro + bytes sin cambiar desde que lo escribimos + el `.memory.md` es justo el render actual».
+
 ## [0.24.0] — Sin publicar (línea local `0.24.0-local.0…3`, 2026-10-13)
 
 ### Añadido

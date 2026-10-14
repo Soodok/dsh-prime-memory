@@ -633,6 +633,7 @@ roomRegistry) {
             const record = buildRecord(args, scene, Date.now(), workspaceIdOf(exec));
             applyManualRedaction(record, cfg, logger);
             await stores.l1.appendNew([record]);
+            // 新增的投射落盘由 `appendNew` 里的 store 钩子承接（写删对称，这里不双写）。
             logger.info(`[memory] 高权限写入记忆(${record.type}${record.metadata?.hall ? '/' + String(record.metadata.hall) : ''},时间轴 ${record.persistence ?? '?'}):${record.content.slice(0, 120)}`);
             return { id: record.id };
         },
@@ -759,7 +760,7 @@ roomRegistry) {
                 records.push(record);
             });
             if (records.length > 0)
-                await stores.l1.appendNew(records);
+                await stores.l1.appendNew(records); // 同上：批量导入也由钩子上盘
             logger.info(`[memory] 批量导入 ${records.length} 条(幂等跳过 ${deduped} 条,场景 ${scene}${sourceId ? `,来源 ${sourceId}` : ''})`);
             return { written: records.length, deduped, ids: records.map((r) => r.id), skipped };
         },
@@ -832,6 +833,7 @@ roomRegistry) {
             // 可以在记忆列表里恢复,而不必去 records/*.jsonl 事实源手工捞。
             const n = stores.l1.retire(ids, { at: new Date().toISOString(), reason: 'manual' });
             logger.info(`[memory] 高权限退场(软删)记忆 ${n} 条(${ids.join('，')})`);
+            // 投射文件跟随不在这里点火：`l1.retire()` 是汇流口，钩子在那里（`store/memory-md-sync.ts`）。
             return { deleted: n, ids };
         },
     })));

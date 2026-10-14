@@ -16,7 +16,7 @@
  */
 import { dirname } from 'node:path';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { digest, recordDigest, renderRecord, safeJoin, targetFor, resolveMemoriesRoot } from './memory-md.js';
+import { digest, disablePathOf, isRetiredRecord, recordDigest, renderRecord, safeJoin, targetFor, resolveMemoriesRoot } from './memory-md.js';
 // 路径纪律已收到 `memory-md.ts`（N10 后导出/对账/失效/归档四处共用）；这里再导一次
 // 只为不拆已有调用方（stats.ts 与用例都从本模块拿它们）。
 export { resolveMemoriesRoot, safeJoin };
@@ -84,6 +84,33 @@ export async function exportRecords(deps) {
                 }
                 await tick();
                 continue;
+            }
+            // 退场记录的投射可能已经在 `.disable` 上（后缀不变式，见 `memory-md-disable.ts`）。
+            // 这时“非退场路径上没文件”**不等于**“从没导出过”：拿 `.disable` 那份比指纹，
+            // 一致就记未变。不拦这个的话，每轮导出都会把刚改完名的文件写回非退场路径，
+            // 收敛再改一次名——两轮之间来回倒腾，`written` 永远不归零。
+            if (existing === undefined && isRetiredRecord(r)) {
+                const dis = disablePathOf(abs);
+                const disText = await readFile(dis, 'utf8').catch(() => undefined);
+                // 两种形状都得认（都是合法盘态）：
+                // · 先导出后退场 → 改名分支不重写内容，盘上是 live 渲染（既有用例钉着）；
+                // · 生下来就退场、首次导出就是那份 → 盘上是带 `retired: true` 的当前渲染。
+                // 拿其中任一份对上就记未变；都对不上（正文被改过）才落到下面重写，由收敛再改名。
+                const liveDg = digest(renderRecord({ ...r, validTo: undefined }).text);
+                if (disText !== undefined && (digest(disText) === liveDg || digest(disText) === fileDg)) {
+                    report.unchanged++;
+                    if (ledger.get(dis) === undefined) {
+                        try {
+                            await stamp(ledger, r, target.root, target.relPath, dis, dbDg, digest(disText));
+                            worked++;
+                        }
+                        catch (err) {
+                            logger?.warn(`[memory] md 投射退场凭证补账失败(下轮仍会重补): ${dis} - ${err instanceof Error ? err.message : String(err)}`);
+                        }
+                    }
+                    await tick();
+                    continue;
+                }
             }
             await mkdir(dirname(abs), { recursive: true });
             await writeFile(abs, text, 'utf8');

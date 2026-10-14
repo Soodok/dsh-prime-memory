@@ -112,6 +112,7 @@ const ENDPOINTS = [
   'dsh-memory/recall-feedback',
   'dsh-memory/workspace-relink',
   'dsh-memory/mem-export',
+  'dsh-memory/mem-run-status',
   'dsh-memory/mem-reconcile',
   'dsh-memory/mem-sync',
   'dsh-memory/mem-orphans',
@@ -157,9 +158,10 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 59 contracted endpoints, records-delete and graph included', () => {
-    expect(ENDPOINTS.length).toBe(59);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(59);
+  it('exposes exactly the 60 contracted endpoints, records-delete and graph included', () => {
+    // 60 = 原 59 + `mem-run-status`（md 投影长任务的进度面，导出改为自己滚到完后需要）。
+    expect(ENDPOINTS.length).toBe(60);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(60);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {

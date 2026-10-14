@@ -16,6 +16,21 @@ e i numeri di versione rispettano il [versionamento semantico](https://semver.or
 > **Convenzione degli screenshot dell'interfaccia**: le voci che apportano cambiamenti alla UI conservano una registrazione reale
 > in `assets/changelog/<numero di versione>/<numero a due cifre>-<breve descrizione>.png` e la richiamano nel testo con un percorso relativo: nel changelog si vede direttamente come appare la UI della nuova versione.
 
+## [0.24.1] — 2026-10-14
+
+### Aggiunto
+- **Invariante di suffisso della proiezione (`convergeDisabledSuffix`)**: `.memory.md` / `.memory.md.disable` dipende solo da «il record è ritirato in libreria», non da `name` né dal percorso che lo ha ritirato. Verifica per voce: esistenza del file, suffisso attuale, corrispondenza dell'impronta. Un `.disable` fatto a mano è una prova lato file: si segnala come `both`, non lo si tocca.
+- **Gancio libreria→file raccolto in `L1Store` (`store/memory-md-sync.ts`)**: `setFileSyncHook` scatta nei quattro punti di confluenza (`appendNew` / `retire` / `restore` / `rename`) invece che sugli otto siti di chiamata — su macchina reale 920 ritirati avevano solo 8 `.disable`, tutti dal pannello recall. I ritiri automatici (fusione, conflitto perso) e il `memory_add` del modello ora seguono da soli.
+- **Il file segue la rinomina**: dopo `rename()` la proiezione si sposta sul nome nuovo (la sorella `.disable` viaggia con essa) e la chiave del ledger viene riscritta; se il vecchio path non aveva file si scrive il nome nuovo, se la destinazione è occupata si segnala senza sovrascrivere.
+- **Esecuzione a rotazione e barra di avanzamento (`store/memory-md-run.ts`, nuovo endpoint `dsh-memory/mem-run-status`)**: un click spinge il cursore di export in coda alla tabella e poi quello di convergenza, con limiti tra i giri `maxPasses` / `totalBudgetMs`; il resto è dichiarato in `notice`.
+### Cambiato
+- **Budget di aggiornamento file per click**: `memExport.maxRecords` 300 → **2000**, più la manopola a caldo `live.mdExportMaxRecords` (0 = segue il default di deployment, senza riavvio). L'etichetta fuorviante «barriera d'azione singola» diventa **«budget aggiornamento file per click»**, unità «file/click», valore riletto dall'effettivo `appliedMaxRecords`.
+### Corretto
+- Il budget contava la scansione invece delle azioni su disco (anche gli «immutati» consumavano quota): 1210 record richiedevano quattro click.
+- Scrittura del ledger O(n²): un `flush()` per rinomina (il ledger è un JSON riscritto per intero) → ora sporco nel ciclo, un solo `flush()` alla fine.
+- Due inneschi ravvicinati si calpestavano → la proiezione è **serializzata** in background; prima il secondo task vedeva «file assente» prima che il primo scrivesse, e il ritirato restava su `.memory.md`.
+- Duplicati permanenti dopo il ripristino → il `.disable` obsoleto si rimuove solo se valgono «stesso id a ledger + byte immutati da quando lo scrivemmo + il `.memory.md` è esattamente il render corrente».
+
 ## [0.24.0] — Non rilasciato (linea locale `0.24.0-local.0…3`, 2026-10-13)
 
 ### Aggiunto

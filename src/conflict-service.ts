@@ -37,7 +37,9 @@ export interface ConflictResolveDeps {
     // 第 2 轮复查 R-N2,与 N4 同类:都是"只建了方法、没改消费侧类型"。
     'listConflictPending' | 'resolveConflictPending' | 'retire' | 'syncGraphDisputed' | 'markConflictReviewed'
   >;
-  /** `conflictFreeze.enabled`。未开启时队列恒空,直接给出提示而非静默无操作。 */
+  /** `conflictFreeze.enabled`。未开启时队列恒空,直接给出提示而非静默无操作。
+   *  退场/恢复的文件跟随不在本模块点火：裁决败方走 `l1.retire()`，投射挂钩已收口在
+   *  `L1Store` 的汇流口（`store/memory-md-sync.ts`），这里再挂一刀就是第二事实源。 */
   conflictFreezeEnabled: boolean;
 }
 
@@ -129,6 +131,7 @@ export async function resolveConflictPair(
       pairId,
       ...(pair.conflictType ? { conflictType: pair.conflictType } : {}),
     });
+    // 退场即上盘：`l1.retire()` 里已点火（机器侧与本条同一个入口），所以这里不重发。
   }
 
   // 图谱 disputed 重算:此刻仍未裁决的对才是争议集,已了结的节点自动复原 active

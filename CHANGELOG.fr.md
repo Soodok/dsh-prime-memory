@@ -16,6 +16,21 @@ et les numéros de version respectent la [gestion sémantique de version](https:
 > **Convention des captures d'écran d'interface** : les entrées apportant des changements d'interface conservent une capture réelle
 > dans `assets/changelog/<numéro de version>/<numéro à deux chiffres>-<résumé>.png` et y font référence par un chemin relatif : on voit directement dans le journal à quoi ressemble l'interface de la nouvelle version.
 
+## [0.24.1] — 2026-10-14
+
+### Ajouté
+- **Invariance de suffixe de la projection (`convergeDisabledSuffix`)** : `.memory.md` / `.memory.md.disable` ne dépend que de « l'enregistrement est-il retiré en base », sans rapport avec `name` ni avec le chemin qui l'a retiré. Contrôle par entrée : existence du fichier, suffixe actuel, correspondance d'empreinte. Un `.disable` fait à la main est une preuve côté fichier : on le signale en `both`, on n'y touche pas.
+- **Hook base→fichier regroupé dans `L1Store` (`store/memory-md-sync.ts`)** : `setFileSyncHook` se déclenche aux quatre points de confluence (`appendNew` / `retire` / `restore` / `rename`) au lieu des huit sites d'appel — sur machine réelle, 920 retraits n'avaient que 8 `.disable`, tous issus du panneau de rappel. Les retraits automatiques (fusion, conflit perdu) et le `memory_add` du modèle suivent désormais automatiquement.
+- **Le fichier suit le renommage** : après `rename()`, la projection déménage vers le nouveau nom (le jumeau `.disable` part avec lui) et la clé du registre est réécrite ; si l'ancien chemin n'avait pas de fichier, on écrit le nouveau nom ; si la destination est prise, on signale sans écraser.
+- **Exécution en rouleau + barre de progression (`store/memory-md-run.ts`, nouvel endpoint `dsh-memory/mem-run-status`)** : un clic pousse le curseur d'export jusqu'en fin de table puis le curseur de convergence, avec garde-fous inter-tours `maxPasses` / `totalBudgetMs` ; le reste est dit honnêtement dans `notice`.
+### Changé
+- **Budget de mise à jour fichiers par clic** : `memExport.maxRecords` 300 → **2000**, plus une molette à chaud `live.mdExportMaxRecords` (0 = suit le défaut déployé, sans redémarrage). Le panneau « garde-fou d'action unique », mal nommé, devient **« budget de mise à jour fichiers »**, unité « fichiers/clic », valeur relue depuis `appliedMaxRecords` réellement appliqué.
+### Corrigé
+- Le budget comptait le parcours et non les actions disque (les « inchangés » consommaient le quota) : 1210 enregistrements exigeaient quatre clics.
+- Écriture du registre O(n²) : un `flush()` par renommage (le registre est un JSON réécrit intégralement) → désormais marque sale en boucle, un seul `flush()` à la fin.
+- Deux déclenchements proches se marchaient dessus → la projection est **sérialisée** en arrière-plan ; auparavant la seconde tâche voyait « fichier absent » avant que la première ait écrit, et le retrait restait sur `.memory.md`.
+- Doublons permanents après réactivation → l'ancien justificatif `.disable` n'est supprimé que si « même id au registre + octets inchangés depuis son écriture + `.memory.md` exactement le rendu courant » sont réunis.
+
 ## [0.24.0] — Non publié (ligne locale `0.24.0-local.0…3`, 2026-10-13)
 
 ### Ajouté

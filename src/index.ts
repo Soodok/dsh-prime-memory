@@ -53,6 +53,7 @@ import { registerSkillTools } from './tools/skills.js';
 import { RecallUsageStore } from './store/recall-usage.js';
 import { RecallFeedbackStore } from './store/recall-feedback.js';
 import { MdLedgerStore } from './store/memory-md-ledger.js';
+import { makeFileSyncHook } from './store/memory-md-sync.js';
 import { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { registerSlotsProjection } from './projection/slots.js';
 import { registerRecallProjection } from './projection/recall.js';
@@ -459,6 +460,27 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   const mdLedger = new MdLedgerStore(dataDir, logger);
   await mdLedger.init();
   stores.mdLedger = mdLedger;
+  // 库→文件投射的跟随钩子：**收口在 `L1Store` 的四个汇流口**（appendNew / retire / restore / rename），
+  // 不在这里往调用方分发。不变式本体在 `store/memory-md-sync.ts`。
+  // 为什么只能装配层建：工具面/冲突裁决各自看不到 cfg + ledger + dataDir 的完整视野。
+  const fileSync = makeFileSyncHook({
+    getByIds: (list) => stores.l1.getByIds([...list]),
+    // 现读生效配置（volatile 热更后不必重启）：与 RPC 分发用同一个 `effectiveCfg` 口径。
+    exportCfg: () => {
+      const exp = effectiveCfg(config, live).memExport;
+      return {
+        enabled: exp?.enabled === true,
+        root: exp?.root,
+        maxRecords: exp?.maxRecords ?? 2000,
+        timeBudgetMs: exp?.timeBudgetMs ?? 120_000,
+      };
+    },
+    dataDir,
+    ledger: () => stores.mdLedger,
+    logger,
+  });
+  // 晚绑定：`stores.l1` 在 md 账本之前就建好了，这里只把钩子接上去。
+  stores.l1.setFileSyncHook(fileSync);
   const recall = registerRecall(ctx, config, stores, logger, live, modes, dataDir, recallUsage);
   runner.setAfterRun(recall.invalidateProfile);
   registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);

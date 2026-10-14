@@ -604,3 +604,19 @@ describe('rpc: room registry wiring(HTTP 面全链路)', () => {
     h.db.close();
   });
 });
+
+describe('md 投射护栏旋钮：settings-set 白名单必须收 mdExportMaxRecords', () => {
+  it('写进去读得到（被静默丢 = 面板上能改但没反应）；越界值钳到 0~10000', async () => {
+    const h = await harness({ live: liveHandle() });
+    await h.call('dsh-memory/settings-set', { mdExportMaxRecords: 700 });
+    const got = await h.call('dsh-memory/settings-get', {}) as { settings: { mdExportMaxRecords?: number } };
+    expect(got.settings.mdExportMaxRecords).toBe(700);
+    await h.call('dsh-memory/settings-set', { mdExportMaxRecords: 99_999 });
+    const hi = await h.call('dsh-memory/settings-get', {}) as { settings: { mdExportMaxRecords?: number } };
+    expect(hi.settings.mdExportMaxRecords).toBe(10_000);
+    await h.call('dsh-memory/settings-set', { mdExportMaxRecords: -5 });
+    const lo = await h.call('dsh-memory/settings-get', {}) as { settings: { mdExportMaxRecords?: number } };
+    expect(lo.settings.mdExportMaxRecords).toBe(0);
+    h.db.close();
+  });
+});

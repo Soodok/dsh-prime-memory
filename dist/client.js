@@ -1675,8 +1675,13 @@ var __defProp = Object.defineProperty;
 		  const head = `已写 ${rep.written} · 未变 ${rep.unchanged} · 跳过 ${rep.skipped}`;
 		  const named = rep.named > 0 ? ` · 新起名 ${rep.named} 条` : "";
 		  const nameBad = rep.nameFailed > 0 ? ` · 起名失败 ${rep.nameFailed} 条(下轮重试)` : "";
-		  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 条，再点一次继续` : "";
-		  return head + named + nameBad + tail;
+		  const s = rep.suffix;
+		  const suffix = s && s.renamed + s.revived + s.both + s.edited > 0 ? ` · 后缀对齐 改名 ${s.renamed}${s.edited > 0 ? `(人改过 ${s.edited})` : ""} 改回 ${s.revived}${s.both > 0 ? ` · 冲突 ${s.both}` : ""}` : "";
+		  const suffixMore = s && s.capped && s.remaining > 0 ? ` · 后缀还有 ${s.remaining} 个文件待对齐，再点一次继续` : "";
+		  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : "";
+		  const budget = typeof rep.appliedMaxRecords === "number" && rep.appliedMaxRecords > 0 ? ` · 本次预算 ${rep.appliedMaxRecords} 个文件` : "";
+		  const passes = typeof rep.passes === "number" && rep.passes > 1 ? ` · 共滚 ${rep.passes} 轮` : "";
+		  return head + named + nameBad + suffix + suffixMore + budget + passes + tail;
 		}
 		function lineOfReconcile(rep) {
 		  const parts = [
@@ -1723,6 +1728,54 @@ var __defProp = Object.defineProperty;
 		  const [orphanArmed, setOrphanArmed] = (0, import_react7.useState)(false);
 		  const [armed, setArmed] = (0, import_react7.useState)(false);
 		  const [error, setError] = (0, import_react7.useState)(void 0);
+		  const [budgetDraft, setBudgetDraft] = (0, import_react7.useState)("");
+		  const [budgetNote, setBudgetNote] = (0, import_react7.useState)("");
+		  const [prog, setProg] = (0, import_react7.useState)(void 0);
+		  const pullProgress = () => {
+		    void rpc("dsh-memory/mem-run-status", {}).then((r) => {
+		      const v = r && r.ok ? r.value : void 0;
+		      if (v !== void 0) setProg(v);
+		    }).catch(() => {
+		    });
+		  };
+		  const runExport = () => {
+		    if (busy) return;
+		    setBusy(true);
+		    setError(void 0);
+		    const timer = setInterval(pullProgress, 500);
+		    pullProgress();
+		    void call(rpc, "dsh-memory/mem-export", {}).then((out) => {
+		      clearInterval(timer);
+		      setBusy(false);
+		      if (out.report !== void 0) {
+		        setExported(out.report);
+		        pullProgress();
+		      }
+		      if (out.error !== void 0) setError(out.error);
+		    });
+		  };
+		  (0, import_react7.useEffect)(() => {
+		    void rpc("dsh-memory/settings-get", {}).then((r) => {
+		      const v = r && r.ok ? r.value : void 0;
+		      const n = v?.settings?.mdExportMaxRecords;
+		      if (typeof n === "number") setBudgetDraft(String(n));
+		    }).catch(() => {
+		    });
+		  }, [rpc]);
+		  const commitBudget = () => {
+		    const raw = budgetDraft.trim();
+		    if (raw === "") return;
+		    const n = Math.floor(Number(raw));
+		    if (!Number.isFinite(n) || n < 0 || n > 1e4) {
+		      setBudgetNote("预算要 0~10000 的整数（0 = 跟随部署默认）");
+		      return;
+		    }
+		    void rpc("dsh-memory/settings-set", { mdExportMaxRecords: n }).then((r) => {
+		      setBudgetNote(r && r.ok ? n === 0 ? "已改为跟随部署默认" : `已设为每次最多 ${n} 个文件，下一次点击生效` : "写入失败：预算未改");
+		    }).catch(() => {
+		      setBudgetNote("写入失败：预算未改");
+		    });
+		  };
 		  const run = (method, sink, payload) => {
 		    if (busy) return;
 		    setBusy(true);
@@ -1734,6 +1787,7 @@ var __defProp = Object.defineProperty;
 		    });
 		  };
 		  const root = exported?.root ?? recon?.root;
+		  const pct = prog !== void 0 && prog.total > 0 ? Math.min(100, Math.round(prog.done / (prog.total * 2) * 100)) : 0;
 		  return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--dsh-mem-border)" }, children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsh-mem-text-2)", marginBottom: 6 }, children: "外部存档（markdown 投射）" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: S.flexRow, children: [
@@ -1741,10 +1795,8 @@ var __defProp = Object.defineProperty;
 		        NButton,
 		        {
 		          disabled: busy,
-		          title: "把当前全部记忆渲染为 <根>/<类型>/<名称>.memory.md，并记下内容指纹（只写文件，不改库）",
-		          onClick: () => {
-		            run("dsh-memory/mem-export", setExported, {});
-		          },
+		          title: "把当前全部记忆渲染为 <根>/<类型>/<名称>.memory.md，并记下内容指纹（只写文件，不改库）。一次点完：一轮预算不够时服务端自己续跑下几轮，进度看下方进度条",
+		          onClick: runExport,
 		          children: "导出为可携存档"
 		        }
 		      ),
@@ -1826,6 +1878,40 @@ var __defProp = Object.defineProperty;
 		          children: armed ? "确认物理删除" : "清理并归档"
 		        }
 		      )
+		    ] }),
+		    prog !== void 0 && prog.total > 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: { marginTop: 8 }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "dsh-mem-rb-bar", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "dsh-mem-rb-fill", style: { width: pct + "%" } }) }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: { ...HINT_STYLE, marginTop: 3 }, children: [
+		        prog.detail,
+		        prog.notice !== void 0 && prog.notice !== "" ? ` · ${prog.notice}` : ""
+		      ] })
+		    ] }) : null,
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: { ...S.flexRow, marginTop: 8, alignItems: "center" }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { style: { fontSize: 12, color: "var(--dsh-mem-text-3)" }, children: "单次文件更新预算" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+		        NInput,
+		        {
+		          type: "number",
+		          min: 0,
+		          max: 1e4,
+		          style: { width: 96 },
+		          title: "一次点击最多更新多少个投射文件（导出写入 + 后缀改名都占额度）。“没变过”的不占额度。0 = 跟随部署默认（2000）；上限 10000。",
+		          placeholder: "0",
+		          value: budgetDraft,
+		          onChange: (e) => {
+		            setBudgetDraft(e.target.value);
+		            setBudgetNote("");
+		          },
+		          onBlur: () => {
+		            commitBudget();
+		          },
+		          onKeyDown: (e) => {
+		            if (e.key === "Enter") commitBudget();
+		          }
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { style: { fontSize: 12, color: "var(--dsh-mem-text-3)" }, children: "个文件/次（0 = 默认 2000）" }),
+		      budgetNote !== "" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { style: { fontSize: 12, color: "var(--dsh-mem-text-3)" }, children: budgetNote }) : null
 		    ] }),
 		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { ...HINT_STYLE, marginTop: 6 }, children: error !== void 0 ? `失败：${error}` : cleanup !== void 0 ? lineOfCleanup(cleanup) : orphans !== void 0 ? lineOfOrphans(orphans) : synced !== void 0 ? lineOfSync(synced) : exported !== void 0 ? lineOf(exported) : recon !== void 0 ? lineOfReconcile(recon) : "导出=库→文件；对账=只读比较；同步=文件→库；孤儿=搬走没人认领的残片；清理=物理删除（不可逆，需高权限模式）。" }),
 		    recon !== void 0 && error === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: HINT_STYLE, children: [

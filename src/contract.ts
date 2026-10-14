@@ -119,6 +119,9 @@ export interface MemoryLiveSettings {
   /** 轨2 技能结晶总开关（看板可拨）:true = 注册 memory_skill_* 工具、注入 active 技能、skills-* 端点可用。
    *  默认 false（新功能默认关）；与部署 cfg.skills.enabled 取或（任一开则生效）。 */
   skillsEnabled: boolean;
+  /** md 投射/后缀收敛的单次动作护栏运行时覆盖:0 = 跟随部署 `cfg.memExport.maxRecords`（默认 2000）。
+   *  存在的理由：一次点完多少条属于“回填历史时才改一下”的旋钮，不该要求改 YAML + 重启。 */
+  mdExportMaxRecords: number;
 }
 
 /** 召回停用原因(session-stats recall.enabled=false 时带出;短路序第一个为假的因子)。 */
@@ -730,6 +733,8 @@ export interface SettingsSetRequest {
   distillModel?: string;
   distillBudgets?: { extract: number; dedup: number; l2: number; l3: number; graph: number };
   distillMaxInputChars?: number;
+  /** md 投射/后缀收敛的单次动作护栏覆盖:0 = 跟随部署 `cfg.memExport.maxRecords`。 */
+  mdExportMaxRecords?: number;
   /** 蒸馏通道运行时覆盖:'' = 跟随部署 config;'host' = 复用宿主;'direct' = 插件原生直连。 */
   distillMode?: '' | 'host' | 'direct';
   /** 运行时直连端点覆盖('direct' 用;非机密,可回显)。 */
@@ -1565,6 +1570,15 @@ export type MemReconcileRequest = Record<string, never>;
 export type MemReconcileResponse = import('./store/memory-md-types.js').ReconcileReport;
 
 /**
+ * dsh-memory/mem-run-status：投影长任务的进度快照（只读、无入参）。
+ *
+ * 为什么要有它：`mem-export` 现在自己滚到完（多轮），一次点击可能跑十几秒—
+ * 没有进度面就退化成人靠“再点一下”猜任务还在不在跑（真机反馈正是“点三下”）。
+ */
+export type MemRunStatusRequest = Record<string, never>;
+export type MemRunStatusResponse = import('./store/memory-md-types.js').MdRunStatus;
+
+/**
  * dsh-memory/mem-sync：P2 反向同步（md 文件 → 索引）。
  *
  * 与 `mem-reconcile` 的区别是风险不对称：对账**什么都不写**，同步**会写库**（回灌
@@ -1673,6 +1687,7 @@ export interface DshMemoryRequestMap {
   'dsh-memory/recall-feedback': RecallFeedbackRequest;
   'dsh-memory/workspace-relink': WorkspaceRelinkRequest;
   'dsh-memory/mem-export': MemExportRequest;
+  'dsh-memory/mem-run-status': MemRunStatusRequest;
   'dsh-memory/mem-reconcile': MemReconcileRequest;
   'dsh-memory/mem-sync': MemSyncRequest;
   'dsh-memory/mem-orphans': MemOrphansRequest;
@@ -1735,6 +1750,7 @@ export interface DshMemoryResponseMap {
   'dsh-memory/recall-feedback': RecallFeedbackResponse;
   'dsh-memory/workspace-relink': WorkspaceRelinkResponse;
   'dsh-memory/mem-export': MemExportResponse;
+  'dsh-memory/mem-run-status': MemRunStatusResponse;
   'dsh-memory/mem-reconcile': MemReconcileResponse;
   'dsh-memory/mem-sync': MemSyncResponse;
   'dsh-memory/mem-orphans': MemOrphansResponse;

@@ -6,6 +6,7 @@ import { type SupersedeInfo } from './supersede.js';
 import { type ExportThenPurgeResult, type PurgeOptions, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
 import { type EmbeddingService } from './embedding.js';
 import { type L1MetaLite, type MemoryDb } from './sqlite.js';
+import type { L1FileSyncHook } from './memory-md-sync.js';
 export type RecallStrategy = 'keyword' | 'embedding' | 'hybrid';
 /**
  * 图谱路提供者(§D 第 3 路):按查询返回图谱命中(已按 score 降序)。
@@ -73,6 +74,15 @@ export declare class L1Store {
     untaggedL1Count(): number;
     /** Room 计数缓存(见 `listRooms()`:tags 仅随反刍变化,不必每次敲库)。 */
     private roomCache;
+    /**
+     * 库→文件投射的跟随钩子(收口点;未注入 = 零文件动作)。
+     *
+     * 为什么不放在调用方:改变记录有效性/身份的写路径全部汇流在本类的 `appendNew` /
+     * `retire` / `restore` / `rename` 四个方法上,而上游有 8 处 `retire()` 调用点——事件挂钩
+     * 已被真机证伪(920 条退场只有 8 个 `.disable`)。放这里意味着新增调用点不会漏。
+     * 与构造函数里的 `autoName: () => cfg.memExport.enabled` 同一先例:只拿判据,不拿配置快照。
+     */
+    private fileSync?;
     constructor(dataDir: string, db: MemoryDb, embed?: EmbeddingService, strategy?: RecallStrategy, logger?: MemoryLogger, 
     /** 时效衰减半衰期(天;0=关)。缺省 30 与 config 默认一致。 */
     decayHalfLifeDays?: number, 
@@ -88,6 +98,15 @@ export declare class L1Store {
     autoName?: (() => boolean) | undefined);
     /** 读路径时效半衰期(天;0=关)。老化权重展示与召回衰减同一事实源。 */
     get decayHalfLife(): number;
+    /**
+     * 装配层晚绑定投射跟随钩子。
+     *
+     * 必须晚于构造:`stores.l1` 先建,md 账本(`stores.mdLedger`)后装,构造期拿不到 ledger。
+     * 未注入时四个汇流口行为与注入前逐字一致(投射面关着也是这条)。
+     */
+    setFileSyncHook(hook: L1FileSyncHook): void;
+    /** 有效性变更点火(增/退场/恢复共用一个入口:钩子内部自己跑「导出→后缀收敛」)。 */
+    private fireFileSync;
     init(): Promise<void>;
     /** 旧版单文件 records.jsonl 一次性导入检索库,成功后改名 .imported。 */
     private importLegacy;

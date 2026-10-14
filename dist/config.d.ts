@@ -169,7 +169,10 @@ export interface MemoryConfig {
         root: string;
         /** 单次导出的**动作数**护栏（照 wing-backfill / workspace-relink 口径）：只数碰了磁盘的
          *  条（写入 / 补账 / 失败）。“未变且已记账”的不吃配额，否则第二次点击在同一批前 N 条上
-         *  打转、`remaining` 永不递减；扫描总量由 `timeBudgetMs` 兜底。 */
+         *  打转、`remaining` 永不递减；遍历总量由 `timeBudgetMs` 兜底。
+         *
+         *  默认 2000：本库量级就是 1000+ 条（真机 1210），旧的 300 意味着一次回填要点 4 次，
+         *  而“再点一次继续”对人是隐形成本。面板上可经 `live.mdExportMaxRecords` 运行时改。 */
         maxRecords: number;
         /** 单次导出的墙钟预算(ms)。 */
         timeBudgetMs: number;

@@ -121,12 +121,17 @@ export function effectiveCfg(cfg, live) {
     const cfOverride = s?.conflictFreeze !== undefined
         ? { conflictFreeze: { ...(cfg.conflictFreeze ?? {}), enabled: s.conflictFreeze } }
         : null;
-    if (!override && !budgets && !maxInput && !fallbacksTakeover && !chainEffort && !chainFallbacks && !effortInject && !layerChains && !hasChannel && !embedOverride && !cfOverride)
+    // md 投射/后缀收敛的单次动作护栏运行时覆盖(0 = 跟随部署 cfg.memExport.maxRecords)。
+    // 只覆盖条数护栏，不动 enabled/root——开关与根路径仍属部署配置。
+    const mdx = s?.mdExportMaxRecords ?? 0;
+    const memExportOverride = mdx > 0 ? { memExport: { ...(cfg.memExport ?? {}), maxRecords: mdx } } : null;
+    if (!override && !budgets && !maxInput && !fallbacksTakeover && !chainEffort && !chainFallbacks && !effortInject && !layerChains && !hasChannel && !embedOverride && !cfOverride && !memExportOverride)
         return cfg;
     return {
         ...cfg,
         ...(embedOverride ?? {}),
         ...(cfOverride ?? {}),
+        ...(memExportOverride ?? {}),
         llm: {
             ...cfg.llm,
             ...(effortInject ?? {}),

@@ -13,7 +13,9 @@ import type { ConflictPairView, ConflictsResponse as ConflictsView, ConflictReso
 export type { ConflictPairView, ConflictsView, ConflictResolutionView };
 export interface ConflictResolveDeps {
     l1: Pick<L1Store, 'listConflictPending' | 'resolveConflictPending' | 'retire' | 'syncGraphDisputed' | 'markConflictReviewed'>;
-    /** `conflictFreeze.enabled`。未开启时队列恒空,直接给出提示而非静默无操作。 */
+    /** `conflictFreeze.enabled`。未开启时队列恒空,直接给出提示而非静默无操作。
+     *  退场/恢复的文件跟随不在本模块点火：裁决败方走 `l1.retire()`，投射挂钩已收口在
+     *  `L1Store` 的汇流口（`store/memory-md-sync.ts`），这里再挂一刀就是第二事实源。 */
     conflictFreezeEnabled: boolean;
 }
 /**

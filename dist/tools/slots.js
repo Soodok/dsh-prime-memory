@@ -3,7 +3,8 @@ const MUTATE_OFF_NOTICE = '槽位写操作未开放:请在记忆库面板开启�
 const OFF_NOTICE = '本会话的记忆档位为"关闭":槽位读取不可用。';
 const GLOBAL_OFF_NOTICE = '记忆召回已关闭:槽位读取不可用。';
 export function registerSlotTools(ctx, cfg, slots, logger, modes, live, 
-/** L1 存储句柄:close 的 refs→记忆勾连(解析/退场)依赖;缺省时 close 只关槽位不碰 L1。 */
+/** L1 存储句柄:close 的 refs→记忆勾连(解析/退场)依赖;缺省时 close 只关槽位不碰 L1。
+ *  退场文件的跟随不在本模块点火：`l1.retire()` 已收口（`store/memory-md-sync.ts`）。 */
 l1) {
     if (!cfg.tools)
         return;

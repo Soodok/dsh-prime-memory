@@ -126,6 +126,8 @@ const ALWAYS_ON: MemoryLiveSettings = {
   memoryMutate: false,
   conflictFreeze: false,
   skillsEnabled: false,
+  // md 投射护栏运行时覆盖:0 = 跟随部署 cfg.memExport.maxRecords（面板上可改）
+  mdExportMaxRecords: 0,
   toolRoom: true,
   toolGraph: true,
   toolRuminate: true,
@@ -382,6 +384,8 @@ function resolveSettings(value: unknown): MemoryLiveSettings {
     conflictFreeze: v.conflictFreeze === true,
     // 轨2 技能结晶:严格 === true(默认关,新功能默认关)
     skillsEnabled: v.skillsEnabled === true,
+    // md 投射护栏钳 0~10000（与 live schema 同上限）；0 = 跟随部署默认
+    mdExportMaxRecords: Math.min(10_000, Math.max(0, num(v.mdExportMaxRecords))),
     // 工具分组封印:严格 !== false(缺省/异常值 = 未封印,工具照常注册)
     toolRoom: v.toolRoom !== false,
     toolGraph: v.toolGraph !== false,

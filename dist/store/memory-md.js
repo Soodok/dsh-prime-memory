@@ -127,6 +127,17 @@ function warnMissingWorkspace(logger, ws) {
     logger.warn(`[memory] workspace 目录不存在，该条投射落点退回单根: ${ws}`);
 }
 /**
+ * 退场判据：与库侧同口径（`sqlite.ts` 的“`valid_to` 非空即退场”，与
+ * `retiredL1Count`/`listRetiredL1` 一致）。
+ *
+ * 为什么住在本文件：导出（要不要把文件放回非退场路径）与失效联动（后缀该不该带）
+ * 两侧都得用同一个判据，否则“列表说它退了、文件却没后缀”会回来。放 `memory-md-disable.ts`
+ * 会让 `memory-md-export.ts` 反向 import 它形成循环（那边已经 import 这边）。
+ */
+export function isRetiredRecord(r) {
+    return typeof r.validTo === 'number' && r.validTo > 0;
+}
+/**
  * 投射文件的失效路径：`x.memory.md` → `x.memory.md.disable`。
  * 已带后缀的原样返回（幂等靠这个性质，而不是靠调用方记住判重）。
  */

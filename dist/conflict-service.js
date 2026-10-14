@@ -79,6 +79,7 @@ export async function resolveConflictPair(deps, pairId, outcome) {
             pairId,
             ...(pair.conflictType ? { conflictType: pair.conflictType } : {}),
         });
+        // 退场即上盘：`l1.retire()` 里已点火（机器侧与本条同一个入口），所以这里不重发。
     }
     // 图谱 disputed 重算:此刻仍未裁决的对才是争议集,已了结的节点自动复原 active
     const ids = new Set();

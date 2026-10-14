@@ -42,6 +42,15 @@ export class L1Store {
     }
     /** Room 计数缓存(见 `listRooms()`:tags 仅随反刍变化,不必每次敲库)。 */
     roomCache = null;
+    /**
+     * 库→文件投射的跟随钩子(收口点;未注入 = 零文件动作)。
+     *
+     * 为什么不放在调用方:改变记录有效性/身份的写路径全部汇流在本类的 `appendNew` /
+     * `retire` / `restore` / `rename` 四个方法上,而上游有 8 处 `retire()` 调用点——事件挂钩
+     * 已被真机证伪(920 条退场只有 8 个 `.disable`)。放这里意味着新增调用点不会漏。
+     * 与构造函数里的 `autoName: () => cfg.memExport.enabled` 同一先例:只拿判据,不拿配置快照。
+     */
+    fileSync;
     constructor(dataDir, db, embed = new NoopEmbeddingService(), strategy = 'hybrid', logger, 
     /** 时效衰减半衰期(天;0=关)。缺省 30 与 config 默认一致。 */
     decayHalfLifeDays, 
@@ -70,6 +79,21 @@ export class L1Store {
     /** 读路径时效半衰期(天;0=关)。老化权重展示与召回衰减同一事实源。 */
     get decayHalfLife() {
         return this.decayHalfLifeDays;
+    }
+    /**
+     * 装配层晚绑定投射跟随钩子。
+     *
+     * 必须晚于构造:`stores.l1` 先建,md 账本(`stores.mdLedger`)后装,构造期拿不到 ledger。
+     * 未注入时四个汇流口行为与注入前逐字一致(投射面关着也是这条)。
+     */
+    setFileSyncHook(hook) {
+        this.fileSync = hook;
+    }
+    /** 有效性变更点火(增/退场/恢复共用一个入口:钩子内部自己跑「导出→后缀收敛」)。 */
+    fireFileSync(ids, why) {
+        if (this.fileSync === undefined || ids.length === 0)
+            return;
+        this.fileSync.sync(ids, why);
     }
     async init() {
         await ensureDir(this.recordsDir);
@@ -153,9 +177,16 @@ export class L1Store {
      * 改名不触发场景重聚类，也不动 `updated_time`（约束在 `renameL1` 里）。
      */
     rename(id, name) {
+        // 改名前的身份要先把住：投射文件名就是 `name`（`targetFor` 算路径），库里改了而盘上
+        // 没跟进就会长期对不上，后缀收敛器也修不了（它按**当前** name 算路径）。
+        const oldName = this.db.getL1ByIds([id])[0]?.name;
         const r = this.db.renameL1(id, name);
-        if (r === 'ok')
+        if (r === 'ok') {
+            if (oldName !== undefined && oldName !== '' && oldName !== name && this.fileSync !== undefined) {
+                this.fileSync.renamed(new Map([[id, oldName]]), 'rename');
+            }
             return { ok: true };
+        }
         return { ok: false, reason: r };
     }
     /** 按名字反查 id（重名预检 / md 回灌）；未命中 ⇒ undefined。 */
@@ -452,6 +483,8 @@ export class L1Store {
             this.logger?.error(`[memory] L1 检索库批量写入失败(${records.length} 条,JSONL 事实源完好),` +
                 '这批记忆暂不可检索;可在设置页运行「重建记忆」修复');
         }
+        // 写对称:新增也即时上盘(不阻塞、失败只 warn)——否则「文件树 = 库当前状态」只对删成立。
+        this.fireFileSync(records.map((r) => r.id), 'appendNew');
     }
     /** 去重 update/merge 产出的记录:只更新检索库(JSONL 事实源不改写,官方语义)。 */
     async upsert(record) {
@@ -488,7 +521,11 @@ export class L1Store {
      * 而那种不一致只有在误删发生时才暴露。
      */
     retire(ids, info) {
-        return this.db.retireL1Batch(ids, info);
+        const n = this.db.retireL1Batch(ids, info);
+        // 退场汇流口(人工软删 / 合并取代 / 冲突判负 都经这里)——所以机器侧自动退场也自动有文件跟随。
+        // 不 await:库侧结果先成立,投射是旁路(见 `setFileSyncHook` 的注释)。
+        this.fireFileSync(ids, 'retire');
+        return n;
     }
     /** 已退场(可恢复)记录列表(面板用)。 */
     listRetired(opts) {
@@ -517,6 +554,8 @@ export class L1Store {
                 vectorsWritten++;
             this.db.upsertL1(rec, vec);
         }
+        // 恢复活跃 = 有效性变更,后缀该从 `.disable` 掉回去(与 `retire` 对称的那一半)。
+        this.fireFileSync(records.map((r) => r.id), 'restore');
         return { restored: records.length, vectorsWritten };
     }
     /**
@@ -623,6 +662,11 @@ export class L1Store {
             const back = await this.restore(retired);
             unretired = back.restored;
             stillRetired = [];
+        }
+        // 回到主表就等于“库里多一份可投射的份”：无论带不带退场标记都要上盘
+        // （带标记的那批由钩子内部的收敛器接成 `.disable`）。走 `restore` 的那批已点火，不重发。
+        if (r.restored > 0 && unretired === 0) {
+            this.fireFileSync(targetIds, 'restoreFromSnapshot');
         }
         return { ...r, dir: resolved.dir, found: true, missing, unretired, stillRetired };
     }

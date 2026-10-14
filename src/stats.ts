@@ -60,7 +60,8 @@ import type { SessionRecalledStore } from './store/session-recalled.js';
 import { isFeedbackScore, type RecallFeedbackStore } from './store/recall-feedback.js';
 import type { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { relinkWorkspaces } from './pipeline/workspace-relink.js';
-import { exportRecords, reconcileLedger } from './store/memory-md-export.js';
+import { reconcileLedger } from './store/memory-md-export.js';
+import { mdRunStatus, runProjection } from './store/memory-md-run.js';
 import { disableProjectionFile } from './store/memory-md-disable.js';
 import { MEMORY_TYPE_DIRS, UNSORTED_DIR, resolveMemoriesRoot, targetFor } from './store/memory-md.js';
 import { ensureTypeSkeleton } from './store/memory-md-skeleton.js';
@@ -146,6 +147,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/recall-feedback',
   'dsh-memory/workspace-relink',
   'dsh-memory/mem-export',
+  'dsh-memory/mem-run-status',
   'dsh-memory/mem-reconcile',
   'dsh-memory/mem-sync',
   'dsh-memory/mem-orphans',
@@ -618,6 +620,8 @@ function sanitizeSettings(s: MemoryLiveSettings): MemoryLiveSettings {
 /** 端点分发表(导出供测试直调:可精确注入 rebuild/ruminate 等可选控制器,验证 deps 接线)。 */
 export async function handleEndpoint(endpoint: string, payload: unknown, deps: EndpointDeps): Promise<unknown> {
   const { cfg, stores, status, live, modes, dataDir, rebuild, ruminate, embedManager, sessionInfo, roomRegistry, memorySources, skillStore } = deps;
+  // 退场/恢复/新增的文件跟随已收口在 `L1Store` 的汇流口（`store/memory-md-sync.ts`），
+  // 本分发层不再自己建点火器——那 8 处事件挂钩已被真机证伪（会漏）。
   switch (endpoint) {
     case 'dsh-memory/stats':
       return buildStats(cfg, stores, status);
@@ -771,7 +775,9 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
     case 'dsh-memory/mem-export': {
       // 单向导出：库 → md 文件 + 账本。**不写检索面**（用例钉住：导出前后 hashRecords 相同）。
       // 先查配置门再查装配门：“整面默认关”时该听到的是“没开”，不是“没装配”。
-      const exp = cfg.memExport;
+      // 护栏读**生效**配置（含面板上的 `mdExportMaxRecords` 覆盖）：只看启动快照
+      // 就会“调了没反应”，而这条路径的护栏正是给人调的。
+      const exp = effectiveCfg(cfg, live).memExport;
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
@@ -798,7 +804,10 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         if (t.inWorkspace) skeletonRoots.add(t.root);
       }
       await ensureTypeSkeleton({ roots: [...skeletonRoots], countsByType, logger: deps.logger });
-      const rep = await exportRecords({
+      // 滚动执行到清完：先把导出游标推到表尾，再把后缀收敛游标推到表尾。
+      // 单轮护栏（`maxRecords`/`timeBudgetMs`）不变，跨轮另有轮数与总墙钟兜底；
+      // 进度经 `dsh-memory/mem-run-status` 读（面板画进度条）。
+      const run = await runProjection({
         records: all,
         cfgRoot: exp.root,
         dataDir: deps.dataDir,
@@ -807,12 +816,19 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         timeBudgetMs: exp.timeBudgetMs,
         logger: deps.logger,
       });
-      return { ...rep, named: naming.named, nameFailed: naming.failed };
+      return { ...run, named: naming.named, nameFailed: naming.failed };
+    }
+
+    case 'dsh-memory/mem-run-status': {
+      // 只读进度快照。故意不查配置门：任务没在跑时也要能读到上一次的 `notice`
+      // （“预算用尽、还剩 N 条”这句话必须在人下次点击之前也看得见）。
+      return mdRunStatus();
     }
 
     case 'dsh-memory/mem-reconcile': {
       // 只读对账：不写库、不写文件，只按账本基线出四态报告（所以不需高权限门）。
-      const exp = cfg.memExport;
+      // 同样读生效配置：对账与导出共用护栏，两边半生效会让人看不出差异从哪来。
+      const exp = effectiveCfg(cfg, live).memExport;
       if (exp?.enabled !== true) throw new Error('md 投射未开启（cfg.memExport.enabled）');
       const md = stores.mdLedger;
       if (md === undefined) throw new Error('md 投射账本未装配');
@@ -1191,7 +1207,8 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           for (let offset = 0; ; offset += 200) {
             const page = stores.l1.list({ tag: slug, retired: false, limit: 200, offset });
             if (page.items.length === 0) break;
-            const n = stores.l1.retire(page.items.map((r) => r.id), { at: new Date().toISOString(), reason: 'manual' });
+            const pageIds = page.items.map((r) => r.id);
+            const n = stores.l1.retire(pageIds, { at: new Date().toISOString(), reason: 'manual' });
             retiredRecords += n;
             if (page.items.length < 200) break;
           }
@@ -1443,6 +1460,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           memoryMutate: false,
           conflictFreeze: live?.get()?.conflictFreeze === true,
           skillsEnabled: live?.get()?.skillsEnabled === true,
+          mdExportMaxRecords: live?.get()?.mdExportMaxRecords ?? 0,
         }),
         // 静态部署上限(cordis.patch.yml):运行时开关与它取 AND
         ceilings: { capture: cfg.capture.enabled, distill: cfg.extract.enabled, recall: cfg.recall.enabled },
@@ -1484,7 +1502,12 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'skillsEnabled', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate'] as const) {
         if (typeof patch[key] === 'boolean') clean[key] = patch[key] as boolean;
       }
-      // 运行时统一路由链:结构校验后整体写入(空数组 = 回到跟随部署配置)
+      // md 投射护栏运行时覆盖：数字才收，钳 0~10000（与 live schema 同上限）；0 = 跟随部署默认。
+      // 不加进白名单的话，面板上那个输入框会“写成功但被静默丢”——看得到数字、不生效。
+      if (typeof patch.mdExportMaxRecords === 'number' && Number.isFinite(patch.mdExportMaxRecords)) {
+        clean.mdExportMaxRecords = Math.min(10_000, Math.max(0, Math.floor(patch.mdExportMaxRecords)));
+      }
+      // 运行时统一路由链：结构校验后整体写入（空数组 = 回到跟随部署配置）
       if (patch.distillChain !== undefined) {
         const err = validateDistillChain(patch.distillChain);
         if (err) throw new Error(err);
@@ -1868,6 +1891,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (ids.length === 0) throw new Error('ids 缺失');
       const r = await stores.l1.restore(ids);
       deps.logger.info(`[memory] 恢复已退场记忆 ${r.restored} 条(补向量 ${r.vectorsWritten} 条)`);
+      // 掉 `.disable` 后缀由 `l1.restore()` 里的钩子承接（与退场对称的那一半）。
       const resp: RecordsRestoreResponse = r;
       return resp;
     }

@@ -180,7 +180,10 @@ export interface MemoryConfig {
     root: string;
     /** 单次导出的**动作数**护栏（照 wing-backfill / workspace-relink 口径）：只数碰了磁盘的
      *  条（写入 / 补账 / 失败）。“未变且已记账”的不吃配额，否则第二次点击在同一批前 N 条上
-     *  打转、`remaining` 永不递减；扫描总量由 `timeBudgetMs` 兜底。 */
+     *  打转、`remaining` 永不递减；遍历总量由 `timeBudgetMs` 兜底。
+     *
+     *  默认 2000：本库量级就是 1000+ 条（真机 1210），旧的 300 意味着一次回填要点 4 次，
+     *  而“再点一次继续”对人是隐形成本。面板上可经 `live.mdExportMaxRecords` 运行时改。 */
     maxRecords: number;
     /** 单次导出的墙钟预算(ms)。 */
     timeBudgetMs: number;
@@ -433,6 +436,15 @@ export function liveSettingsSchema(): VolatileRef<MemoryLiveSettings> {
     embedRemoteDimensions: Schema.number().min(0).max(8192).default(0),
     // 记忆写删权限门:默认 false(模型写删风险高,须显式在面板开启高权限模式)
     memoryMutate: Schema.boolean().default(false),
+    /**
+     * md 投射/后缀收敛的**单次文件更新预算**运行时覆盖（`0` = 跟随启动配置 `memExport.maxRecords`）。
+     * 面板上就叫这个名字（设置页入口在 `client/src/tabs/ArchiveSection.tsx`）。
+     *
+     * 为什么要有这个键：投射面的量级随库增长（真机 1210 条），而它住在启动 YAML 里
+     * 就要人改 `cordis.patch.yml` + 重启才能调大——一个只在“回填历史”时用一下的旋钮
+     * 不该要求重启。生效路径在 `effectiveCfg`（与其他 live 键同一覆盖链）。
+     */
+    mdExportMaxRecords: Schema.number().min(0).max(10_000).default(0),
     // §C 人工冲突裁决总开关:默认 false(冻结消耗注意力,不可默认全开)
     conflictFreeze: Schema.boolean().default(false),
     // 轨2 技能结晶总开关(看板可拨):默认 false。开=注册 memory_skill_* 工具 + 注入 active 技能 + skills-* 端点可用。
@@ -581,7 +593,7 @@ export const memorySchema: ConfigSchema = Schema.object({
   memExport: Schema.object({
     enabled: Schema.boolean().default(true),
     root: Schema.string().default(''),
-    maxRecords: Schema.number().min(1).max(10_000).default(300),
+    maxRecords: Schema.number().min(1).max(10_000).default(2000),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
   }),
   // P2 反向同步：默认关。文件数护栏比导出的条数护栏宽一些——一次目录扫描的代价

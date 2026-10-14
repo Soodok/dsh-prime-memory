@@ -12,8 +12,8 @@
  * - **不拿空数据骗人**：功能没开时后端返回的是"未开启（cfg.memExport.enabled）"
  *   这句话，我们把它原样显示出来——比悄悄藏起整节更好回答"我点了怎么没反应"。
  */
-import { useState } from 'react';
-import { NButton } from '../ui/primitives.js';
+import { useEffect, useState } from 'react';
+import { NButton, NInput } from '../ui/primitives.js';
 import { S } from '../styles.js';
 import type { RpcFn } from '../rpc.js';
 import type { DshMemoryRequestMap, DshMemoryResponseMap } from '../../../src/contract.js';
@@ -26,6 +26,7 @@ type ArchiveEndpoint =
   | 'dsh-memory/mem-orphans'
   | 'dsh-memory/cleanup-retired';
 type ExportReport = DshMemoryResponseMap['dsh-memory/mem-export'];
+type RunStatus = DshMemoryResponseMap['dsh-memory/mem-run-status'];
 type ReconcileReport = DshMemoryResponseMap['dsh-memory/mem-reconcile'];
 type SyncReport = DshMemoryResponseMap['dsh-memory/mem-sync'];
 type OrphanReport = DshMemoryResponseMap['dsh-memory/mem-orphans'];
@@ -55,8 +56,20 @@ function lineOf(rep: ExportReport): string {
   // 起名回填是这一步顺带做的写库动作（只写 name 列），得让人看得见它动了几条。
   const named = rep.named > 0 ? ` · 新起名 ${rep.named} 条` : '';
   const nameBad = rep.nameFailed > 0 ? ` · 起名失败 ${rep.nameFailed} 条(下轮重试)` : '';
-  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 条，再点一次继续` : '';
-  return head + named + nameBad + tail;
+  // 后缀收敛：退场记录的文件该带 `.disable`、恢复的该掉后缀，这一步对齐了几条要说得出。
+  // `rep.suffix` 是后加的字段：客户端 bundle 可能比服务端旧（浏览器缓存），所以先判在。
+  const s = rep.suffix;
+  const suffix = s && s.renamed + s.revived + s.both + s.edited > 0
+    ? ` · 后缀对齐 改名 ${s.renamed}${s.edited > 0 ? `(人改过 ${s.edited})` : ''} 改回 ${s.revived}${s.both > 0 ? ` · 冲突 ${s.both}` : ''}`
+    : '';
+  const suffixMore = s && s.capped && s.remaining > 0 ? ` · 后缀还有 ${s.remaining} 个文件待对齐，再点一次继续` : '';
+  const tail = rep.remaining > 0 ? ` · 剩余 ${rep.remaining} 个文件，再点一次继续` : '';
+  // 预算回显：报的是服务端**实际用了**的那个值，不是输入框里的草稿——否则“改了但
+  // 没生效”与“改了且生效”在面板上长得一样。
+  const budget = typeof rep.appliedMaxRecords === 'number' && rep.appliedMaxRecords > 0 ? ` · 本次预算 ${rep.appliedMaxRecords} 个文件` : '';
+  // 滚了几轮要说出来：否则“写 912”会让人以为一次只能做 912，而不是“一次点完做了 912”。
+  const passes = typeof rep.passes === 'number' && rep.passes > 1 ? ` · 共滚 ${rep.passes} 轮` : '';
+  return head + named + nameBad + suffix + suffixMore + budget + passes + tail;
 }
 
 function lineOfReconcile(rep: ReconcileReport): string {
@@ -120,6 +133,69 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
   const [orphanArmed, setOrphanArmed] = useState(false);
   const [armed, setArmed] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  /**
+   * 单次文件更新预算（`live.mdExportMaxRecords`，0 = 跟随部署默认 2000）。
+   *
+   * 为什么放在本节而不是总开关区：它只在“回填历史 / 一次点完”时用得上，
+   * 而那个动作就发生在这排按钮上。住在启动 YAML 里时调一次要改文件 + 重启，
+   * 一个临时旋钮不该有那个代价。
+   */
+  const [budgetDraft, setBudgetDraft] = useState('');
+  const [budgetNote, setBudgetNote] = useState('');
+  /**
+   * 投影长任务的进度快照（导出现在自己滚到完，一次点击可达十几秒）。
+   *
+   * 为什么需要：没有进度面时人只能靠“再点一下”猜任务还在不在跑（真机反馈就
+   * 是“点三下、每次一秒多”）。服务端同一时刻只跑一个投影任务，所以这里只需一份快照。
+   */
+  const [prog, setProg] = useState<RunStatus | undefined>(undefined);
+
+  /** 读一次进度（点完后再补一次，拿终态的 detail/notice）。 */
+  const pullProgress = (): void => {
+    void rpc('dsh-memory/mem-run-status', {})
+      .then((r) => { const v = r && r.ok ? r.value : undefined; if (v !== undefined) setProg(v); })
+      .catch(() => {});
+  };
+
+  /** 导出：点击期间轮询进度，回包后停轮并拉一次终态。 */
+  const runExport = (): void => {
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    const timer = setInterval(pullProgress, 500);
+    pullProgress();
+    void call(rpc, 'dsh-memory/mem-export', {}).then((out) => {
+      clearInterval(timer);
+      setBusy(false);
+      if (out.report !== undefined) { setExported(out.report); pullProgress(); }
+      if (out.error !== undefined) setError(out.error);
+    });
+  };
+  useEffect(() => {
+    void rpc('dsh-memory/settings-get', {})
+      .then((r) => {
+        const v = r && r.ok ? r.value : undefined;
+        const n = v?.settings?.mdExportMaxRecords;
+        if (typeof n === 'number') setBudgetDraft(String(n));
+      })
+      .catch(() => {});
+  }, [rpc]);
+  const commitBudget = (): void => {
+    const raw = budgetDraft.trim();
+    if (raw === '') return;
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 0 || n > 10_000) {
+      setBudgetNote('预算要 0~10000 的整数（0 = 跟随部署默认）');
+      return;
+    }
+    void rpc('dsh-memory/settings-set', { mdExportMaxRecords: n })
+      .then((r) => {
+        setBudgetNote(r && r.ok
+          ? (n === 0 ? '已改为跟随部署默认' : `已设为每次最多 ${n} 个文件，下一次点击生效`)
+          : '写入失败：预算未改');
+      })
+      .catch(() => { setBudgetNote('写入失败：预算未改'); });
+  };
 
   const run = <K extends ArchiveEndpoint>(
     method: K,
@@ -137,6 +213,11 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
   };
 
   const root = exported?.root ?? recon?.root;
+  // 两阶段各算一遍全表，所以分母是 total×2；上限钳住 100%（多轮累加不会超，但
+  // 进度字段来自服务端，不假设它永远自洽）。
+  const pct = prog !== undefined && prog.total > 0
+    ? Math.min(100, Math.round((prog.done / (prog.total * 2)) * 100))
+    : 0;
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--dsh-mem-border)' }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--dsh-mem-text-2)', marginBottom: 6 }}>
@@ -145,8 +226,8 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
       <div style={S.flexRow}>
         <NButton
           disabled={busy}
-          title="把当前全部记忆渲染为 <根>/<类型>/<名称>.memory.md，并记下内容指纹（只写文件，不改库）"
-          onClick={() => { run('dsh-memory/mem-export', setExported, {}); }}
+          title="把当前全部记忆渲染为 <根>/<类型>/<名称>.memory.md，并记下内容指纹（只写文件，不改库）。一次点完：一轮预算不够时服务端自己续跑下几轮，进度看下方进度条"
+          onClick={runExport}
         >
           导出为可携存档
         </NButton>
@@ -210,6 +291,37 @@ export function ArchiveSection(props: { rpc: RpcFn }) {
         >
           {armed ? '确认物理删除' : '清理并归档'}
         </NButton>
+      </div>
+      {prog !== undefined && prog.total > 0 ? (
+        <div style={{ marginTop: 8 }}>
+          <div className="dsh-mem-rb-bar">
+            <div className="dsh-mem-rb-fill" style={{ width: pct + '%' }} />
+          </div>
+          <div style={{ ...HINT_STYLE, marginTop: 3 }}>
+            {prog.detail}
+            {prog.notice !== undefined && prog.notice !== '' ? ` · ${prog.notice}` : ''}
+          </div>
+        </div>
+      ) : null}
+      <div style={{ ...S.flexRow, marginTop: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'var(--dsh-mem-text-3)' }}>单次文件更新预算</span>
+        <NInput
+          type="number"
+          min={0}
+          max={10000}
+          style={{ width: 96 }}
+          title="一次点击最多更新多少个投射文件（导出写入 + 后缀改名都占额度）。“没变过”的不占额度。0 = 跟随部署默认（2000）；上限 10000。"
+          placeholder="0"
+          value={budgetDraft}
+          onChange={(e: { target: { value: string } }) => {
+            setBudgetDraft(e.target.value);
+            setBudgetNote('');
+          }}
+          onBlur={() => { commitBudget(); }}
+          onKeyDown={(e: { key: string }) => { if (e.key === 'Enter') commitBudget(); }}
+        />
+        <span style={{ fontSize: 12, color: 'var(--dsh-mem-text-3)' }}>个文件/次（0 = 默认 2000）</span>
+        {budgetNote !== '' ? <span style={{ fontSize: 12, color: 'var(--dsh-mem-text-3)' }}>{budgetNote}</span> : null}
       </div>
       <div style={{ ...HINT_STYLE, marginTop: 6 }}>
         {error !== undefined

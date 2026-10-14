@@ -13,5 +13,6 @@ import type { SessionModeStore } from '../store/session-modes.js';
 import type { SlotStore } from '../store/slots.js';
 import type { MemoryLogger } from '../types.js';
 export declare function registerSlotTools(ctx: Context, cfg: MemoryConfig, slots: SlotStore, logger: MemoryLogger, modes: SessionModeStore, live: LiveSettingsHandle, 
-/** L1 存储句柄:close 的 refs→记忆勾连(解析/退场)依赖;缺省时 close 只关槽位不碰 L1。 */
+/** L1 存储句柄:close 的 refs→记忆勾连(解析/退场)依赖;缺省时 close 只关槽位不碰 L1。
+ *  退场文件的跟随不在本模块点火：`l1.retire()` 已收口（`store/memory-md-sync.ts`）。 */
 l1?: L1Store): void;

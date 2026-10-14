@@ -142,13 +142,16 @@ export declare class RuminateController {
      */
     private snapshotMdBaseline;
     /**
-     * 反刍收尾的增量 md 投射（task_2.8）：库 → 文件 + 账本，**只碰本轮新增/变更的那批**。
+     * 反刍收尾的增量 md 投射（task_2.8）：库 → 文件 + 账本 + 后缀对齐，**只碰本轮新增/变更的那批**。
      *
      * 与手动的 `dsh-memory/mem-export` 端点的区别：
      * - 不跑命名回填（`assignMissingNames` 会写库，反刍是只读旁路，不能在那里改库）；
      *   本轮新记录的 `name` 已在写入前由管线单一真源分配，未命名的按 `fileStemFor` 回落。
      * - 不建类型目录骨架（`ensureTypeSkeleton`），那是面板显式触发的动作。
      * 护栏全部复用 `cfg.memExport` 既有值（`maxRecords`/`timeBudgetMs`），**不新增配置项**。
+     *
+     * 一轮投射走 `syncFiles`（与 `L1Store` 钩子同一函数）：导出之后紧跟后缀收敛，
+     * 所以本轮被合并取代/冲突判负的增量记录不会停在未改名的 `.memory.md` 上。
      *
      * 失败面：整个方法自吞异常，只 warn + 计数，绝不抛给调用方、绝不改变反刍结果。
      * @param stage - 日志里的路径名（区分 finalize 与轻量刷新两条挂载点）。

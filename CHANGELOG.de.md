@@ -16,6 +16,21 @@ die Versionsnummern folgen der [semantischen Versionierung](https://semver.org/)
 > **Konvention für UI-Screenshots**: Einträge mit Oberflächenänderungen archivieren echte Screenshots unter
 > `assets/changelog/<Versionsnummer>/<zweistellige Nummer>-<Kurzbeschreibung>.png` und verweisen im Eintrag per relativer Pfadangabe darauf — im Changelog sieht man direkt, wie die neue Version aussieht.
 
+## [0.24.1] — 2026-10-14
+
+### Neu
+- **Endungs-Invariante der Projektion (`convergeDisabledSuffix`)**: `.memory.md` / `.memory.md.disable` hängt nur davon ab, ob der Eintrag in der Bibliothek ausgeschieden ist — nicht von `name` und nicht davon, welcher Pfad ihn ausgeschieden hat. Abgleich je Eintrag über „Datei vorhanden + aktuelle Endung + Fingerabdruck stimmt". Von Hand gesetztes `.disable` ist ein dateiseitiger Rückzugsbeleg (die Bibliothek sieht ihn, solange P2 aus ist): nur als `both` melden, nicht anfassen.
+- **Hook Bibliothek→Datei in `L1Store` gesammelt (`store/memory-md-sync.ts`)**: `setFileSyncHook` zündet an den vier Sammelstellen `appendNew` / `retire` / `restore` / `rename` statt an den acht Aufrufstellen zuvor — auf echter Maschine hatten 920 ausgeschiedene Einträge nur 8 `.disable`, alle aus dem Recall-Panel. Automatisches Ausscheiden (Merge-Ersetzung, Konflikt-Niederlage) und `memory_add` des Modells folgen damit automatisch.
+- **Umbenennung folgt der Datei**: nach `rename()` wandert die projizierte Datei zum neuen Namen (die `.disable`-Schwester zieht mit), der Ledger-Schlüssel wird umgeschrieben; fehlt die alte Datei, wird der neue Name geschrieben, ist das Ziel besetzt, nur melden und nicht überschreiben.
+- **Rollenausführung + Fortschrittsbalken (`store/memory-md-run.ts`, neuer Endpunkt `dsh-memory/mem-run-status`)**: ein Klick schiebt den Export-Cursor bis ans Tabellenende, danach den Konvergenz-Cursor; die Gesamtschranken `maxPasses` / `totalBudgetMs` werden ehrlich in `notice` gemeldet.
+### Geändert
+- **Datei-Aktualisierungsbudget pro Klick**: `memExport.maxRecords` Standard 300 → **2000**, zusätzlich der Laufzeit-Knopf `live.mdExportMaxRecords` (0 = Deploy-Standard, kein Neustart). Das irreführende „Einzelaktion-Leitplanke" im Panel heißt jetzt **„Einzel-Aktualisierungsbudget (Dateien)"**, Einheit „Dateien/Durchgang", angezeigt aus dem serverseitig wirksamen `appliedMaxRecords`.
+### Behoben
+- Das Budget zählte Durchlauf statt Disk-Aktion (unveränderte Fraßen verbrauchten Quote) → 1210 Einträge brauchten vier Klicks.
+- Ledger-Fortschreibung je Eintrag = O(n²) (300 Einträge = 300 atomare Gesamt-Rewrites) → in der Schleife nur dirty, am Ende einmal `flush()`.
+- Zwei unmittelbar hintereinander gezündete Tasks trampelten sich → Projektion läuft **hinten serialisiert**. Vorher sah der zweite Task „Datei fehlt", weil der erste noch nicht geschrieben hatte, und ein ausgeschiedener Eintrag blieb auf `.memory.md` stehen.
+- Dauerhafte Duplikate nach Wiederherstellung → die veraltete `.disable`-Kopie wird nur entfernt, wenn „gleiche Ledger-id + seit dem Schreiben unverbändert + `.memory.md` ist exakt der aktuelle Render" zusammen zutrifft.
+
 ## [0.24.0] — Unveröffentlicht (lokale Linie `0.24.0-local.0…3`, 2026-10-13)
 
 ### Hinzugefügt
