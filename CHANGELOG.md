@@ -17,6 +17,17 @@
   - **建议状态(`longtask-hint-get`)以纯端点提供**:判定 = 上下文占用达 `contextThresholdPct` 或 todo 漂移达 `driftThreshold`(部署配置可调);配合 `longtask-compress-tail` 作手动压缩入口。
   - **撤下浮动球 UI(`client/src/longtask-fab.ts`;beta.1 起曾随包发布)**:悬浮建议面板的归属本在 context-compression 侧(「建议启动压缩」是其领域),pm 属误载——2026-10-02 用户裁定撤下。撤下不违座位契约(settings.section 恰一个 + 输入栏 pill,body 单例不占座位),但全应用级 overlay 会与其他插件的悬浮 UI 抢占屏幕角落;长任务开关与手动压缩入口待长任务定版时落记忆设置分节。
   - **`session-mode-set` 的 `mode` 转为可选**:与 `longTask` 二选一必传——纯切长任务开关不再被迫发送档位(旧客户端恒传 mode,行为不变)。响应 `mode` 改回当前生效值。
+## [0.24.2] — 2026-10-14
+
+### 新增
+
+- **检索面板投射身份字段**：RecordsTab 卡头新增「名称」「作用范围」徽标，展开详情新增三行（名称 / 关键词 / 作用范围），帮助用户直观核对「记忆↔投射文件名」的对应关系。UiRecord 契约（`contract.ts`）加 `name`/`scope`/`workspaceId`/`keywords` 四个可选字段，`stats.ts::hitToUiRecord` 从记录本体和 `metadata.dsh_keywords` 保留键读出。
+- **FTS 关键词独立检索轴（预留、休眠）**：`l1_fts` 排列改为「keywords → content」两列索引，关键词作为独立 BM25 命中轴、不与正文词频混淆；当前无关键词蒸馏产出方 ⇒ 该列恒空、检索行为与改动前逐字相同（零漂移），将来蒸馏上线无需再改表（FTS5 不能 ALTER）。
+
+### 变更
+
+- **挂钩收口注释清理**：`src/` 内不再残留旧工厂名 `makeSuffixSync` 字面量（验收 grep 归零），收口结论只留一处事实源。
+
 ## [0.24.1] — 2026-10-14
 
 ### 新增

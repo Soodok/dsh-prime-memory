@@ -4495,6 +4495,39 @@ var __defProp = Object.defineProperty;
 		                  children: "用 " + m.usage.used + "/" + m.usage.attempts
 		                }
 		              ) : null,
+		              /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
+		                "span",
+		                {
+		                  title: m.name && m.name.length > 0 ? "名称（名称蒸馏产物；投射文件的命名取它）：" + m.name : "尚未命名（名称蒸馏未产出）；投射回落 mem-" + m.id.slice(-8),
+		                  style: {
+		                    fontSize: 11,
+		                    padding: "1px 6px",
+		                    borderRadius: 999,
+		                    whiteSpace: "nowrap",
+		                    maxWidth: 220,
+		                    overflow: "hidden",
+		                    textOverflow: "ellipsis",
+		                    border: "1px solid " + (m.name && m.name.length > 0 ? "var(--dsh-mem-border)" : "var(--dsh-mem-danger)"),
+		                    color: m.name && m.name.length > 0 ? "var(--dsh-mem-text-2)" : "var(--dsh-mem-danger)"
+		                  },
+		                  children: "名称 " + (m.name && m.name.length > 0 ? m.name : "未命名")
+		                }
+		              ),
+		              /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
+		                "span",
+		                {
+		                  title: m.scope === "workspace" ? "作用范围：指定工作区（仅归属工作区可见）" + (m.workspaceId ? "：" + m.workspaceId : "") : "作用范围：用户默认（global，任何工作区可见）",
+		                  style: {
+		                    fontSize: 11,
+		                    padding: "1px 6px",
+		                    borderRadius: 999,
+		                    whiteSpace: "nowrap",
+		                    border: "1px solid var(--dsh-mem-border)",
+		                    color: "var(--dsh-mem-text-2)"
+		                  },
+		                  children: m.scope === "workspace" ? "工作区" : "用户默认"
+		                }
+		              ),
 		              m.score !== null && m.score !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("span", { style: S.muted, children: "相关度 " + Number(m.score).toFixed(2) }) : null,
 		              /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { style: S.grow }),
 		              /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("span", { style: S.muted, children: fmtTime(m.updatedAt) }),
@@ -4523,7 +4556,7 @@ var __defProp = Object.defineProperty;
 		              ) : null
 		            ] }),
 		            /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { style: S.content, children: m.content }),
-		            open ? /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { style: S.detail, children: "id: " + m.id + "\n情境: " + (m.scene || "-") + "\n版本: v" + m.version + "（去重合并次数 " + m.version + "）\n创建: " + fmtTime(m.createdAt) + "\n活跃时间: " + (m.timestamps && m.timestamps.length > 0 ? m.timestamps.map(fmtTime).join(" → ") : "-") + "\n" + (m.sourceAnchors && m.sourceAnchors.length > 0 ? "来源锚点: " + m.sourceAnchors.join(", ") : "来源锚点: -") }) : null
+		            open ? /* @__PURE__ */ (0, import_jsx_runtime18.jsx)("div", { style: S.detail, children: "id: " + m.id + "\n名称: " + (m.name && m.name.length > 0 ? m.name : "（未命名，投射回落 mem-" + m.id.slice(-8) + "）") + "\n情境: " + (m.scene || "-") + "\n关键词: " + (m.keywords && m.keywords.length > 0 ? m.keywords.join("，") : "（暂无 · 预留检索轴）") + "\n作用范围: " + (m.scope === "workspace" ? "指定工作区" + (m.workspaceId ? "：" + m.workspaceId : "（未记录路径）") : "用户默认（global，任何工作区可见）") + "\n版本: v" + m.version + "（去重合并次数 " + m.version + "）\n创建: " + fmtTime(m.createdAt) + "\n活跃时间: " + (m.timestamps && m.timestamps.length > 0 ? m.timestamps.map(fmtTime).join(" → ") : "-") + "\n" + (m.sourceAnchors && m.sourceAnchors.length > 0 ? "来源锚点: " + m.sourceAnchors.join(", ") : "来源锚点: -") }) : null
 		          ]
 		        },
 		        m.id

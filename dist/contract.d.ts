@@ -853,6 +853,28 @@ export interface UiRecord {
     /** 使用场景（G1）：从 metadata.dsh_usage_scenario 读出；功能关/无则 undefined。 */
     usageScenario?: string[];
     /**
+     * 名称（md 投射相，N1）：名称蒸馏产出的短标题，**投射文件名就取它**
+     * （`<type>/<name>.memory.md` 的 stem）。`undefined`/`null` = 还没名字（存量记录），
+     * 投射器回落 `mem-<id8>`。面板显示它是为了核对“这条记忆对应哪个投射文件”。
+     * 纯投影字段：读时从 `l1_records.name` 带出，不进存储改动。
+     */
+    name?: string | null;
+    /**
+     * 可见范围（§E）：`global` = 用户默认（任何工作区可见）；`workspace` = 仅归属工作区可见。
+     * 展示用（读时从 `l1_records.scope` 带出，纯投影）。
+     */
+    scope?: 'global' | 'workspace';
+    /** 归属工作区路径（仅 `scope='workspace'` 时非空；`global` 恒为 `null`）。展示用。 */
+    workspaceId?: string | null;
+    /**
+     * 关键词（保留字段，**用于 BM25 匹配**）：从 `metadata.dsh_keywords` 读出。
+     *
+     * 与 `usageScenario` 同范式（保留键、随 metadata 落库、不进 `l1_records` DDL）。
+     * **当前无产出方**——抽取/命名尚未产出该键，故实机上恒为空；先预留字段与检索轴，
+     * 让 UI 与 BM25 都就位。无键 → `undefined`（缺席 ≠ 空数组）。
+     */
+    keywords?: string[];
+    /**
      * 人给的相关度均值(0..5)；从未被 0..5 打过分为 undefined（**缺席 ≠ 0 分**）。
      * 读时从 recall-feedback sidecar 派生，不进存储/快照。
      */

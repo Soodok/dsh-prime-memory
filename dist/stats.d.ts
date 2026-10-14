@@ -177,6 +177,12 @@ export declare function hitToUiRecord(r: {
     metadata?: Record<string, unknown>;
     score?: number;
     family?: string;
+    /** 名称（md 投射相）：投射文件名取它；无名字 = undefined。 */
+    name?: string;
+    /** 可见范围（§E）：'workspace' 才带归属，其余一律归一 'global'。 */
+    scope?: string;
+    /** 归属工作区路径（仅 scope='workspace' 时非空）。 */
+    workspaceId?: string;
     /** 退场判据:`valid_to` 闭合即已退场(软删)。由 `listL1`/`getByIds` 透传。 */
     validTo?: number;
 }, extra?: {

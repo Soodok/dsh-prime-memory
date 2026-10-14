@@ -2226,6 +2226,16 @@ export function hitToUiRecord(r, extra) {
         }),
         // G1 使用场景：从命名空间保留键读出（功能关/无键 → undefined）。
         usageScenario: Array.isArray(r.metadata?.dsh_usage_scenario) ? r.metadata?.dsh_usage_scenario : undefined,
+        // 投射身份三项（N1）：名称 / 可见范围 / 归属工作区。面板靠它们核对“这条记忆
+        // 对应哪个投射文件、对谁可见”——这三个值此前从不进 UiRecord，于是面板上
+        // 无法把记忆与投射文件对上。纯投影，不从存储侧另算。
+        name: r.name ?? null,
+        scope: r.scope === 'workspace' ? 'workspace' : 'global',
+        workspaceId: r.scope === 'workspace' ? (r.workspaceId ?? '') || null : null,
+        // 关键词（保留字段，用于 BM25）：与 usageScenario 同范式，从保留键读出（无键 → undefined）。
+        keywords: Array.isArray(r.metadata?.dsh_keywords)
+            ? (r.metadata?.dsh_keywords).filter((k) => typeof k === 'string' && k !== '')
+            : undefined,
         // 人给相关度均值：读时从 sidecar 派生（不进存储/快照）；未打分 → 字段缺席。
         userRelevance: extra?.userRelevance ?? undefined,
     };

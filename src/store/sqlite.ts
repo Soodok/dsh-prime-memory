@@ -642,10 +642,10 @@ export class MemoryDb {
       const savedStamp = this.readMetaString('fts_tokenizer') ?? 'bigram-v1';
       const tokenizerChanged = savedStamp !== wantStamp;
       let ftsRebuilt = false;
-      if (this.tableExists('l1_fts') && (!this.hasColumn('l1_fts', 'family') || !this.hasColumn('l1_fts', 'scope') || tokenizerChanged)) {
+      if (this.tableExists('l1_fts') && (!this.hasColumn('l1_fts', 'family') || !this.hasColumn('l1_fts', 'scope') || !this.hasColumn('l1_fts', 'keywords') || tokenizerChanged)) {
         this.db.exec('DROP TABLE l1_fts');
         ftsRebuilt = true;
-        this.logger?.info(`${TAG} l1_fts 缺 family/scope 列或分词器已变更(${savedStamp} → ${wantStamp}),重建全文索引`);
+        this.logger?.info(`${TAG} l1_fts 缺 family/scope/keywords 列或分词器已变更(${savedStamp} → ${wantStamp}),重建全文索引`);
       }
       let l0FtsRebuilt = false;
       if (this.tableExists('l0_fts') && tokenizerChanged) {
@@ -655,6 +655,7 @@ export class MemoryDb {
       }
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS l1_fts USING fts5(
+          keywords,
           content,
           content_original UNINDEXED,
           record_id UNINDEXED,
@@ -685,10 +686,10 @@ export class MemoryDb {
       `);
 
       this.stmtL1FtsInsert = this.db.prepare(`
-        INSERT INTO l1_fts (content, content_original, record_id, type, priority, scene_name,
+        INSERT INTO l1_fts (keywords, content, content_original, record_id, type, priority, scene_name,
           session_id, version, timestamp_str, timestamp_start, timestamp_end, metadata_json, family,
           scope, workspace_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       this.stmtL1FtsDelete = this.db.prepare('DELETE FROM l1_fts WHERE record_id = ?');
       // §E 可见范围过滤的**唯一缝**。设计要点:
@@ -876,6 +877,7 @@ export class MemoryDb {
     for (const r of stmt.iterate() as Iterable<Record<string, unknown>>) {
       try {
         this.stmtL1FtsInsert.run(
+          tokenizeForFts(ftsKeywordText(parseMetadataJson(String(r.metadata_json ?? '{}')))),
           tokenizeForFts(String(r.content ?? '')),
           String(r.content ?? ''),
           String(r.record_id ?? ''),
@@ -1156,6 +1158,7 @@ export class MemoryDb {
       if (ftsExisted || retiredNow) this.stmtL1FtsDelete.run(record.id);
       if (!retiredNow) {
         this.stmtL1FtsInsert.run(
+          tokenizeForFts(ftsKeywordText(record.metadata)),
           tokenizeForFts(record.content),
           record.content,
           record.id,
@@ -2913,6 +2916,24 @@ export interface L1MetaLite {
   id: string;
   type: string;
   metadata: Record<string, unknown>;
+}
+
+/**
+ * 关键词轴的索引文本（保留字段 `metadata.dsh_keywords`）。
+ *
+ * 为什么是**独立列**而不是并进 `content`：关键词是一条**独立的检索轴**——它要么
+ * 精确命中、要么不命中，与正文里的 BM25 词频不是一回事（并进正文等于让关键词的
+ * 权重被正文长度稀释）。`l1_fts` 因此排成「keywords → content」两列索引：将来
+ * 关键词蒸馏上线时**先命中关键词轴、再回落到全文**，无需再改表结构（FTS5 不能 ALTER）。
+ *
+ * 目前无产出方（抽取/命名尚未产出该键）⇒ 恒为空串：空串不产生任何 token，
+ * 索引与改动前逐字相同（零漂移），所以先接线、后接产线是安全的。
+ */
+function ftsKeywordText(metadata: Record<string, unknown> | undefined): string {
+  const kw = Array.isArray(metadata?.dsh_keywords)
+    ? (metadata.dsh_keywords as unknown[]).filter((k): k is string => typeof k === 'string' && k.trim() !== '')
+    : [];
+  return kw.join('\n');
 }
 
 /** 容忍坏 JSON 的 metadata 解析(与 rowToRecord 同口径:解析失败退化为空对象,不抛)。 */

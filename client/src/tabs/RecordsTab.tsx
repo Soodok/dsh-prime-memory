@@ -583,6 +583,42 @@ export function RecordsTab(props: { rpc: RpcFn }) {
                     {'用 ' + m.usage.used + '/' + m.usage.attempts}
                   </span>
                 ) : null}
+                {/* 名称（md 投射相）：投射文件名取它；缺省 = 还没名字（投射回落 mem-<id8>）。
+                    放在卡头是为了核对“这条记忆对应哪个投射文件”，不是额外的存储字段。 */}
+                <span
+                  title={m.name && m.name.length > 0
+                    ? '名称（名称蒸馏产物；投射文件的命名取它）：' + m.name
+                    : '尚未命名（名称蒸馏未产出）；投射回落 mem-' + m.id.slice(-8)}
+                  style={{
+                    fontSize: 11,
+                    padding: '1px 6px',
+                    borderRadius: 999,
+                    whiteSpace: 'nowrap',
+                    maxWidth: 220,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    border: '1px solid ' + (m.name && m.name.length > 0 ? 'var(--dsh-mem-border)' : 'var(--dsh-mem-danger)'),
+                    color: m.name && m.name.length > 0 ? 'var(--dsh-mem-text-2)' : 'var(--dsh-mem-danger)',
+                  }}
+                >
+                  {'名称 ' + (m.name && m.name.length > 0 ? m.name : '未命名')}
+                </span>
+                {/* 作用范围（§E）：用户默认 = global（任何工作区可见）；工作区 = 仅归属工作区可见。 */}
+                <span
+                  title={m.scope === 'workspace'
+                    ? '作用范围：指定工作区（仅归属工作区可见）' + (m.workspaceId ? '：' + m.workspaceId : '')
+                    : '作用范围：用户默认（global，任何工作区可见）'}
+                  style={{
+                    fontSize: 11,
+                    padding: '1px 6px',
+                    borderRadius: 999,
+                    whiteSpace: 'nowrap',
+                    border: '1px solid var(--dsh-mem-border)',
+                    color: 'var(--dsh-mem-text-2)',
+                  }}
+                >
+                  {m.scope === 'workspace' ? '工作区' : '用户默认'}
+                </span>
                 {m.score !== null && m.score !== undefined ? (
                   <span style={S.muted}>{'相关度 ' + Number(m.score).toFixed(2)}</span>
                 ) : null}
@@ -618,8 +654,21 @@ export function RecordsTab(props: { rpc: RpcFn }) {
                   {'id: ' +
                     m.id +
                     '\n' +
+                    '名称: ' +
+                    (m.name && m.name.length > 0 ? m.name : '（未命名，投射回落 mem-' + m.id.slice(-8) + '）') +
+                    '\n' +
                     '情境: ' +
                     (m.scene || '-') +
+                    '\n' +
+                    // 关键词：预留的检索轴（待关键词蒸馏上线）。当前无产出方 ⇒ 通常为空；
+                    // “空白字段”本身就是如实陈述，所以照显示，不做隐藏。
+                    '关键词: ' +
+                    (m.keywords && m.keywords.length > 0 ? m.keywords.join('，') : '（暂无 · 预留检索轴）') +
+                    '\n' +
+                    '作用范围: ' +
+                    (m.scope === 'workspace'
+                      ? '指定工作区' + (m.workspaceId ? '：' + m.workspaceId : '（未记录路径）')
+                      : '用户默认（global，任何工作区可见）') +
                     '\n' +
                     '版本: v' +
                     m.version +

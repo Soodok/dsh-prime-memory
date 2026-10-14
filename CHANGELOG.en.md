@@ -7,6 +7,17 @@
 
 This file covers the **0.12.0** release notes and the current **unreleased** changes in English. For the full history, see [CHANGELOG.md](./CHANGELOG.md) (Chinese).
 
+## [0.24.2] — 2026-10-14
+
+### Added
+
+- **Projection identity fields in the records panel**: card headers now show "Name" and "Scope" badges, and the expanded detail adds three rows (Name / Keywords / Scope), so users can directly verify the "memory ↔ projection filename" mapping. The `UiRecord` contract (`contract.ts`) gains optional `name`/`scope`/`workspaceId`/`keywords`; `stats.ts::hitToUiRecord` reads them from the record and the `metadata.dsh_keywords` reserved key.
+- **FTS keyword axis as a separate, reserved column (dormant)**: `l1_fts` is ordered `keywords → content`, so keywords form an independent BM25 axis rather than being diluted into body-text term frequency. No keyword-distillation producer exists yet ⇒ the column is always empty and retrieval behaves byte-for-byte as before (zero drift); when distillation ships, no schema change is needed (FTS5 cannot ALTER).
+
+### Changed
+
+- **Hook-consolidation comment cleanup**: the retired factory name `makeSuffixSync` no longer appears anywhere in `src/` (acceptance grep = 0), leaving a single source of truth for the consolidation conclusion.
+
 ## [0.24.1] — 2026-10-14
 
 ### Added
