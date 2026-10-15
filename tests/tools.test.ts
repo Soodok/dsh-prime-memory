@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { registerMemoryTools } from '../src/tools/index.js';
+import { registerSkillTools } from '../src/tools/skills.js';
 import { registerSlotTools } from '../src/tools/slots.js';
 import { SlotStore } from '../src/store/slots.js';
 import { MemoryDb } from '../src/store/sqlite.js';
@@ -47,12 +48,20 @@ afterAll(async () => {
 
 const noopLogger: MemoryLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
+/** 技能工具注册只需注册面(execute 不被调用),故用最小桩。 */
+const skillStub = {
+  list: () => [],
+  get: () => undefined,
+  update: async () => false,
+  archive: async () => false,
+} as unknown as Parameters<typeof registerSkillTools>[1];
+
 interface RegisteredTool {
   name: string;
   execute: (args: Record<string, unknown>, exec?: { agent?: { id?: string } }) => Promise<unknown>;
 }
 
-function harness(opts: { liveMutate?: boolean; sessionMode?: (sid: string) => string; captureEvents?: boolean } = {}) {
+function harness(opts: { liveMutate?: boolean; sessionMode?: (sid: string) => string; captureEvents?: boolean; cfgSkillsEnabled?: boolean; liveSkillsEnabled?: boolean } = {}) {
   const events: Array<(paths: string[]) => void> = [];
   // 基线不含 conflictFreeze 键(留空 = 不覆盖,见 runner.ts 的 !== undefined 判定),故用断言;
   // 空数组按契约类型加宽(never[] 会让断言两侧失去重叠)
@@ -64,6 +73,8 @@ function harness(opts: { liveMutate?: boolean; sessionMode?: (sid: string) => st
     distillMode: '', directBaseURL: '', directApiKey: '',
     embedRemoteBaseURL: '', embedRemoteApiKey: '', embedRemoteModel: '', embedRemoteDimensions: 0,
     memoryMutate: opts.liveMutate ?? false,
+    skillsEnabled: opts.liveSkillsEnabled === true,
+    toolSkills: true,
   } as MemoryLiveSettings;
   const liveHandle: LiveSettingsHandle = { supported: true, get: () => live, update: async () => {} };
   const modes = new SessionModeStore('/nonexistent', 'auto');
@@ -101,6 +112,7 @@ function harness(opts: { liveMutate?: boolean; sessionMode?: (sid: string) => st
   const cfg = {
     tools: true,
     recall: { maxResults: 5 },
+    skills: { enabled: opts.cfgSkillsEnabled === true },
   } as unknown as MemoryConfig;
 
   return { ctx, cfg, modes, liveHandle, registered, events };
@@ -439,6 +451,43 @@ describe('memory tools', () => {
     (h.liveHandle.get() as { toolRoom?: boolean }).toolRoom = true;
     h.events.forEach((fn) => fn(['toolRoom']));
     expect(names()).toContain('memory_room_admin');
+  });
+
+  // ── 技能组并轨封印:功能开关与 toolSkills 都随 volatile 热更 ──
+  it('技能组:功能关时零表面积,volatile 开启后注册', async () => {
+    const stores = await setupStores();
+    const h = harness({ captureEvents: true, cfgSkillsEnabled: false, liveSkillsEnabled: false });
+    const seals = registerMemoryTools(h.ctx, h.cfg, stores, noopLogger, h.modes, h.liveHandle);
+    registerSkillTools(h.ctx, skillStub, noopLogger, h.liveHandle, seals);
+    const names = () => h.registered.map((t) => t.name);
+    // 功能关(部署 cfg 与 live 皆关)⇒ 零表面积
+    expect(names()).not.toContain('memory_skill_list');
+    // live 开启 → volatile 热更 → 四件注册
+    (h.liveHandle.get() as { skillsEnabled?: boolean }).skillsEnabled = true;
+    h.events.forEach((fn) => fn(['skillsEnabled']));
+    expect(names()).toContain('memory_skill_list');
+    expect(names()).toContain('memory_skill_read');
+    expect(names()).toContain('memory_skill_pin');
+    expect(names()).toContain('memory_skill_archive');
+  });
+
+  it('技能组:toolSkills 封印反注册、解封重注册(volatile 热更)', async () => {
+    const stores = await setupStores();
+    const h = harness({ captureEvents: true, cfgSkillsEnabled: true });
+    const seals = registerMemoryTools(h.ctx, h.cfg, stores, noopLogger, h.modes, h.liveHandle);
+    registerSkillTools(h.ctx, skillStub, noopLogger, h.liveHandle, seals);
+    const names = () => h.registered.map((t) => t.name);
+    // 功能开 + toolSkills 未封 → 注册
+    expect(names()).toContain('memory_skill_list');
+    // 封印 → 反注册(核心读不受影响)
+    (h.liveHandle.get() as { toolSkills?: boolean }).toolSkills = false;
+    h.events.forEach((fn) => fn(['toolSkills']));
+    expect(names()).not.toContain('memory_skill_list');
+    expect(names()).toContain('memory_search');
+    // 解封 → 重注册
+    (h.liveHandle.get() as { toolSkills?: boolean }).toolSkills = true;
+    h.events.forEach((fn) => fn(['toolSkills']));
+    expect(names()).toContain('memory_skill_list');
   });
 
   it('slot 写入:mem_ 引用必须真实存在,幻觉 id 被拒且不落库', async () => {

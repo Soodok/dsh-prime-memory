@@ -66,6 +66,8 @@ export interface MemoryLiveSettings {
   toolRuminate: boolean;
   toolConflict: boolean;
   toolMutate: boolean;
+  /** 技能工具组封印:false = memory_skill_* 从模型工具列表移除（技能功能开启时才相关；功能关时本就零表面积）。 */
+  toolSkills: boolean;
   /** L0 捕获(原始对话落盘) */
   capture: boolean;
   /** L1 抽取 + L2/L3 蒸馏 */
@@ -672,13 +674,16 @@ export interface RoomAdminResponse {
 }
 
 /**
- * 回填端点(wing/keyword/redistill)的请求体。三者都同时是「触发器 + 状态查询」：
- * - `probe` 缺省/false：空闲时**启动**一轮；已在跑则只回状态(单飞)。
+ * 回填端点(wing/keyword/redistill)的请求体。三者都同时是「触发器 + 状态 + 控制」：
+ * - 缺省/probe=false：空闲时**启动**一轮；已在跑则只回状态(单飞)。
  * - `probe: true`：**只读快照**,绝不启动——供 UI 离开区域再回来时恢复在途任务的进度
  *   (否则计时器随组件卸载而清,回到页面只能看到卡住的最后一帧)。
+ * - `cancel: true`：**请求中止**本轮。不硬杀在飞请求:当前条跑完就收工，
+ *   已入账的写回全部保留，剩余计入 deferred 可再点一次。
  */
 export interface BackfillTriggerRequest {
   probe?: boolean;
+  cancel?: boolean;
 }
 
 /** dsh-memory/wing-backfill(一键回填,后台任务;端点立即返回,进度以 wing-overview 轮询)。 */
@@ -705,6 +710,15 @@ export interface BackfillProgress {
   concurrency: number;
   /** 预算/上限用尽未处理、留下次的条数（跟“跑完了”区分开的关键一个数）。 */
   deferred: number;
+  /** 本轮被人工中止（cancel）——与“预算用尽”分开报，面板文案不同。 */
+  cancelled: boolean;
+  /**
+   * 扫描期已扫行数 / 总行数（`scanTotal=0` = 总数未知）。
+   * 为何要报：扫描段原本在面板上只是一个静态「正在扫描…」——存量上千行时
+   * 用户分不清“在跑”还是“卡死”（真机就因此把它当成“不开始”）。
+   */
+  scanned: number;
+  scanTotal: number;
 }
 
 /** dsh-memory/keyword-backfill（关键词蒸馏回填，后台任务；门控关时 enabled=false 不启动）。 */

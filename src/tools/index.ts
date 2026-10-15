@@ -82,6 +82,16 @@ interface ToolExecLike {
   };
 }
 
+/**
+ * 封印登记面:把某个工具组的延迟注册交给 {@link registerMemoryTools} 的封印机制。
+ * 组名见 `toolSealed` 的 switch;登记后是否真正注册由当前封印状态决定,
+ * 并在 `loader/volatile-update` 时随 `applyToolSeals` 重放(热更)。
+ */
+export interface ToolSealRegistry {
+  /** 登记一个工具组的一次性注册器;`make()` 须返回 `ctx.tools.register` 的 disposer。 */
+  reg(group: string, make: () => () => void): void;
+}
+
 export function registerMemoryTools(
   ctx: Context,
   cfg: MemoryConfig,
@@ -102,8 +112,8 @@ export function registerMemoryTools(
   ruminate?: RuminateController,
   /** Room 注册表(分类管理 beta.4;缺省 = memory_room_admin 返回未装配提示)。 */
   roomRegistry?: RoomRegistryStore,
-): void {
-  if (!cfg.tools) return;
+): ToolSealRegistry {
+  if (!cfg.tools) return { reg: () => {} };
 
   // ── 工具分组封印(v0.21.0):sealable 组的注册经 reg() 登记,按 live 开关动态
   // 注册/反注册。封印 = 从模型工具列表消失(反注册),不是执行期拒绝;开关经
@@ -112,6 +122,9 @@ export function registerMemoryTools(
   // memory_receipts)与槽位三件(slots.ts)不参与封印。
   const toolDisposers = new Map<string, Array<() => void>>();
   const toolMakers = new Map<string, Array<() => () => void>>();
+  // 技能组是「功能开关 + 封印」双条件:功能关(部署 cfg.skills.enabled 与 live.skillsEnabled 取或)或
+  // 封印(toolSkills===false)任一满足即不注册——功能关时保持零表面积,开门后仍可单独封印。
+  const skillsFeatureOn = (): boolean => cfg.skills.enabled === true || live.get().skillsEnabled === true;
   const toolSealed = (group: string): boolean => {
     const snap = live.get();
     switch (group) {
@@ -120,6 +133,7 @@ export function registerMemoryTools(
       case 'ruminate': return snap.toolRuminate === false;
       case 'conflict': return snap.toolConflict === false;
       case 'mutate': return snap.toolMutate === false;
+      case 'skills': return !skillsFeatureOn() || snap.toolSkills === false;
       default: return false;
     }
   };
@@ -1537,6 +1551,8 @@ export function registerMemoryTools(
     ctx.on('loader/volatile-update', () => applyToolSeals());
   }
   logger.info('[memory] 工具已注册: memory_search / conversation_search / memory_read_scene / memory_receipts / memory_search_graph / memory_expand_graph_node,及高权限 memory_add/memory_import/memory_delete / memory_resolve_conflict / memory_ruminate / memory_ruminate_cancel / memory_ruminate_status');
+  // 技能组(registerSkillTools)在注册期经本面登记,随 volatile 热更重放封印。
+  return { reg };
 }
 
 /** 凭证回溯的人类可读渲染(含"还有多少条没显示")。 */

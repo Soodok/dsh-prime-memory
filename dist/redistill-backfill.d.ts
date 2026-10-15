@@ -81,7 +81,20 @@ export interface RedistillBackfillState {
     concurrency: number;
     /** 预算/上限用尽未处理、留下次的条数。 */
     deferred: number;
+    /** 本轮被人工中止（进端点 cancel）——与“预算用尽”分开报文案。 */
+    cancelled: boolean;
+    /**
+     * 扫描期已扫行数（活跃集逐页扫）/ 总行数（本模块拿不到总数，恒 0 = 未知）。
+     * 为何要暴露：扫描段原本在面板上只是一个静态「正在扫描…」，分不清在跑还是卡死。
+     */
+    scanned: number;
+    scanTotal: number;
 }
+/** 请求中止本轮（空闲时无副作用）；返回后中止是**有界**的：最多等 graceMs(≤60s)。 */
+export declare function cancelRedistillBackfill(): {
+    cancelled: boolean;
+    running: boolean;
+};
 export declare function redistillBackfillState(): RedistillBackfillState;
 /**
  * 空心标题检测：某个 `## 节名` 到下一标题之间没有实质文字。
@@ -130,4 +143,6 @@ export interface ReshapeOneResult {
  * 导出不带 ctx/cfg 以外的参数，供单测注入桩 LLM。旧名 `reshapeChunk`（多条一次）已废：
  * 合并请求把爆炸半径从 1 条放大到 20 条，而实测逐条只花 2.6s，合并毫无收益。
  */
-export declare function reshapeOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, callTimeoutMs?: number): Promise<ReshapeOneResult | null>;
+export declare function reshapeOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, callTimeoutMs?: number, 
+/** 本轮中止信号（可选）：与单次超时**取或**，宽限到期后由它当场掐断请求。 */
+externalSignal?: AbortSignal): Promise<ReshapeOneResult | null>;

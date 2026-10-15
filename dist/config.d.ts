@@ -148,6 +148,15 @@ export interface MemoryConfig {
         concurrency: number;
         /** 一次 LLM 调用（含整条回退链）的超时(ms)，比对话蒸馏的 llm.timeoutMs 宽；按路由数留余量。 */
         callTimeoutMs: number;
+        /**
+         * 中止宽限(ms)：按下中止后先给在飞的那条这段时间自然收工（token 不白费），
+         * **到期强杀**在飞请求（abort），保证中止是**有界**的。
+         *
+         * 硬界（用户定）：**中止必须 30s 内强停**。故运行时取值会被钳到 ≤30_000（上限），
+         * 与 schema 的 max 同口径；默认 15s——比 callTimeoutMs(240s) 小一个量级，
+         * 既不让“中止”变成“等四分钟”，又给快回路留出自然收工的机会。0 = 立即强杀。
+         */
+        cancelGraceMs: number;
     };
     /**
      * 内容路由（workspace 归属）：按「这条记忆**谈到**哪个项目」给记录补 `workspace_id`。

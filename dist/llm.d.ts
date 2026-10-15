@@ -17,6 +17,15 @@ export interface LlmCallOptions {
     maxTokens?: number;
     temperature?: number;
     signal?: AbortSignal;
+    /**
+     * **调用级思考档位覆盖**（可选）。非空时优先于路由/层链/全局解析出的档位。
+     *
+     * 为什么需要：回填批扫（整形/关键词/wing/room）是「重排 + 拎标识」的直答任务，
+     * 不需要推理；而思考模型默认开思考，会把整个 maxTokens 预算烧在 reasoning 上、
+     * 正文吐 0 字符（真机：156/162 次 `llm empty output` 都是这么来的）。
+     * 显式传 `off` 后预算全留给答案。档位仍过一遍模型能力钳制：模型不支持 off 时不传。
+     */
+    reasoningEffort?: string;
     /** 诊断日志(缺失时静默,不影响调用) */
     logger?: MemoryLogger;
 }

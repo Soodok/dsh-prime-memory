@@ -7,6 +7,26 @@
 
 This file covers the **0.12.0** release notes and the current **unreleased** changes in English. For the full history, see [CHANGELOG.md](./CHANGELOG.md) (Chinese).
 
+## [0.26.1] — 2026-10-15
+
+### Added
+
+- **Backfill panel: auto-resumed progress + scan progress + honest summary.** The three backfill endpoints are trigger-plus-status hybrids, so a bare call while idle **starts a run**. New request body `BackfillTriggerRequest { probe?: boolean }` — `probe:true` returns the current snapshot and never starts anything; `BackfillSection` probes all three on mount and re-attaches polling if one is running (leaving and returning to the overview no longer needs a manual re-click). `BackfillProgress` gains `scanned/scanTotal` ("scanning 1252/1252 rows…"), and a 0-candidate scan now reports "no records missing keywords, nothing to backfill" instead of "0 updated", which read as a failure.
+- **Cancel switch for the three batch actions (bounded hard-stop).** The contract gains `cancel?: boolean` and `BackfillProgress.cancelled`; each module exports `cancelXBackfill()`. Cancellation is **bounded**: after the signal a one-shot grace timer fires `runAbort.abort()` to cut in-flight requests. The hard bound is clamped by `backfill.cancelGraceMs` (schema max 30_000, default 15s) — no YAML value can exceed it.
+- **Skill tool-group seal `toolSkills`.** The four `memory_skill_*` tools now go through the host seal mechanism (`reg('skills', …)`, ANDed with the `skillsEnabled` feature switch); both hot-apply on `loader/volatile-update` (toggling in the panel registers/unregisters immediately, no restart). Previously they gated once at registration, sat unconditionally in the model tool list once enabled, and did not hot-update on toggle.
+
+### Changed
+
+- **All LLM batch sites unified to one-record-at-a-time serial.** The remaining three merged batches — wing (`labelWingOne`/`tagOne`), `pipeline/relabel.ts`, `room-review.ts` (`roomCandidateOne`) — were converted; all five batch sites now send exactly one memory per request and await it before the next (`concurrency` defaults to 1). Rationale: a single 35B record measures ~2.6s, while a multi-record batch loses the whole batch to one truncation or empty output.
+- **Reshape exclusion now keyed by a version stamp.** `dsh_reshape_ver` (=2) with `isReshapedAtCurrentVersion(meta, content)` — the stamp is written **only on a successful write-back**; a record left unchanged gets **no marker** and stays retryable next run (the legacy boolean `dsh_reshape_tried` is read only for legacy compatibility). Bumping the schema version re-runs earlier outputs automatically.
+- **`backfill.maxRecords` defaults to 300** (was wrongly set to 40, so a real 251-record target only advanced 40 per run).
+
+### Fixed
+
+- **Bare-call polling hot loop (the real cause of "it doesn't start").** The UI tick called the trigger+status hybrid endpoints bare, so while idle it started a new run every 3s and the panel stayed on "scanning". The tick now sends `{ probe: true }`.
+- **Batch scans returning empty output: thinking models used as direct-answer models.** `LlmCallOptions` gains a **call-level `reasoningEffort` override** and all five batch labelers pass `'off'`. With the route effort at `""` (auto) a thinking model defaulted to thinking on, the budget went to reasoning and the body came back at 0 characters (156 of 162 real failures were `local-9b` empty output).
+- **`client/src/ui/MarkdownBody.tsx` typecheck failure.** The four `string | undefined` regex captures brought in with 0.26.0 failed under `noUncheckedIndexedAccess`; added non-null assertions.
+
 ## [0.26.0] — 2026-10-14
 
 ### Added

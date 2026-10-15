@@ -1,10 +1,8 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 const MUTATE_OFF_NOTICE = '记忆写删未开放：请在记忆库面板开启「高权限模式」后，模型才能改动技能。';
-export function registerSkillTools(ctx, cfg, skills, logger, live) {
-    if (!(cfg.skills.enabled === true || live.get().skillsEnabled === true))
-        return; // 默认关：部署 cfg 或看板 live 任一开才注册
+export function registerSkillTools(ctx, skills, logger, live, seals) {
     // memory_skill_list：列全部技能摘要（含 status/sessionCount，candidate 也列出供审阅）。
-    ctx.tools.register(defineTool({
+    seals.reg('skills', () => ctx.tools.register(defineTool({
         name: 'memory_skill_list',
         description: '列出已沉淀的技能(程序性记忆)摘要：id/标题/状态/档位/覆盖会话数。用于查看技能库现状与候选晋升情况。',
         parameters: {},
@@ -44,9 +42,9 @@ export function registerSkillTools(ctx, cfg, skills, logger, live) {
             }));
             return { skills: list, notice: `共 ${list.length} 个技能` };
         },
-    }));
+    })));
     // memory_skill_read：取某技能完整正文 + 步骤。
-    ctx.tools.register(defineTool({
+    seals.reg('skills', () => ctx.tools.register(defineTool({
         name: 'memory_skill_read',
         description: '读取一条技能的完整正文与步骤清单（按 id）。用于展开注入里被截断/excerpt 档的技能细节。',
         parameters: { id: { type: 'string', required: true, description: '技能 id（来自 memory_skill_list 或注入头）' } },
@@ -76,9 +74,9 @@ export function registerSkillTools(ctx, cfg, skills, logger, live) {
                 return { id, title: '', body: '', steps: [], notice: `未找到技能 ${id}` };
             return { id: s.id, title: s.title, body: s.body, steps: s.steps };
         },
-    }));
+    })));
     // memory_skill_pin：pin/unpin（高权限门）。pinned 技能不受闲置归档影响。
-    ctx.tools.register(defineTool({
+    seals.reg('skills', () => ctx.tools.register(defineTool({
         name: 'memory_skill_pin',
         description: '固定/取消固定一条技能（按 id）。固定后不参与闲置自动归档。仅用户显式要求时用；需高权限模式。',
         parameters: {
@@ -100,9 +98,9 @@ export function registerSkillTools(ctx, cfg, skills, logger, live) {
             const changed = await skills.update(id, { pinned: args?.pinned === true });
             return { notice: changed ? `已${args?.pinned === true ? '固定' : '取消固定'}技能 ${id}` : `未找到技能 ${id} 或无变化` };
         },
-    }));
+    })));
     // memory_skill_archive：归档（高权限门）；走 sidecar 生命周期，不触碰 l1_records 退场。
-    ctx.tools.register(defineTool({
+    seals.reg('skills', () => ctx.tools.register(defineTool({
         name: 'memory_skill_archive',
         description: '归档一条技能（按 id，可给原因）。归档后不再注入，但记录保留可恢复。仅用户显式要求时用；需高权限模式。',
         parameters: {
@@ -126,5 +124,5 @@ export function registerSkillTools(ctx, cfg, skills, logger, live) {
                 logger.info(`[memory] 技能归档 ${id}`);
             return { notice: done ? `已归档技能 ${id}` : `未找到技能 ${id} 或已归档` };
         },
-    }));
+    })));
 }

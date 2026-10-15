@@ -53,9 +53,9 @@ import { WING_CATALOG, WING_FALLBACK, type MemoryFamily, type MemoryLogger, type
 import { isRoomSlug } from './metadata-validators.js';
 import { InProcMemoryBackend, type MemoryBackend } from './store/memory-backend.js';
 import { isWingCorner } from './store/session-modes.js';
-import { startWingBackfill, wingBackfillState } from './wing-backfill.js';
-import { startKeywordBackfill, keywordBackfillState } from './keyword-backfill.js';
-import { startRedistillBackfill, redistillBackfillState } from './redistill-backfill.js';
+import { startWingBackfill, wingBackfillState, cancelWingBackfill } from './wing-backfill.js';
+import { startKeywordBackfill, keywordBackfillState, cancelKeywordBackfill } from './keyword-backfill.js';
+import { startRedistillBackfill, redistillBackfillState, cancelRedistillBackfill } from './redistill-backfill.js';
 import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
 import { computeMaturity } from './util/maturity.js';
@@ -84,6 +84,7 @@ export const PLUGIN_VERSION = (require('../package.json') as { version: string }
 function backfillProgress(s: {
   chunk: number; candidates: number; processed: number;
   scanning: boolean; batchesDone: number; batchTotal: number; concurrency: number; deferred: number;
+  cancelled: boolean; scanned: number; scanTotal: number;
 }): BackfillProgress {
   return {
     chunk: s.chunk,
@@ -94,6 +95,9 @@ function backfillProgress(s: {
     batchTotal: s.batchTotal,
     concurrency: s.concurrency,
     deferred: s.deferred,
+    cancelled: s.cancelled,
+    scanned: s.scanned,
+    scanTotal: s.scanTotal,
   };
 }
 
@@ -1378,6 +1382,11 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       return v;
     }
     case 'dsh-memory/wing-backfill': {
+      // cancel=true：请求中止本轮（不硬杀在飞请求，跑完当前条即收工）。
+      if ((payload as { cancel?: unknown } | undefined)?.cancel === true) {
+        cancelWingBackfill();
+        return { started: false, running: wingBackfillState().running };
+      }
       // probe=true 只读快照：不启动（UI 离开区域再回来时恢复在途任务用）。
       if ((payload as { probe?: unknown } | undefined)?.probe === true) {
         return { started: false, running: wingBackfillState().running };
@@ -1394,6 +1403,12 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       // 门控看生效配置（live.keywordEnabled 覆盖部署 cfg.keyword.enabled）；关时不启动。
       const ec = effectiveCfg(cfg, live);
       const st0 = keywordBackfillState();
+      // cancel=true：请求中止本轮（不硬杀在飞请求，跑完当前条即收工）。
+      if ((payload as { cancel?: unknown } | undefined)?.cancel === true) {
+        cancelKeywordBackfill();
+        const st = keywordBackfillState();
+        return { started: false, running: st.running, enabled: ec.keyword?.enabled === true, updated: st.updated, failed: st.failed, progress: backfillProgress(st) };
+      }
       // probe=true 只读快照：不启动（UI 离开区域再回来时恢复在途任务用）。
       if ((payload as { probe?: unknown } | undefined)?.probe === true) {
         return { started: false, running: st0.running, enabled: ec.keyword?.enabled === true, updated: st0.updated, failed: st0.failed, progress: backfillProgress(st0) };
@@ -1415,6 +1430,12 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       // 门控看生效配置（live.redistillEnabled 覆盖部署 cfg.redistill.enabled）；关时不启动。
       const ec = effectiveCfg(cfg, live);
       const st0 = redistillBackfillState();
+      // cancel=true：请求中止本轮（不硬杀在飞请求，跑完当前条即收工）。
+      if ((payload as { cancel?: unknown } | undefined)?.cancel === true) {
+        cancelRedistillBackfill();
+        const st = redistillBackfillState();
+        return { started: false, running: st.running, enabled: ec.redistill?.enabled === true, updated: st.updated, skipped: st.skipped, failed: st.failed, progress: backfillProgress(st) };
+      }
       // probe=true 只读快照：不启动（UI 离开区域再回来时恢复在途任务用）。
       if ((payload as { probe?: unknown } | undefined)?.probe === true) {
         return { started: false, running: st0.running, enabled: ec.redistill?.enabled === true, updated: st0.updated, skipped: st0.skipped, failed: st0.failed, progress: backfillProgress(st0) };
@@ -1526,7 +1547,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         supported: live?.supported ?? false,
         settings: sanitizeSettings(s ?? {
           enabled: true, capture: true, distill: true, recall: true,
-          toolRoom: true, toolGraph: true, toolRuminate: true, toolConflict: true, toolMutate: true,
+          toolRoom: true, toolGraph: true, toolRuminate: true, toolConflict: true, toolMutate: true, toolSkills: true,
           reasoningEffort: '', distillProvider: '', distillModel: '', distillChain: [],
           distillBudgets: { extract: 0, dedup: 0, l2: 0, l3: 0, graph: 0 }, distillMaxInputChars: 0,
           distillLayerChains: { l1: [], l2: [], l3: [] },
@@ -1579,7 +1600,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const patch = (payload ?? {}) as Record<string, unknown>;
       const clean: Record<string, boolean | string | number | DistillChainEntry[] | { extract: number; dedup: number; l2: number; l3: number; graph: number } | { l1: DistillChainEntry[]; l2: DistillChainEntry[]; l3: DistillChainEntry[] }> = {};
       // 布尔开关组:memoryMutate(高权限写删门)与主开关同列;conflictFreeze(§C 人工冲突裁决)
-      for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'skillsEnabled', 'keywordEnabled', 'redistillEnabled', 'mdSyncEnabled', 'memportEnabled', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate'] as const) {
+      for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'skillsEnabled', 'keywordEnabled', 'redistillEnabled', 'mdSyncEnabled', 'memportEnabled', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate', 'toolSkills'] as const) {
         if (typeof patch[key] === 'boolean') clean[key] = patch[key] as boolean;
       }
       // md 投射护栏运行时覆盖：数字才收，钳 0~10000（与 live schema 同上限）；0 = 跟随部署默认。

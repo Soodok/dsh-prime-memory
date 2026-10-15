@@ -259,6 +259,8 @@ describe('memory live settings key registry', () => {
     expect(bf.timeBudgetMs).toBe(1_800_000);
     expect(bf.concurrency).toBe(1);
     expect(bf.callTimeoutMs).toBe(240_000);
+    // 中止必须 60s 内强停：默认宽限 15s（远低于硬界），schema 上限钉死 60s。
+    expect(bf.cancelGraceMs).toBe(15_000);
     expect(defaults.tools).toBe(true);
     expect(defaults.benchControl).toBe(false);
     // §C 矛盾冻结:新功能默认关(冻结消耗人的注意力,不可默认全开)

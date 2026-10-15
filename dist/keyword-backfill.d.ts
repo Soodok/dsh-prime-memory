@@ -48,7 +48,21 @@ export interface KeywordBackfillState {
     concurrency: number;
     /** 预算/上限用尽未处理、留下次的条数。 */
     deferred: number;
+    /** 本轮被人工中止（进端点 cancel）——与“预算用尽”分开报文案。 */
+    cancelled: boolean;
+    /**
+     * 扫描期已扫行数 / 总行数（`scanTotal=0` = 总数未知）。
+     * 为何要暴露：扫描段原本在面板上只是一个静态「正在扫描…」，存量上千行时
+     * 用户分不清“在跑”还是“卡死”——真机就是因为这个把它当成“不开始”。
+     */
+    scanned: number;
+    scanTotal: number;
 }
+/** 请求中止本轮（空闲时无副作用）；返回后中止是**有界**的：最多等 graceMs。 */
+export declare function cancelKeywordBackfill(): {
+    cancelled: boolean;
+    running: boolean;
+};
 export declare function keywordBackfillState(): KeywordBackfillState;
 /** 启动后台关键词回填；已在运行返回 false（单飞）。 */
 export declare function startKeywordBackfill(deps: KeywordBackfillDeps): {
@@ -72,4 +86,6 @@ export interface KeywordOneResult {
  * 而逐条只花秒级。记账（state.failed 等）全部归调用方——标注器不再动全局状态，
  * 否则同一条会被两处各计一次。
  */
-export declare function labelKeywordOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, callTimeoutMs?: number): Promise<KeywordOneResult | null>;
+export declare function labelKeywordOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, callTimeoutMs?: number, 
+/** 本轮中止信号（可选）：与单次超时**取或**，宽限到期后由它当场掐断请求。 */
+externalSignal?: AbortSignal): Promise<KeywordOneResult | null>;

@@ -28,7 +28,14 @@ export interface HallBackfillState {
     /** 本进程累计成功打标条数(重启归零;仅作观测,不作账)。 */
     updated: number;
     failed: number;
+    /** 本轮被人工中止（进端点 cancel）——与“跑完”分开报文案。 */
+    cancelled: boolean;
 }
+/** 请求中止本轮（空闲时无副作用）；返回后中止是**有界**的：最多等 graceMs(≤30s)。 */
+export declare function cancelWingBackfill(): {
+    cancelled: boolean;
+    running: boolean;
+};
 export declare function wingBackfillState(): HallBackfillState;
 /** 启动后台回填;已在运行返回 false(单飞)。 */
 export declare function startWingBackfill(deps: HallBackfillDeps): {
@@ -41,7 +48,9 @@ export declare function startWingBackfill(deps: HallBackfillDeps): {
  * **一个请求只装一条**(旧名 `labelWingChunk`,多条一次,已废)。返回该条的 wing,
  * 失败/字段缺失/值非法返回 null(记账归调用方,本函数不动全局状态)。
  */
-export declare function labelWingOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, candidates: string, callTimeoutMs?: number): Promise<string | null>;
+export declare function labelWingOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, candidates: string, callTimeoutMs?: number, 
+/** 本轮中止信号（可选）：与单次超时**取或**，宽限到期后由它当场掐断请求。 */
+externalSignal?: AbortSignal): Promise<string | null>;
 /**
  * 涌现标签标注器(导出):为**一条**记录提炼 slug 标签(tags)——Room 的前身。
  * 一个请求只装一条(旧名 `tagChunk`,多条一次,已废)。失败返回 null;合法但为空返回 []。

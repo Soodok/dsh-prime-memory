@@ -393,8 +393,10 @@ async function callRoute(ctx, cfg, opts, route) {
     const { provider, model } = route;
     const signal = opts.signal ?? AbortSignal.timeout(cfg.llm.timeoutMs);
     // 档位按模型能力决策(跨供应商 effort 兼容):不支持的档位不传 + 告警一次,
-    // 空配置 = 自动(模型默认 → high);路由的档位候选已在链解析时定好(条目 > 全局)
-    const effort = await planDistillEffort(ctx, provider, model, route.effort, opts.logger);
+    // 空配置 = 自动(模型默认 → high);路由的档位候选已在链解析时定好(条目 > 全局)。
+    // 调用级覆盖(opts.reasoningEffort)优先——批扫靠它关掉思考，避免预算被 reasoning 吃光。
+    const routeEffort = opts.reasoningEffort ?? route.effort;
+    const effort = await planDistillEffort(ctx, provider, model, routeEffort, opts.logger);
     // 输入预算兜底:任何蒸馏调用的用户 prompt 不超过 maxInputChars
     // (L1 已在数据层分块,这里是 L2/L3 与异常场景的最后一道网)
     const user = opts.user.length > cfg.llm.maxInputChars
@@ -406,9 +408,10 @@ async function callRoute(ctx, cfg, opts, route) {
     // 配置本身就是高档时不再放大(防 ×16 双乘)
     const baseMaxTokens = opts.maxTokens ?? cfg.llm.maxTokens;
     const highTiers = HIGH_EFFORT_TIERS;
-    const triggerEffort = opts.layer
+    // 触发档位也跟调用级覆盖走：显式 off 时不得被配置里的高档触发而 ×4。
+    const triggerEffort = opts.reasoningEffort ?? (opts.layer
         ? layerEffortTrigger(cfg, layerKeyFor(opts.layer))
-        : cfg.llm.primaryEffort || cfg.llm.reasoningEffort;
+        : cfg.llm.primaryEffort || cfg.llm.reasoningEffort);
     const maxTokens = highTiers.includes(effort.effort) && !highTiers.includes(triggerEffort)
         ? layerMaxTokens(baseMaxTokens, 'high')
         : baseMaxTokens;

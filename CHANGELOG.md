@@ -18,6 +18,26 @@
   - **撤下浮动球 UI(`client/src/longtask-fab.ts`;beta.1 起曾随包发布)**:悬浮建议面板的归属本在 context-compression 侧(「建议启动压缩」是其领域),pm 属误载——2026-10-02 用户裁定撤下。撤下不违座位契约(settings.section 恰一个 + 输入栏 pill,body 单例不占座位),但全应用级 overlay 会与其他插件的悬浮 UI 抢占屏幕角落;长任务开关与手动压缩入口待长任务定版时落记忆设置分节。
   - **`session-mode-set` 的 `mode` 转为可选**:与 `longTask` 二选一必传——纯切长任务开关不再被迫发送档位(旧客户端恒传 mode,行为不变)。响应 `mode` 改回当前生效值。
 
+## [0.26.1] — 2026-10-15
+
+### 新增
+
+- **回填面板「自动恢复进度 + 扫描进度 + 诚实摘要」**：三个回填端点同时是「触发器 + 状态查询」，空闲时裸调用会**真的开跑**。新增请求体 `BackfillTriggerRequest { probe?: boolean }`——`probe:true` 只回当前快照、绝不启动；`BackfillSection` 挂载时以 resume 探测三个端点，在跑就接回轮询（离开概览区再回来不再需要手动重点）。`BackfillProgress` 加 `scanned/scanTotal`，扫描段显示「正在扫描存量 1252/1252 行…」；候选 0 时报「没有缺关键词的记录，无需回填」等**诚实摘要**（不再报“成功 0 条”被读成失败）。
+- **三个批量动作「中止」开关（有界强杀）**：契约加 `cancel?: boolean`、`BackfillProgress.cancelled`；三个模块各带 `cancelXBackfill()`。中止**有界**：置信号后起一次性宽限表，到期 `runAbort.abort()` 当场捻断在飞请求；硬界由 `backfill.cancelGraceMs`（schema max 30_000、默认 15s）钳住——无论 YAML 怎么写都越不过。
+- **技能工具组封印 `toolSkills`**：`memory_skill_*` 四件并入宿主封印机制（`reg('skills', …)`），与功能总开关 `skillsEnabled` 取 AND；两者都随 `loader/volatile-update` **热更**（面板拨开关即时注册/反注册，无需重启）。此前技能工具只在注册期判一次，开启后无条件常驻模型工具列表，且拨开关不热更。
+
+### 变更
+
+- **全部 LLM 批处理统一「逐条串行」**：补齐 wing（`labelWingOne`/`tagOne`）、`pipeline/relabel.ts`、`room-review.ts`（`roomCandidateOne`）三处合并批——至此 5 个批处理站点全部「一个请求只装一条记忆、跑完一条再发下一条」（`concurrency` 默认 1）。依据：单条 35B 实测 ~2.6s，而一批多条一旦截断/空输出就带走整批。
+- **整形排除判据改为「版本戳」**：`dsh_reshape_ver`（=2）+ `isReshapedAtCurrentVersion(meta, content)`——**仅成功写回**时盖戳；未过闸留原文**不打标记**、下轮仍可重试（旧布尔 `dsh_reshape_tried` 只作存量兼容读取）。整形规则升级时递增版本号即自动重跑旧产物。
+- **`backfill.maxRecords` 默认 300**（此前误设 40，导致真机 251 条目标一次只动 40）。
+
+### 修复
+
+- **轮询裸调用死循环（“不开始”真因）**：UI 的 tick 对「触发器 + 状态查询」二合一端点用裸调用 → 空闲时每 3s 又开一轮，面板永远停在“正在扫描”。tick 改 `{ probe: true }`。
+- **批扫全部空输出真因：把思考模型当直答模型用**：`LlmCallOptions` 加**调用级 `reasoningEffort` 覆盖**，五个批扫标注器显式传 `'off'`——此前路由档位为 `""`（自动）时思考模型默认开思考，预算被 reasoning 吃光、正文 0 字符（真机 162 次失败中 156 次是 `local-9b` 空输出）。
+- **`client/src/ui/MarkdownBody.tsx` typecheck 红**：0.26.0 带入的 4 处 `string | undefined`（正则捕获组）在 `noUncheckedIndexedAccess` 下报错，加非空断言。
+
 ## [0.26.0] — 2026-10-14
 
 ### 新增

@@ -52,7 +52,7 @@ ruminate,
 /** Room 注册表(分类管理 beta.4;缺省 = memory_room_admin 返回未装配提示)。 */
 roomRegistry) {
     if (!cfg.tools)
-        return;
+        return { reg: () => { } };
     // ── 工具分组封印(v0.21.0):sealable 组的注册经 reg() 登记,按 live 开关动态
     // 注册/反注册。封印 = 从模型工具列表消失(反注册),不是执行期拒绝;开关经
     // 设置页 volatile 热更(loader/volatile-update)即时生效,无需重启。
@@ -60,6 +60,9 @@ roomRegistry) {
     // memory_receipts)与槽位三件(slots.ts)不参与封印。
     const toolDisposers = new Map();
     const toolMakers = new Map();
+    // 技能组是「功能开关 + 封印」双条件:功能关(部署 cfg.skills.enabled 与 live.skillsEnabled 取或)或
+    // 封印(toolSkills===false)任一满足即不注册——功能关时保持零表面积,开门后仍可单独封印。
+    const skillsFeatureOn = () => cfg.skills.enabled === true || live.get().skillsEnabled === true;
     const toolSealed = (group) => {
         const snap = live.get();
         switch (group) {
@@ -68,6 +71,7 @@ roomRegistry) {
             case 'ruminate': return snap.toolRuminate === false;
             case 'conflict': return snap.toolConflict === false;
             case 'mutate': return snap.toolMutate === false;
+            case 'skills': return !skillsFeatureOn() || snap.toolSkills === false;
             default: return false;
         }
     };
@@ -1412,6 +1416,8 @@ roomRegistry) {
         ctx.on('loader/volatile-update', () => applyToolSeals());
     }
     logger.info('[memory] 工具已注册: memory_search / conversation_search / memory_read_scene / memory_receipts / memory_search_graph / memory_expand_graph_node,及高权限 memory_add/memory_import/memory_delete / memory_resolve_conflict / memory_ruminate / memory_ruminate_cancel / memory_ruminate_status');
+    // 技能组(registerSkillTools)在注册期经本面登记,随 volatile 热更重放封印。
+    return { reg };
 }
 /** 凭证回溯的人类可读渲染(含"还有多少条没显示")。 */
 function renderReceipts(dimension, items, total) {

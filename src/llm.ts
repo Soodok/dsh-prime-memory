@@ -23,6 +23,15 @@ export interface LlmCallOptions {
   maxTokens?: number;
   temperature?: number;
   signal?: AbortSignal;
+  /**
+   * **调用级思考档位覆盖**（可选）。非空时优先于路由/层链/全局解析出的档位。
+   *
+   * 为什么需要：回填批扫（整形/关键词/wing/room）是「重排 + 拎标识」的直答任务，
+   * 不需要推理；而思考模型默认开思考，会把整个 maxTokens 预算烧在 reasoning 上、
+   * 正文吐 0 字符（真机：156/162 次 `llm empty output` 都是这么来的）。
+   * 显式传 `off` 后预算全留给答案。档位仍过一遍模型能力钳制：模型不支持 off 时不传。
+   */
+  reasoningEffort?: string;
   /** 诊断日志(缺失时静默,不影响调用) */
   logger?: MemoryLogger;
 }
@@ -514,8 +523,10 @@ async function callRoute(ctx: Context, cfg: MemoryConfig, opts: LlmCallOptions, 
   const { provider, model } = route;
   const signal = opts.signal ?? AbortSignal.timeout(cfg.llm.timeoutMs);
   // 档位按模型能力决策(跨供应商 effort 兼容):不支持的档位不传 + 告警一次,
-  // 空配置 = 自动(模型默认 → high);路由的档位候选已在链解析时定好(条目 > 全局)
-  const effort = await planDistillEffort(ctx, provider, model, route.effort, opts.logger);
+  // 空配置 = 自动(模型默认 → high);路由的档位候选已在链解析时定好(条目 > 全局)。
+  // 调用级覆盖(opts.reasoningEffort)优先——批扫靠它关掉思考，避免预算被 reasoning 吃光。
+  const routeEffort = opts.reasoningEffort ?? route.effort;
+  const effort = await planDistillEffort(ctx, provider, model, routeEffort, opts.logger);
 
   // 输入预算兜底:任何蒸馏调用的用户 prompt 不超过 maxInputChars
   // (L1 已在数据层分块,这里是 L2/L3 与异常场景的最后一道网)
@@ -530,9 +541,10 @@ async function callRoute(ctx: Context, cfg: MemoryConfig, opts: LlmCallOptions, 
   // 配置本身就是高档时不再放大(防 ×16 双乘)
   const baseMaxTokens = opts.maxTokens ?? cfg.llm.maxTokens;
   const highTiers = HIGH_EFFORT_TIERS as readonly string[];
-  const triggerEffort = opts.layer
+  // 触发档位也跟调用级覆盖走：显式 off 时不得被配置里的高档触发而 ×4。
+  const triggerEffort = opts.reasoningEffort ?? (opts.layer
     ? layerEffortTrigger(cfg, layerKeyFor(opts.layer))
-    : cfg.llm.primaryEffort || cfg.llm.reasoningEffort;
+    : cfg.llm.primaryEffort || cfg.llm.reasoningEffort);
   const maxTokens =
     highTiers.includes(effort.effort) && !highTiers.includes(triggerEffort)
       ? layerMaxTokens(baseMaxTokens, 'high')

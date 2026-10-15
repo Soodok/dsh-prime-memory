@@ -94,6 +94,7 @@ const ALWAYS_ON = {
     toolRuminate: true,
     toolConflict: true,
     toolMutate: true,
+    toolSkills: true,
 };
 /** 自带自定义设置页(settings.section 顶层「记忆」分节,client 半挂载):
  *  关掉宿主按 volatile 字段自动生成的表单页,避免同一个插件出现两份设置入口。
@@ -338,5 +339,6 @@ function resolveSettings(value) {
         toolRuminate: v.toolRuminate !== false,
         toolConflict: v.toolConflict !== false,
         toolMutate: v.toolMutate !== false,
+        toolSkills: v.toolSkills !== false,
     };
 }

@@ -430,12 +430,12 @@ export async function apply(ctx, config) {
     stores.l1.setFileSyncHook(fileSync);
     const recall = registerRecall(ctx, config, stores, logger, live, modes, dataDir, recallUsage);
     runner.setAfterRun(recall.invalidateProfile);
-    registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);
+    const toolSeals = registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);
     // 激活槽位(active slot):工具面 + 常驻注入 + 服务端投影(均走 ctx.effect,可撤销)
     registerSlotTools(ctx, config, stores.slots, logger, modes, live, stores.l1);
     const slotRecall = registerSlotRecall(ctx, config, stores.slots, logger, live);
-    // 轨2 技能：工具面与常驻注入（均 cfg.skills.enabled 默认关时自 no-op，零表面积）。
-    registerSkillTools(ctx, config, skillStore, logger, live);
+    // 轨2 技能：工具面经宿主封印机制(seals)登记，与常驻注入分离（默认关时自 no-op，零表面积）。
+    registerSkillTools(ctx, skillStore, logger, live, toolSeals);
     registerSkillRecall(ctx, config, skillStore, logger, live);
     // memorySlots 投影：常驻槽位（手动 pin 的约定）的展示契约，消费方是 dsh-brief-sidebar。
     // 宿主契约（dsh-session-projection/lib/index.js）：插件不注册时 key 从快照消失、

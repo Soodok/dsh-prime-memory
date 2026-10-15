@@ -80,13 +80,58 @@ export interface KeywordBackfillState {
   concurrency: number;
   /** 预算/上限用尽未处理、留下次的条数。 */
   deferred: number;
+  /** 本轮被人工中止（进端点 cancel）——与“预算用尽”分开报文案。 */
+  cancelled: boolean;
+  /**
+   * 扫描期已扫行数 / 总行数（`scanTotal=0` = 总数未知）。
+   * 为何要暴露：扫描段原本在面板上只是一个静态「正在扫描…」，存量上千行时
+   * 用户分不清“在跑”还是“卡死”——真机就是因为这个把它当成“不开始”。
+   */
+  scanned: number;
+  scanTotal: number;
 }
 
 const state: KeywordBackfillState = {
   running: false, updated: 0, failed: 0,
   chunk: 1, candidates: 0, processed: 0,
   scanning: false, batchesDone: 0, batchTotal: 0, concurrency: DEFAULT_CONCURRENCY, deferred: 0,
+  cancelled: false, scanned: 0, scanTotal: 0,
 };
+
+/**
+ * 人工中止信号。置位后：①池子不再派新活；②已发出的请求先拿**宽限**(cancelGraceMs)
+ * 自然收工（token 不白费、已写回的全入账）；③**宽限到期强杀**在飞请求——
+ * 没有③的话「中止」最坏要等满 callTimeoutMs(240s) 才生效，等于没中止。
+ */
+let abortRequested = false;
+/** 本轮在飞请求的强杀器（runOnce 入口新建）。 */
+let runAbort: AbortController | null = null;
+/** 中止宽限计时器（一次性）。 */
+let graceTimer: ReturnType<typeof setTimeout> | null = null;
+/** 本轮生效的中止宽限（启动时从 cfg 读定，已钳位）。 */
+let graceMs = 15_000;
+
+/**
+ * 中止宽限钳位。**硬界 30s**（用户定：中止必须在 30s 内强停）——无论 YAML 写了多少，
+ * 都不会超过这个值；未配置/非法取默认 15s。
+ */
+function clampGraceMs(raw: unknown): number {
+  const n = typeof raw === 'number' && Number.isFinite(raw) ? Math.round(raw) : 15_000;
+  return Math.min(30_000, Math.max(0, n));
+}
+
+/** 请求中止本轮（空闲时无副作用）；返回后中止是**有界**的：最多等 graceMs。 */
+export function cancelKeywordBackfill(): { cancelled: boolean; running: boolean } {
+  if (!state.running) return { cancelled: false, running: false };
+  abortRequested = true;
+  if (graceTimer === null) {
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      if (state.running) runAbort?.abort();
+    }, Math.max(0, graceMs));
+  }
+  return { cancelled: true, running: true };
+}
 
 export function keywordBackfillState(): KeywordBackfillState {
   return { ...state };
@@ -120,6 +165,8 @@ export function startKeywordBackfill(deps: KeywordBackfillDeps): { started: bool
   state.batchesDone = 0;
   state.batchTotal = 0;
   state.deferred = 0;
+  state.cancelled = false;
+  abortRequested = false;
   state.concurrency = clampConcurrency(deps.cfg.backfill?.concurrency);
   void runKeywordBackfillOnce(deps).finally(() => {
     state.running = false;
@@ -136,12 +183,18 @@ export function startKeywordBackfill(deps: KeywordBackfillDeps): { started: bool
  */
 export async function runKeywordBackfillOnce(deps: KeywordBackfillDeps): Promise<void> {
   const { cfg, backend, logger } = deps;
+  // 新一轮入口清中止信号（同 redistill：直调 runOnce 的路径不经过 startX 的复位）。
+  abortRequested = false;
+  state.cancelled = false;
+  if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
+  runAbort = new AbortController();
   if (!cfg.keyword?.enabled) {
     logger.info('[memory] keyword 回填跳过：keyword.enabled = false（功能关，不回填）');
     return;
   }
   const MAX_RECORDS = cfg.backfill?.maxRecords ?? DEFAULT_MAX_RECORDS;
   const TIME_BUDGET_MS = cfg.backfill?.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
+  graceMs = clampGraceMs(cfg.backfill?.cancelGraceMs);
   const LIMIT = clampConcurrency(cfg.backfill?.concurrency);
   state.concurrency = LIMIT;
   const startedAt = Date.now();
@@ -152,6 +205,7 @@ export async function runKeywordBackfillOnce(deps: KeywordBackfillDeps): Promise
   let scanned = 0;
   state.scanning = true;
   for (let offset = 0; ; offset += PAGE) {
+    if (abortRequested) break; // 中止：扫描段也当场退出（不把最后一页白扫完）
     const page = await backend.allLite(PAGE, offset);
     if (page.length === 0) break;
     for (const r of page) {
@@ -160,6 +214,8 @@ export async function runKeywordBackfillOnce(deps: KeywordBackfillDeps): Promise
     }
     scanned += page.length;
     state.candidates = pendingIds.length;
+    state.scanned = scanned;
+    state.scanTotal = total;
     await yieldLoop();
   }
   state.scanning = false;
@@ -179,9 +235,10 @@ export async function runKeywordBackfillOnce(deps: KeywordBackfillDeps): Promise
       state.batchesDone++;
       return;
     }
-    const labeled = await labelKeywordOne(deps.ctx, cfg, logger, rec, callTimeoutMs);
+    const labeled = await labelKeywordOne(deps.ctx, cfg, logger, rec, callTimeoutMs, runAbort?.signal);
     if (!labeled) {
-      state.failed++;
+      // 中止强杀导致的失败不计入 failed（不是模型/网络的错，是中止信号）
+      if (!abortRequested) state.failed++;
     } else {
       const meta = { ...(rec.metadata ?? {}) } as Record<string, unknown>;
       meta[KEYWORDS_METADATA_KEY] = labeled.keywords;
@@ -208,6 +265,7 @@ export async function runKeywordBackfillOnce(deps: KeywordBackfillDeps): Promise
   let budgetHit = false;
   const work = async (): Promise<void> => {
     for (;;) {
+      if (abortRequested) return; // 中止：不再取新活（在飞的那条自然跑完）
       if (budgetHit || Date.now() - startedAt > TIME_BUDGET_MS) {
         budgetHit = true;
         return;
@@ -225,9 +283,17 @@ export async function runKeywordBackfillOnce(deps: KeywordBackfillDeps): Promise
   for (;;) {
     const target = Math.max(1, Math.min(readLimit(), batch.length));
     state.concurrency = target; // 面板「并行 N」跟实时值走
-    while (!budgetHit && inFlight.size < target && cursor < batch.length) spawn();
+    while (!budgetHit && !abortRequested && inFlight.size < target && cursor < batch.length) spawn();
     if (inFlight.size === 0) break;
     await Promise.race(inFlight);
+  }
+
+  if (abortRequested) {
+    state.cancelled = true;
+    state.deferred += Math.max(0, batch.length - state.processed);
+    logger.info(
+      `[memory] keyword 回填：已按请求中止（在飞请求跑完即收工）,本轮完成 ${state.processed} 条,剩 ${state.deferred} 条留待再触发`,
+    );
   }
 
   if (budgetHit) {
@@ -255,6 +321,8 @@ export async function labelKeywordOne(
   logger: MemoryLogger,
   rec: MemoryRecord,
   callTimeoutMs: number = DEFAULT_CALL_TIMEOUT_MS,
+  /** 本轮中止信号（可选）：与单次超时**取或**，宽限到期后由它当场掐断请求。 */
+  externalSignal?: AbortSignal,
 ): Promise<KeywordOneResult | null> {
   const user = `记忆:\n标题：${rec.name ?? ''}\n正文：${rec.content.slice(0, 900)}`;
   const t0 = Date.now();
@@ -265,8 +333,14 @@ export async function labelKeywordOne(
       user,
       maxTokens: LABEL_MAX_TOKENS,
       layer: 'l1-extract',
+      // 关键词/情景标注是直答任务：显式关思考，否则思考模型会把 512 预算烧在
+      // reasoning 上、正文吐 0 字符（真机 156/162 次 `llm empty output` 皆为此）。
+      reasoningEffort: 'off',
       logger,
-      signal: AbortSignal.timeout(callTimeoutMs > 0 ? callTimeoutMs : DEFAULT_CALL_TIMEOUT_MS),
+      signal: (() => {
+        const t = AbortSignal.timeout(callTimeoutMs > 0 ? callTimeoutMs : DEFAULT_CALL_TIMEOUT_MS);
+        return externalSignal ? AbortSignal.any([t, externalSignal]) : t;
+      })(),
     });
     logger.debug?.(`[memory] keyword 单条耗时 ${(Date.now() - t0) / 1000}s(id=${rec.id})`);
     const parsed = parseJsonLogged<Record<string, unknown> | Array<Record<string, unknown>>>(raw, 'keyword 回填', logger);

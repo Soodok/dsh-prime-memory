@@ -139,6 +139,7 @@ const ALWAYS_ON: MemoryLiveSettings = {
   toolRuminate: true,
   toolConflict: true,
   toolMutate: true,
+  toolSkills: true,
 };
 
 /** 自带自定义设置页(settings.section 顶层「记忆」分节,client 半挂载):
@@ -405,5 +406,6 @@ function resolveSettings(value: unknown): MemoryLiveSettings {
     toolRuminate: v.toolRuminate !== false,
     toolConflict: v.toolConflict !== false,
     toolMutate: v.toolMutate !== false,
+    toolSkills: v.toolSkills !== false,
   };
 }

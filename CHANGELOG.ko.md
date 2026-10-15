@@ -9,6 +9,26 @@
 
 이 파일은 **0.12.0** 릴리스 노트와 현재 **미출시** 변경 사항의 한국어판입니다. 전체 이력은 [CHANGELOG.md](./CHANGELOG.md)（中文）를 참조하세요.
 
+## [0.26.1] — 2026-10-15
+
+### 추가
+
+- **백필 패널 「진행 자동 복원 + 스캔 진행 + 정직한 요약」**: 3개 백필 엔드포인트는 「트리거 + 상태 조회」 이합일(二合一)이라, 유휴 시 베어 호출은 **실제로 한 회차를 시작**한다. 새 요청 바디 `BackfillTriggerRequest { probe?: boolean }`——`probe:true`는 현재 스냅샷만 반환하고 절대 시작하지 않는다. `BackfillSection`은 마운트 시 resume로 3개를 탐지해 돌고 있으면 폴링을 재연결(개요 구역을 떠났다 돌아와도 수동 재클릭 불필요). `BackfillProgress`에 `scanned/scanTotal` 추가(「스톡 1252/1252 행 스캔 중…」); 후보 0이면 「키워드가 없는 기록이 없어 백필 불필요」 같은 **정직한 요약**을 반환(「성공 0건」이 실패로 읽히던 문제 해소).
+- **3개 배치 동작에 「중지」 스위치(유계 강제 정지)**: 계약에 `cancel?: boolean`과 `BackfillProgress.cancelled` 추가; 각 모듈이 `cancelXBackfill()` 제공. 중지는 **유계**: 신호 후 일회성 유예 타이머가 `runAbort.abort()`로 비행 중 요청을 즉시 절단. 하드 경계는 `backfill.cancelGraceMs`(schema max 30_000, 기본 15s)로 클램프——YAML에 무엇을 써도 넘을 수 없다.
+- **스킬 도구군 봉인 `toolSkills`**: `memory_skill_*` 네 개를 호스트 봉인 메커니즘(`reg('skills', …)`)에 통합하고 기능 스위치 `skillsEnabled`와 AND. 둘 다 `loader/volatile-update`에서 **핫 반영**(패널 토글이 즉시 등록/해제, 재시작 불필요). 이전에는 등록 시 한 번만 판정했고, 활성화 후에는 무조건 모델 도구 목록에 상주했으며 토글해도 핫 갱신되지 않았다.
+
+### 변경
+
+- **모든 LLM 배치를 「건별 직렬」로 통일**: 남은 3개 병합 배치——wing(`labelWingOne`/`tagOne`), `pipeline/relabel.ts`, `room-review.ts`(`roomCandidateOne`)——를 변환; 5개 배치 지점 모두 「요청당 정확히 1건, 완료 후 다음」(`concurrency` 기본 1). 근거: 단건 35B 실측 ~2.6s, 반면 다건 배치는 한 번의 절단/빈 출력으로 배치 전체를 잃는다.
+- **재정형 제외 판정을 「버전 각인」으로**: `dsh_reshape_ver`(=2) + `isReshapedAtCurrentVersion(meta, content)`——각인은 **쓰기 성공 시에만** 찍는다; 게이트를 못 넘은 기록은 원문 그대로 **마커 없음**으로 다음 회차에도 재시도 가능(구 불리언 `dsh_reshape_tried`는 레거시 호환 읽기 전용). 재정형 규칙 갱신 시 버전을 올리면 이전 산출물을 자동 재실행.
+- **`backfill.maxRecords` 기본 300**(이전에 잘못 40으로 설정되어 실기 251건 대상이 한 회차에 40건만 진행).
+
+### 수정
+
+- **폴링 베어 호출 무한 루프(「시작하지 않음」의 진짜 원인)**: UI tick이 「트리거 + 상태 조회」 이합일 엔드포인트를 베어로 호출해 유휴 시 3초마다 새 회차를 시작, 패널이 「스캔 중」에 머묾. tick을 `{ probe: true }`로 변경.
+- **배치 스캔 전부 빈 출력의 진짜 원인: 사고 모델을 직답 모델로 사용**: `LlmCallOptions`에 **호출급 `reasoningEffort` 오버라이드** 추가, 5개 배치 라벨러가 `'off'`를 명시. 이전에는 경로 effort가 `""`(자동)이면 사고 모델이 기본으로 사고 ON, 예산을 reasoning이 먹어 본문 0자(실기 162회 실패 중 156회가 `local-9b` 빈 출력).
+- **`client/src/ui/MarkdownBody.tsx` typecheck 적색**: 0.26.0이 들여온 4곳의 `string | undefined`(정규식 캡처)가 `noUncheckedIndexedAccess`에서 오류, 비-null 단언 추가.
+
 ## [0.26.0] — 2026-10-14
 
 ### 신규

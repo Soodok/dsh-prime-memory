@@ -42,9 +42,45 @@ export interface HallBackfillState {
   /** 本进程累计成功打标条数(重启归零;仅作观测,不作账)。 */
   updated: number;
   failed: number;
+  /** 本轮被人工中止（进端点 cancel）——与“跑完”分开报文案。 */
+  cancelled: boolean;
 }
 
-const state: HallBackfillState = { running: false, updated: 0, failed: 0 };
+const state: HallBackfillState = { running: false, updated: 0, failed: 0, cancelled: false };
+
+/**
+ * 人工中止信号。置位后：①不再取新记录；②在飞的那条先拿**宽限**(cancelGraceMs)
+ * 自然收工；③**宽限到期强杀**在飞请求——没有③的话「中止」最坏要等满 callTimeoutMs。
+ */
+let abortRequested = false;
+/** 本轮在飞请求的强杀器（start 入口新建）。 */
+let runAbort: AbortController | null = null;
+/** 中止宽限计时器（一次性）。 */
+let graceTimer: ReturnType<typeof setTimeout> | null = null;
+/** 本轮生效的中止宽限（启动时从 cfg 读定，已钳位）。 */
+let graceMs = 15_000;
+
+/**
+ * 中止宽限钳位。**硬界 30s**（用户定：中止必须在 30s 内强停）——无论 YAML 写了多少，
+ * 都不会超过这个值；未配置/非法取默认 15s。
+ */
+function clampGraceMs(raw: unknown): number {
+  const n = typeof raw === 'number' && Number.isFinite(raw) ? Math.round(raw) : 15_000;
+  return Math.min(30_000, Math.max(0, n));
+}
+
+/** 请求中止本轮（空闲时无副作用）；返回后中止是**有界**的：最多等 graceMs(≤30s)。 */
+export function cancelWingBackfill(): { cancelled: boolean; running: boolean } {
+  if (!state.running) return { cancelled: false, running: false };
+  abortRequested = true;
+  if (graceTimer === null) {
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      if (state.running) runAbort?.abort();
+    }, Math.max(0, graceMs));
+  }
+  return { cancelled: true, running: true };
+}
 
 export function wingBackfillState(): HallBackfillState {
   return { ...state };
@@ -61,6 +97,10 @@ export function startWingBackfill(deps: HallBackfillDeps): { started: boolean; r
   state.running = true;
   state.updated = 0;
   state.failed = 0;
+  state.cancelled = false;
+  abortRequested = false;
+  if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
+  runAbort = new AbortController();
   void run(deps).finally(() => {
     state.running = false;
     deps.logger.info(`[memory] wing 回填结束:成功 ${state.updated} 条,失败 ${state.failed} 条`);
@@ -72,6 +112,7 @@ async function run(deps: HallBackfillDeps): Promise<void> {
   const { ctx, cfg, backend, logger } = deps;
   const MAX_RECORDS = cfg.backfill?.maxRecords ?? DEFAULT_MAX_RECORDS;
   const TIME_BUDGET_MS = cfg.backfill?.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
+  graceMs = clampGraceMs(cfg.backfill?.cancelGraceMs);
   const callTimeoutMs = cfg.backfill?.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   const halls = normWingEnabled(cfg.hall?.enabled);
   if (halls.length === 0) {
@@ -110,6 +151,11 @@ async function run(deps: HallBackfillDeps): Promise<void> {
   // 逐条串行:取一条 → 送标 → 当场写回。不攒批、不合并(爆炸半径锁在 1 条)。
   const ids = pendingIds.slice(0, budget);
   for (let i = 0; i < ids.length; i++) {
+    if (abortRequested) {
+      state.cancelled = true;
+      logger.info(`[memory] wing 回填：已按请求中止,本轮完成 ${i} 条,剩 ${ids.length - i} 条留待再触发`);
+      break;
+    }
     if (Date.now() - startedAt > TIME_BUDGET_MS) {
       logger.info(`[memory] wing 回填:墙钟预算(${TIME_BUDGET_MS / 1000}s)用尽,剩余 ${ids.length - i} 条留待再次触发`);
       break;
@@ -120,9 +166,10 @@ async function run(deps: HallBackfillDeps): Promise<void> {
       state.failed++;
       continue;
     }
-    const wing = await labelWingOne(ctx, cfg, logger, rec, candidates, callTimeoutMs);
+    const wing = await labelWingOne(ctx, cfg, logger, rec, candidates, callTimeoutMs, runAbort?.signal);
     if (wing === null) {
-      state.failed++;
+      // 中止强杀导致的失败不计入 failed（不是模型/网络的错，是中止信号）
+      if (!abortRequested) state.failed++;
       continue;
     }
     // 最小写回:只改 metadata(hall 是磁盘兼容键,不改名)。
@@ -148,6 +195,8 @@ export async function labelWingOne(
   rec: MemoryRecord,
   candidates: string,
   callTimeoutMs: number = DEFAULT_CALL_TIMEOUT_MS,
+  /** 本轮中止信号（可选）：与单次超时**取或**，宽限到期后由它当场掐断请求。 */
+  externalSignal?: AbortSignal,
 ): Promise<string | null> {
   const user = `候选 Wing:${candidates}\n\n记忆:\n${rec.content.slice(0, 600)}`;
   try {
@@ -156,8 +205,13 @@ export async function labelWingOne(
       user,
       maxTokens: 1024,
       layer: 'l1-extract',
+      // 打标是直答任务：显式关思考（不然思考模型把预算烧在 reasoning 上吐 0 字符）。
+      reasoningEffort: 'off',
       logger,
-      signal: AbortSignal.timeout(callTimeoutMs > 0 ? callTimeoutMs : DEFAULT_CALL_TIMEOUT_MS),
+      signal: (() => {
+        const t = AbortSignal.timeout(callTimeoutMs > 0 ? callTimeoutMs : DEFAULT_CALL_TIMEOUT_MS);
+        return externalSignal ? AbortSignal.any([t, externalSignal]) : t;
+      })(),
     });
     const parsed = parseJsonLogged<Record<string, unknown> | Array<Record<string, unknown>>>(raw, 'wing 回填', logger);
     // 通吃两种形状:模型偶尔无视“只输出一个对象”而回单元素数组(或带 id 的旧形状)。
@@ -208,6 +262,8 @@ export async function tagOne(
       user,
       maxTokens: 1024,
       layer: 'l1-extract',
+      // 同 wing 标：直答任务，显式关思考。
+      reasoningEffort: 'off',
       logger,
       signal: AbortSignal.timeout(callTimeoutMs > 0 ? callTimeoutMs : DEFAULT_CALL_TIMEOUT_MS),
     });

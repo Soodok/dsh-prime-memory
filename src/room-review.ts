@@ -133,6 +133,8 @@ export async function roomCandidateOne(
       user,
       maxTokens: 1024,
       layer: 'l1-extract',
+      // 归类是直答任务：显式关思考（不然思考模型把预算烧在 reasoning 上吐 0 字符）。
+      reasoningEffort: 'off',
       logger,
     });
     const parsed = parseJsonLogged<Record<string, unknown> | Array<Record<string, unknown>>>(raw, 'Room 候选标注', logger);

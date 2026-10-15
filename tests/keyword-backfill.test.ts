@@ -25,7 +25,7 @@ import type { EmbeddingService } from '../src/store/embedding.js';
 
 // ── LLM 桩：按序吐预设回复，记录每次调用（供断言提示词内容）──
 const llmReplies: string[] = [];
-const llmCalls: Array<{ system?: string; user?: string; layer?: string }> = [];
+const llmCalls: Array<{ system?: string; user?: string; layer?: string; reasoningEffort?: string }> = [];
 vi.mock('../src/llm.js', async (io) => {
   const actual = await io<typeof import('../src/llm.js')>();
   return {
@@ -79,6 +79,7 @@ describe('labelKeywordOne 解析契约（一个请求只装一条）', () => {
     expect(sys, '单条形状：输出一个对象').toContain('一个 JSON 对象');
     expect(sys, '逐条后不再要求回写 id').not.toContain('原样照抄');
     expect(llmCalls[0]?.user, 'user 只装一条').not.toContain('记忆列表');
+    expect(llmCalls[0]?.reasoningEffort, '必须显式关思考（否则 512 预算被 reasoning 吃光→空输出）').toBe('off');
   });
 });
 

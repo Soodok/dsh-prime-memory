@@ -25,7 +25,7 @@ import { MemoryDb } from '../src/store/sqlite.js';
 import type { EmbeddingService } from '../src/store/embedding.js';
 
 const llmReplies: string[] = [];
-const llmCalls: Array<{ system?: string; user?: string; layer?: string; signal?: unknown }> = [];
+const llmCalls: Array<{ system?: string; user?: string; layer?: string; signal?: unknown; reasoningEffort?: string }> = [];
 /** 并发观测：同时在飞的 LLM 调用数与历史峰值（扫批是共享游标的工作池，峰值就是并行度）。 */
 let llmActive = 0;
 let llmPeak = 0;
@@ -35,12 +35,22 @@ vi.mock('../src/llm.js', async (io) => {
   const actual = await io<typeof import('../src/llm.js')>();
   return {
     ...actual,
-    callLLM: vi.fn(async (_c: unknown, _cfg: unknown, opts: { system?: string; user?: string; layer?: string }) => {
+    callLLM: vi.fn(async (_c: unknown, _cfg: unknown, opts: { system?: string; user?: string; layer?: string; signal?: AbortSignal }) => {
       llmCalls.push(opts);
       llmActive++;
       if (llmActive > llmPeak) llmPeak = llmActive;
       const hold = (globalThis as { __llmHold?: () => number }).__llmHold?.() ?? 0;
-      if (hold > 0) await new Promise((r) => setTimeout(r, hold));
+      if (hold > 0) {
+        // 桩必须尊重 signal：真实 callLLM 也会被中止信号当场掐断，
+        // 否则“强杀”这类用例根本测不出来（桩会自顾自睡满 hold）。
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, hold);
+          opts.signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(new Error('llm aborted: 桩按 signal 中断'));
+          }, { once: true });
+        });
+      }
       llmActive--;
       // 逐条形状下“哪条对应哪个回复”不能靠队列序（扫描序不直观），
       // 所以允许注入按 user 文本裁决的解析器；没注入时仍用脚本队列。
@@ -53,7 +63,7 @@ vi.mock('../src/llm.js', async (io) => {
 // hold 值走全局函数：上面的工厂闭包拿不到本作文件的 `let`（vi.mock 会被提升到 import 之上）。
 (globalThis as { __llmHold?: () => number }).__llmHold = () => llmHoldMs;
 
-const { reshapePassesGate, reshapeOne, runRedistillBackfillOnce, hasHollowHeading, isReshapedAtCurrentVersion, RESHAPE_VER_KEY, RESHAPE_SCHEMA_VERSION } = await import('../src/redistill-backfill.js');
+const { reshapePassesGate, reshapeOne, runRedistillBackfillOnce, hasHollowHeading, isReshapedAtCurrentVersion, RESHAPE_VER_KEY, RESHAPE_SCHEMA_VERSION, startRedistillBackfill, cancelRedistillBackfill, redistillBackfillState } = await import('../src/redistill-backfill.js');
 
 const warned: string[] = [];
 const logger = { info: () => {}, warn: (m: string) => warned.push(m), error: () => {}, debug: () => {} } as unknown as MemoryLogger;
@@ -138,6 +148,7 @@ describe('reshapeOne 解析契约（一个请求只装一条）', () => {
     llmReplies.push('null');
     await reshapeOne(ctx, cfg, logger, rec('m1', 'x', 'work_fact'));
     expect(llmCalls[0]?.signal, '批扫调用必须传自己的 signal').toBeInstanceOf(AbortSignal);
+    expect(llmCalls[0]?.reasoningEffort, '必须显式关思考（否则预算被 reasoning 吃光→空输出）').toBe('off');
   });
 });
 
@@ -268,6 +279,60 @@ describe('LLM 单条请求按 concurrency 并行（默认串行）', () => {
       await runRedistillBackfillOnce({ ctx, cfg: onCfg, l1, logger });
       expect(llmCalls).toHaveLength(40);
       expect(llmPeak, '串行下不得出现两条同时在飞').toBe(1);
+    } finally {
+      llmHoldMs = 0;
+    }
+  });
+});
+
+describe('人工中止（cancel）', () => {
+  it('start 后立刻 cancel ⇒ 提前收工、计 cancelled，且已写回的保留', async () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      id: `c${i}`, type: 'work_fact', content: `部署脚本回滚逻辑 ${i}`, metadata: {},
+    }));
+    const l1 = fakeL1({
+      activeForSkeleton: onePage(many),
+      getByIds: vi.fn((ids: string[]) => ids.map((id) => ({ id, type: 'work_fact', content: `部署 ${id}`, metadata: {}, version: 0 }))),
+    });
+    llmCalls.length = 0;
+    llmReplies.length = 0;
+    for (let i = 0; i < 60; i++) llmReplies.push('null'); // 回复内容不重要，只看是否提前停
+    const onCfg = { redistill: { enabled: true }, backfill: { maxRecords: 300, timeBudgetMs: 900_000, concurrency: 1 } } as unknown as MemoryConfig;
+
+    startRedistillBackfill({ ctx, cfg: onCfg, l1, logger });
+    cancelRedistillBackfill(); // 立刻请求中止（单飞下 running 已置位）
+
+    // 等运行结束（不硬杀：在飞的那条要跑完）
+    for (let i = 0; i < 200 && redistillBackfillState().running; i++) await new Promise((r) => setTimeout(r, 25));
+    const st = redistillBackfillState();
+    expect(st.running, '中止后运行态应回落').toBe(false);
+    expect(st.cancelled, '本轮应标记为已中止').toBe(true);
+    expect(st.processed, '应远早于 40 条就收工').toBeLessThan(40);
+    expect(st.deferred, '剩余条数应计入 deferred 供再触发').toBeGreaterThan(0);
+  });
+
+  it('中止宽限到期 ⇒ **强杀**在飞请求（中止有界，不会等满单条时长）', async () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      id: `k${i}`, type: 'work_fact', content: `部署脚本回滚逻辑 ${i}`, metadata: {},
+    }));
+    const l1 = fakeL1({
+      activeForSkeleton: onePage(many),
+      getByIds: vi.fn((ids: string[]) => ids.map((id) => ({ id, type: 'work_fact', content: `部署 ${id}`, metadata: {}, version: 0 }))),
+    });
+    llmHoldMs = 5_000; // 单条要 5s：宽限 60ms 到期必须把它强杀，否则用例会跑 5s
+    try {
+      const onCfg = {
+        redistill: { enabled: true },
+        backfill: { maxRecords: 300, timeBudgetMs: 900_000, concurrency: 1, cancelGraceMs: 60 },
+      } as unknown as MemoryConfig;
+      startRedistillBackfill({ ctx, cfg: onCfg, l1, logger });
+      await new Promise((r) => setTimeout(r, 150)); // 让第一条真的在飞
+      const t0 = Date.now();
+      cancelRedistillBackfill();
+      for (let i = 0; i < 200 && redistillBackfillState().running; i++) await new Promise((r) => setTimeout(r, 25));
+      const elapsed = Date.now() - t0;
+      expect(redistillBackfillState().running, '中止后运行态必须回落').toBe(false);
+      expect(elapsed, '宽限+强杀必须远早于单条 5s 的在飞时长').toBeLessThan(2_000);
     } finally {
       llmHoldMs = 0;
     }

@@ -3708,6 +3708,10 @@ var __defProp = Object.defineProperty;
 		  const [rdProgress, setRdProgress] = (0, import_react16.useState)(null);
 		  const [rdCounts, setRdCounts] = (0, import_react16.useState)(null);
 		  const [err, setErr] = (0, import_react16.useState)(null);
+		  const [wingAborting, setWingAborting] = (0, import_react16.useState)(false);
+		  const [kwAborting, setKwAborting] = (0, import_react16.useState)(false);
+		  const [rdAborting, setRdAborting] = (0, import_react16.useState)(false);
+		  const wingStopRef = (0, import_react16.useRef)(false);
 		  const timersRef = (0, import_react16.useRef)([]);
 		  (0, import_react16.useEffect)(
 		    () => () => {
@@ -3726,9 +3730,13 @@ var __defProp = Object.defineProperty;
 		  }, [refreshOverview]);
 		  ensureThemeStyle();
 		  const POLL_CAP = 400;
-		  const fmtProgress = (p, verb, counts) => {
+		  const fmtProgress = (p, verb, counts, aborting = false) => {
+		    if (aborting) return `${verb}：正在中止——先等在跑的那条收工，超时即强行中断（已写回的保留）…`;
 		    if (!p) return `${verb}中…`;
-		    if (p.scanning || p.candidates === 0) return `${verb}中：正在扫描存量、筛出需${verb}的记录…`;
+		    if (p.scanning) {
+		      return p.scanTotal > 0 ? `${verb}中：正在扫描存量 ${p.scanned}/${p.scanTotal} 行，筛出需${verb}的记录…` : `${verb}中：正在扫描活跃存量（已扫 ${p.scanned} 行），筛出需${verb}的记录…`;
+		    }
+		    if (p.candidates === 0) return `${verb}中：扫描完成，没有需要${verb}的记录…`;
 		    const parts = [
 		      `${verb}中：真目标 ${p.candidates} 条`,
 		      `已完成 ${p.processed} 条`,
@@ -3739,15 +3747,18 @@ var __defProp = Object.defineProperty;
 		    const outcome = counts ? `（写回 ${counts.updated ?? 0}${counts.skipped !== void 0 ? ` / 留原文 ${counts.skipped}` : ""}）` : "";
 		    return parts.join(" · ") + outcome;
 		  };
-		  const tail = (p) => p && p.deferred > 0 ? `，本次未跑完、剩 ${p.deferred} 条待再点一次` : "";
+		  const tail = (p) => p && p.cancelled ? `，已中止、剩 ${p.deferred} 条待再点一次` : p && p.deferred > 0 ? `，本次未跑完、剩 ${p.deferred} 条待再点一次` : "";
 		  const wingBackfill = (mode = "start") => {
 		    if (wingBusy) return;
 		    if (mode === "start" && (!overview || overview.unlabeled === 0)) return;
 		    if (mode === "start") setWingBusy(true);
 		    setErr(null);
+		    wingStopRef.current = false;
+		    setWingAborting(false);
 		    let polls = 0;
 		    const finish = () => setWingBusy(false);
 		    const tick = () => {
+		      if (wingStopRef.current) return;
 		      polls++;
 		      rpc("dsh-memory/wing-overview", {}).then((r) => {
 		        const v = r && r.ok ? r.value : null;
@@ -3781,6 +3792,7 @@ var __defProp = Object.defineProperty;
 		      setKwSummary(null);
 		      setKwProgress(null);
 		      setKwCounts(null);
+		      setKwAborting(false);
 		    }
 		    setErr(null);
 		    let polls = 0;
@@ -3788,7 +3800,12 @@ var __defProp = Object.defineProperty;
 		    const finish = () => setKwBusy(false);
 		    const showResult = (v) => {
 		      const fail = v.failed ?? 0;
-		      setKwSummary(`关键词回填完成：成功 ${v.updated ?? 0} 条${fail > 0 ? `，失败 ${fail} 条` : ""}${tail(last)}`);
+		      if (last && !last.cancelled && last.candidates === 0) {
+		        setKwSummary("关键词回填：没有缺关键词的记录，无需回填");
+		        return;
+		      }
+		      const head = last?.cancelled ? "关键词回填已中止" : "关键词回填完成";
+		      setKwSummary(`${head}：成功 ${v.updated ?? 0} 条${fail > 0 ? `，失败 ${fail} 条` : ""}${tail(last)}`);
 		    };
 		    const failMsg = (m) => {
 		      setErr(m);
@@ -3796,7 +3813,7 @@ var __defProp = Object.defineProperty;
 		    };
 		    const tick = () => {
 		      polls++;
-		      rpc("dsh-memory/keyword-backfill", {}).then((r) => {
+		      rpc("dsh-memory/keyword-backfill", { probe: true }).then((r) => {
 		        const v = r && r.ok ? r.value : null;
 		        if (!v) return failMsg("关键词回填失败");
 		        if (v.progress) {
@@ -3856,13 +3873,19 @@ var __defProp = Object.defineProperty;
 		      setRdSummary(null);
 		      setRdProgress(null);
 		      setRdCounts(null);
+		      setRdAborting(false);
 		    }
 		    setErr(null);
 		    let polls = 0;
 		    let last = null;
 		    const finish = () => setRdBusy(false);
 		    const showResult = (v) => {
-		      setRdSummary(`整形完成：写回 ${v.updated ?? 0} 条，留原文 ${v.skipped ?? 0} 条${(v.failed ?? 0) > 0 ? `，失败 ${v.failed} 条` : ""}${tail(last)}`);
+		      if (last && !last.cancelled && last.candidates === 0) {
+		        setRdSummary("重蒸馏整形：没有需要整形的记录（骨架都已齐备），无需处理");
+		        return;
+		      }
+		      const head = last?.cancelled ? "整形已中止" : "整形完成";
+		      setRdSummary(`${head}：写回 ${v.updated ?? 0} 条，留原文 ${v.skipped ?? 0} 条${(v.failed ?? 0) > 0 ? `，失败 ${v.failed} 条` : ""}${tail(last)}`);
 		    };
 		    const failMsg = (m) => {
 		      setErr(m);
@@ -3870,7 +3893,7 @@ var __defProp = Object.defineProperty;
 		    };
 		    const tick = () => {
 		      polls++;
-		      rpc("dsh-memory/redistill-backfill", {}).then((r) => {
+		      rpc("dsh-memory/redistill-backfill", { probe: true }).then((r) => {
 		        const v = r && r.ok ? r.value : null;
 		        if (!v) return failMsg("重蒸馏整形失败");
 		        if (v.progress) {
@@ -3923,6 +3946,28 @@ var __defProp = Object.defineProperty;
 		      failMsg("重蒸馏整形失败：" + String(e && e.message || e));
 		    });
 		  };
+		  const cancelWing = () => {
+		    wingStopRef.current = true;
+		    setWingAborting(true);
+		    setWingBusy(false);
+		    rpc("dsh-memory/wing-backfill", { cancel: true }).catch((e) => {
+		      setErr("中止请求失败：" + String(e && e.message || e));
+		    });
+		  };
+		  const cancelKw = () => {
+		    setKwAborting(true);
+		    rpc("dsh-memory/keyword-backfill", { cancel: true }).catch((e) => {
+		      setKwAborting(false);
+		      setErr("中止请求失败：" + String(e && e.message || e));
+		    });
+		  };
+		  const cancelRd = () => {
+		    setRdAborting(true);
+		    rpc("dsh-memory/redistill-backfill", { cancel: true }).catch((e) => {
+		      setRdAborting(false);
+		      setErr("中止请求失败：" + String(e && e.message || e));
+		    });
+		  };
 		  (0, import_react16.useEffect)(() => {
 		    keywordBackfill("resume");
 		    redistillBackfill("resume");
@@ -3939,24 +3984,24 @@ var __defProp = Object.defineProperty;
 		  return /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("div", { className: "dsh-mem-rb-card", style: { padding: "4px 14px", marginTop: 12 }, children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: { fontWeight: 600, padding: "8px 0 2px" }, children: "存量回填与整形" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("div", { style: rowStyle, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: hintStyle, children: overview ? `对存量未打标记忆批量补打 wing 标签 · 未打标 ${overview.unlabeled} 条` : "未打标计数加载中…" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: hintStyle, children: wingAborting ? "回填：正在中止…" : overview ? `对存量未打标记忆批量补打 wing 标签 · 未打标 ${overview.unlabeled} 条` : "未打标计数加载中…" }),
 		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
 		        NButton,
 		        {
-		          disabled: !overview || overview.unlabeled === 0 || wingBusy,
+		          disabled: !wingBusy && (!overview || overview.unlabeled === 0),
 		          style: { color: "var(--dsh-mem-accent)" },
-		          onClick: () => wingBackfill(),
-		          children: wingBusy ? "回填中…" : "wing 回填"
+		          onClick: () => wingBusy ? cancelWing() : wingBackfill(),
+		          children: wingBusy ? "中止" : "wing 回填"
 		        }
 		      )
 		    ] }),
 		    /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("div", { style: rowStyle, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: hintStyle, children: kwBusy ? fmtProgress(kwProgress, "回填", kwCounts ?? void 0) : kwSummary || "为缺 dsh_keywords 的存量记忆补检索关键词，喂 FTS 关键词轴（需先开关键词回填开关）" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(NButton, { disabled: kwBusy, style: { color: "var(--dsh-mem-accent)" }, onClick: () => keywordBackfill(), children: kwBusy ? "回填中…" : "关键词回填" })
+		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: hintStyle, children: kwBusy ? fmtProgress(kwProgress, "回填", kwCounts ?? void 0, kwAborting) : kwSummary || "为缺 dsh_keywords 的存量记忆补检索关键词，喂 FTS 关键词轴（需先开关键词回填开关）" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(NButton, { disabled: kwAborting, style: { color: "var(--dsh-mem-accent)" }, onClick: () => kwBusy ? cancelKw() : keywordBackfill(), children: kwBusy ? kwAborting ? "中止中…" : "中止" : "关键词回填" })
 		    ] }),
 		    /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)("div", { style: rowStyle, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: hintStyle, children: rdBusy ? fmtProgress(rdProgress, "整形", rdCounts ?? void 0) : rdSummary || "把“平”的存量记忆按类型重排成分节骨架，顺带产关键词/情景；只有严格更优才写回（需先开重蒸馏整形开关）" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(NButton, { disabled: rdBusy, style: { color: "var(--dsh-mem-accent)" }, onClick: () => redistillBackfill(), children: rdBusy ? "整形中…" : "重蒸馏整形" })
+		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: hintStyle, children: rdBusy ? fmtProgress(rdProgress, "整形", rdCounts ?? void 0, rdAborting) : rdSummary || "把“平”的存量记忆按类型重排成分节骨架，顺带产关键词/情景；只有严格更优才写回（需先开重蒸馏整形开关）" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(NButton, { disabled: rdAborting, style: { color: "var(--dsh-mem-accent)" }, onClick: () => rdBusy ? cancelRd() : redistillBackfill(), children: rdBusy ? rdAborting ? "中止中…" : "中止" : "重蒸馏整形" })
 		    ] }),
 		    err ? /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { style: { padding: "6px 0", fontSize: 12, color: "var(--dsh-mem-danger)" }, children: err }) : null
 		  ] });
@@ -4059,6 +4104,7 @@ var __defProp = Object.defineProperty;
 		  const toolRuminate = settingsData && settingsData.settings ? settingsData.settings.toolRuminate !== false : true;
 		  const toolConflict = settingsData && settingsData.settings ? settingsData.settings.toolConflict !== false : true;
 		  const toolMutate = settingsData && settingsData.settings ? settingsData.settings.toolMutate !== false : true;
+		  const toolSkills = settingsData && settingsData.settings ? settingsData.settings.toolSkills !== false : true;
 		  const skillsEnabled = settingsData && settingsData.settings ? settingsData.settings.skillsEnabled === true : false;
 		  const keywordEnabled = settingsData && settingsData.settings ? settingsData.settings.keywordEnabled === true : false;
 		  const redistillEnabled = settingsData && settingsData.settings ? settingsData.settings.redistillEnabled === true : false;
@@ -4132,7 +4178,7 @@ var __defProp = Object.defineProperty;
 		        SwitchRow,
 		        {
 		          label: "技能（程序性记忆）",
-		          desc: skillsEnabled ? "已开启：重复工作方法会结晶为技能候选，注入活跃技能，可在「技能」页审阅晋升" : "默认关闭；开启后注册 memory_skill_* 工具与注入（新装工具需重启后完全生效）",
+		          desc: skillsEnabled ? "已开启：重复工作方法会结晶为技能候选，注入活跃技能，可在「技能」页审阅晋升" : "默认关闭；开启后注册 memory_skill_* 工具与注入（开关即时生效）",
 		          checked: skillsEnabled,
 		          onChange: (v) => {
 		            toggle("skillsEnabled", v);
@@ -4192,6 +4238,17 @@ var __defProp = Object.defineProperty;
 		          checked: toolMutate,
 		          onChange: (v) => {
 		            toggle("toolMutate", v);
+		          }
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+		        SwitchRow,
+		        {
+		          label: "技能工具",
+		          desc: toolSkills ? "已注册：memory_skill_list / _read / _pin / _archive（需先开启「技能结晶」）" : "已封印：技能四件从模型工具列表移除（技能功能关闭时本就零表面积）",
+		          checked: toolSkills,
+		          onChange: (v) => {
+		            toggle("toolSkills", v);
 		          }
 		        }
 		      ),

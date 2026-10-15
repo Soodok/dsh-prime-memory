@@ -55,3 +55,30 @@ describe('回填端点 probe 只读快照', () => {
     expect(wingBackfillState().running).toBe(false);
   });
 });
+
+describe('回填端点 cancel 控制面（中止开关的后端那一半）', () => {
+  it('keyword: 空闲时 cancel 不动任务、也不启动', async () => {
+    const r = (await handleEndpoint('dsh-memory/keyword-backfill', { cancel: true }, deps({ keyword: { enabled: true } }))) as Record<string, unknown>;
+    expect(r.started).toBe(false);
+    expect(r.running).toBe(false);
+    expect((r.progress as { cancelled: boolean }).cancelled).toBe(false);
+    expect(keywordBackfillState().running).toBe(false);
+  });
+
+  it('redistill: 空闲时 cancel 不动任务', async () => {
+    const r = (await handleEndpoint('dsh-memory/redistill-backfill', { cancel: true }, deps({ redistill: { enabled: true } }))) as Record<string, unknown>;
+    expect(r).toMatchObject({ started: false, running: false });
+    expect(redistillBackfillState().running).toBe(false);
+  });
+
+  it('wing: 空闲时 cancel 不动任务', async () => {
+    const r = (await handleEndpoint('dsh-memory/wing-backfill', { cancel: true }, deps({}))) as Record<string, unknown>;
+    expect(r).toMatchObject({ started: false, running: false });
+    expect(wingBackfillState().running).toBe(false);
+  });
+
+  it('progress 体带 cancelled 字段（面板据此区分“已中止”与“预算用尽”）', async () => {
+    const r = (await handleEndpoint('dsh-memory/keyword-backfill', { probe: true }, deps({ keyword: { enabled: true } }))) as { progress: Record<string, unknown> };
+    expect(r.progress).toHaveProperty('cancelled');
+  });
+});

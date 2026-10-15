@@ -34,6 +34,12 @@ export function BackfillSection(props: { rpc: RpcFn }) {
   const [rdProgress, setRdProgress] = useState<BackfillProgress | null>(null);
   const [rdCounts, setRdCounts] = useState<{ updated?: number; skipped?: number; failed?: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /** 中止请求已发出、正在等在飞的那条收工（不是秒停：不硬杀请求）。 */
+  const [wingAborting, setWingAborting] = useState(false);
+  const [kwAborting, setKwAborting] = useState(false);
+  const [rdAborting, setRdAborting] = useState(false);
+  /** wing 的中止需直接停轮询：它以 unlabeled 归零为终态，中止后归不了零会一直轮。 */
+  const wingStopRef = useRef(false);
   const timersRef = useRef<number[]>([]);
   useEffect(
     () => () => {
@@ -67,9 +73,18 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     p: BackfillProgress | null,
     verb: string,
     counts?: { updated?: number; skipped?: number; failed?: number },
+    aborting = false,
   ): string => {
+    if (aborting) return `${verb}：正在中止——先等在跑的那条收工，超时即强行中断（已写回的保留）…`;
     if (!p) return `${verb}中…`;
-    if (p.scanning || p.candidates === 0) return `${verb}中：正在扫描存量、筛出需${verb}的记录…`;
+    // 扫描段必须报「已扫多少行」：原来只有一句静态「正在扫描…」，存量上千行时
+    // 用户分不清在跑还是卡死（真机就把它当成“不开始”）。
+    if (p.scanning) {
+      return p.scanTotal > 0
+        ? `${verb}中：正在扫描存量 ${p.scanned}/${p.scanTotal} 行，筛出需${verb}的记录…`
+        : `${verb}中：正在扫描活跃存量（已扫 ${p.scanned} 行），筛出需${verb}的记录…`;
+    }
+    if (p.candidates === 0) return `${verb}中：扫描完成，没有需要${verb}的记录…`;
     const parts = [
       `${verb}中：真目标 ${p.candidates} 条`,
       `已完成 ${p.processed} 条`,
@@ -83,9 +98,11 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     return parts.join(' · ') + outcome;
   };
 
-  /** 跑完后的摘要：有 deferred 就必须说“没跑完”，否则用户会把“预算用尽”当成“处完了”。 */
+  /** 跑完后的摘要：有 deferred 就必须说“没跑完”，否则用户会把“预算用尽”当成“处完了”。
+   *  中止与预算用尽分开报——前者是用户主动、后者是护栏。 */
   const tail = (p: BackfillProgress | null): string =>
-    (p && p.deferred > 0 ? `，本次未跑完、剩 ${p.deferred} 条待再点一次` : '');
+    (p && p.cancelled ? `，已中止、剩 ${p.deferred} 条待再点一次`
+      : p && p.deferred > 0 ? `，本次未跑完、剩 ${p.deferred} 条待再点一次` : '');
 
   /** wing 回填：跑完以 unlabeled 归零为结束判据（轮询 wing-overview）。
    *  `mode='resume'` = 挂载时只读快照(probe)，在跑就把轮询接回去，空闲则什么都不做。 */
@@ -94,9 +111,12 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     if (mode === 'start' && (!overview || overview.unlabeled === 0)) return;
     if (mode === 'start') setWingBusy(true);
     setErr(null);
+    wingStopRef.current = false;
+    setWingAborting(false);
     let polls = 0;
     const finish = () => setWingBusy(false);
     const tick = () => {
+      if (wingStopRef.current) return; // 已中止：立即停轮（它不以 running 为终态）
       polls++;
       rpc('dsh-memory/wing-overview', {})
         .then((r) => {
@@ -140,6 +160,7 @@ export function BackfillSection(props: { rpc: RpcFn }) {
       setKwSummary(null);
       setKwProgress(null);
       setKwCounts(null);
+      setKwAborting(false);
     }
     setErr(null);
     let polls = 0;
@@ -148,7 +169,13 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     const finish = () => setKwBusy(false);
     const showResult = (v: { updated?: number; failed?: number }) => {
       const fail = v.failed ?? 0;
-      setKwSummary(`关键词回填完成：成功 ${v.updated ?? 0} 条${fail > 0 ? `，失败 ${fail} 条` : ''}${tail(last)}`);
+      // 真目标 0 条要说实话：否则“成功 0 条”会被读成失败（真机上关键词已全量覆盖时就是这样）。
+      if (last && !last.cancelled && last.candidates === 0) {
+        setKwSummary('关键词回填：没有缺关键词的记录，无需回填');
+        return;
+      }
+      const head = last?.cancelled ? '关键词回填已中止' : '关键词回填完成';
+      setKwSummary(`${head}：成功 ${v.updated ?? 0} 条${fail > 0 ? `，失败 ${fail} 条` : ''}${tail(last)}`);
     };
     const failMsg = (m: string) => {
       setErr(m);
@@ -156,7 +183,10 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     };
     const tick = () => {
       polls++;
-      rpc('dsh-memory/keyword-backfill', {})
+      // **必须带 probe**：这三个端点是「触发器 + 状态查询」二合一，裸调用在空闲时会
+      // **又开一轮**——tick 用裸调用就变成“跑完→3s 后再开一轮”的无底洞（真机：日志每 3s 一条
+      // 回填启动/结束，面板永远停在「正在扫描」）。轮询只该看状态。
+      rpc('dsh-memory/keyword-backfill', { probe: true })
         .then((r) => {
           const v = r && r.ok ? r.value : null;
           if (!v) return failMsg('关键词回填失败');
@@ -206,6 +236,7 @@ export function BackfillSection(props: { rpc: RpcFn }) {
       setRdSummary(null);
       setRdProgress(null);
       setRdCounts(null);
+      setRdAborting(false);
     }
     setErr(null);
     let polls = 0;
@@ -213,7 +244,12 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     let last: BackfillProgress | null = null;
     const finish = () => setRdBusy(false);
     const showResult = (v: { updated?: number; skipped?: number; failed?: number }) => {
-      setRdSummary(`整形完成：写回 ${v.updated ?? 0} 条，留原文 ${v.skipped ?? 0} 条${(v.failed ?? 0) > 0 ? `，失败 ${v.failed} 条` : ''}${tail(last)}`);
+      if (last && !last.cancelled && last.candidates === 0) {
+        setRdSummary('重蒸馏整形：没有需要整形的记录（骨架都已齐备），无需处理');
+        return;
+      }
+      const head = last?.cancelled ? '整形已中止' : '整形完成';
+      setRdSummary(`${head}：写回 ${v.updated ?? 0} 条，留原文 ${v.skipped ?? 0} 条${(v.failed ?? 0) > 0 ? `，失败 ${v.failed} 条` : ''}${tail(last)}`);
     };
     const failMsg = (m: string) => {
       setErr(m);
@@ -221,7 +257,8 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     };
     const tick = () => {
       polls++;
-      rpc('dsh-memory/redistill-backfill', {})
+      // 同 keyword：轮询必须带 probe，否则空闲时会反复重开一轮。
+      rpc('dsh-memory/redistill-backfill', { probe: true })
         .then((r) => {
           const v = r && r.ok ? r.value : null;
           if (!v) return failMsg('重蒸馏整形失败');
@@ -263,6 +300,33 @@ export function BackfillSection(props: { rpc: RpcFn }) {
   };
 
   /**
+   * 中止在跑的那一轮。**不硬杀在飞请求**：端点侧只置信号，当前条跑完才收工，
+   * 已写回的全部保留；轮询 tick 会观察到 running=false 自行收尾并出「已中止」摘要。
+   */
+  const cancelWing = () => {
+    wingStopRef.current = true; // wing 不以 running 为终态，必须主动停轮
+    setWingAborting(true);
+    setWingBusy(false);
+    rpc('dsh-memory/wing-backfill', { cancel: true }).catch((e: unknown) => {
+      setErr('中止请求失败：' + String((e && (e as Error).message) || e));
+    });
+  };
+  const cancelKw = () => {
+    setKwAborting(true);
+    rpc('dsh-memory/keyword-backfill', { cancel: true }).catch((e: unknown) => {
+      setKwAborting(false);
+      setErr('中止请求失败：' + String((e && (e as Error).message) || e));
+    });
+  };
+  const cancelRd = () => {
+    setRdAborting(true);
+    rpc('dsh-memory/redistill-backfill', { cancel: true }).catch((e: unknown) => {
+      setRdAborting(false);
+      setErr('中止请求失败：' + String((e && (e as Error).message) || e));
+    });
+  };
+
+  /**
    * 离开区域再回来时**恢复在途任务**。
    *
    * 为什么需要：轮询计时器随组件卸载被清（上面的 cleanup），但后台任务仍在跑；
@@ -292,28 +356,29 @@ export function BackfillSection(props: { rpc: RpcFn }) {
 
       <div style={rowStyle}>
         <div style={hintStyle}>
-          {overview ? `对存量未打标记忆批量补打 wing 标签 · 未打标 ${overview.unlabeled} 条` : '未打标计数加载中…'}
+          {wingAborting ? '回填：正在中止…'
+            : overview ? `对存量未打标记忆批量补打 wing 标签 · 未打标 ${overview.unlabeled} 条` : '未打标计数加载中…'}
         </div>
         <NButton
-          disabled={!overview || overview.unlabeled === 0 || wingBusy}
+          disabled={!wingBusy && (!overview || overview.unlabeled === 0)}
           style={{ color: 'var(--dsh-mem-accent)' }}
-          onClick={() => wingBackfill()}
+          onClick={() => (wingBusy ? cancelWing() : wingBackfill())}
         >
-          {wingBusy ? '回填中…' : 'wing 回填'}
+          {wingBusy ? '中止' : 'wing 回填'}
         </NButton>
       </div>
 
       <div style={rowStyle}>
-        <div style={hintStyle}>{kwBusy ? fmtProgress(kwProgress, '回填', kwCounts ?? undefined) : kwSummary || '为缺 dsh_keywords 的存量记忆补检索关键词，喂 FTS 关键词轴（需先开关键词回填开关）'}</div>
-        <NButton disabled={kwBusy} style={{ color: 'var(--dsh-mem-accent)' }} onClick={() => keywordBackfill()}>
-          {kwBusy ? '回填中…' : '关键词回填'}
+        <div style={hintStyle}>{kwBusy ? fmtProgress(kwProgress, '回填', kwCounts ?? undefined, kwAborting) : kwSummary || '为缺 dsh_keywords 的存量记忆补检索关键词，喂 FTS 关键词轴（需先开关键词回填开关）'}</div>
+        <NButton disabled={kwAborting} style={{ color: 'var(--dsh-mem-accent)' }} onClick={() => (kwBusy ? cancelKw() : keywordBackfill())}>
+          {kwBusy ? (kwAborting ? '中止中…' : '中止') : '关键词回填'}
         </NButton>
       </div>
 
       <div style={rowStyle}>
-        <div style={hintStyle}>{rdBusy ? fmtProgress(rdProgress, '整形', rdCounts ?? undefined) : rdSummary || '把“平”的存量记忆按类型重排成分节骨架，顺带产关键词/情景；只有严格更优才写回（需先开重蒸馏整形开关）'}</div>
-        <NButton disabled={rdBusy} style={{ color: 'var(--dsh-mem-accent)' }} onClick={() => redistillBackfill()}>
-          {rdBusy ? '整形中…' : '重蒸馏整形'}
+        <div style={hintStyle}>{rdBusy ? fmtProgress(rdProgress, '整形', rdCounts ?? undefined, rdAborting) : rdSummary || '把“平”的存量记忆按类型重排成分节骨架，顺带产关键词/情景；只有严格更优才写回（需先开重蒸馏整形开关）'}</div>
+        <NButton disabled={rdAborting} style={{ color: 'var(--dsh-mem-accent)' }} onClick={() => (rdBusy ? cancelRd() : redistillBackfill())}>
+          {rdBusy ? (rdAborting ? '中止中…' : '中止') : '重蒸馏整形'}
         </NButton>
       </div>
 

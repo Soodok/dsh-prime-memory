@@ -55,22 +55,22 @@ export function MarkdownBody({ text }: { text: string }): ReactNode {
     // heading
     const h = /^(#{1,6})\s+(.+)/.exec(t);
     if (h) {
-      const lv = h[1].length;
-      out.push(createElement(`h${lv}`, { key: `h${idx}`, style: H_STYLES[lv - 1] }, ...inline(h[2], `h${idx}`)));
+      const lv = h[1]!.length;
+      out.push(createElement(`h${lv}`, { key: `h${idx}`, style: H_STYLES[lv - 1] }, ...inline(h[2]!, `h${idx}`)));
       idx++;
       continue;
     }
     // unordered list
     const ul = /^[-*]\s+(.+)/.exec(t);
     if (ul) {
-      out.push(createElement('div', { key: `li${idx}`, style: LI }, '• ', ...inline(ul[1], `li${idx}`)));
+      out.push(createElement('div', { key: `li${idx}`, style: LI }, '• ', ...inline(ul[1]!, `li${idx}`)));
       idx++;
       continue;
     }
     // ordered list
     const ol = /^\d+\.\s+(.+)/.exec(t);
     if (ol) {
-      out.push(createElement('div', { key: `li${idx}`, style: LI }, t.slice(0, t.indexOf('.') + 2), ...inline(ol[1], `li${idx}`)));
+      out.push(createElement('div', { key: `li${idx}`, style: LI }, t.slice(0, t.indexOf('.') + 2), ...inline(ol[1]!, `li${idx}`)));
       idx++;
       continue;
     }
