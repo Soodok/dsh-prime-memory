@@ -190,16 +190,39 @@ export function effectiveCfg(cfg: MemoryConfig, live?: LiveSettingsHandle): Memo
   const cfOverride = s?.conflictFreeze !== undefined
     ? { conflictFreeze: { ...(cfg.conflictFreeze ?? {}), enabled: s.conflictFreeze } }
     : null;
+  // 存量回填/进阶功能启用开关：live 与部署 cfg.<x>.enabled 取或（部署强制开、live 追加开，
+  // 任一为真即放行）。关关关时保持逐字 false（零漂移不破）。
+  const kwOverride = s?.keywordEnabled !== undefined
+    ? { keyword: { ...(cfg.keyword ?? {}), enabled: cfg.keyword?.enabled === true || s.keywordEnabled === true } }
+    : null;
+  const rdOverride = s?.redistillEnabled !== undefined
+    ? { redistill: { ...(cfg.redistill ?? {}), enabled: cfg.redistill?.enabled === true || s.redistillEnabled === true } }
+    : null;
+  const mdsOverride = s?.mdSyncEnabled !== undefined
+    ? { mdSync: { ...(cfg.mdSync ?? {}), enabled: cfg.mdSync?.enabled === true || s.mdSyncEnabled === true } }
+    : null;
+  const mpOverride = s?.memportEnabled !== undefined
+    ? { memport: { ...(cfg.memport ?? {}), enabled: cfg.memport?.enabled === true || s.memportEnabled === true } }
+    : null;
   // md 投射/后缀收敛的单次动作护栏运行时覆盖(0 = 跟随部署 cfg.memExport.maxRecords)。
   // 只覆盖条数护栏，不动 enabled/root——开关与根路径仍属部署配置。
   const mdx = s?.mdExportMaxRecords ?? 0;
   const memExportOverride = mdx > 0 ? { memExport: { ...(cfg.memExport ?? {}), maxRecords: mdx } } : null;
-  if (!override && !budgets && !maxInput && !fallbacksTakeover && !chainEffort && !chainFallbacks && !effortInject && !layerChains && !hasChannel && !embedOverride && !cfOverride && !memExportOverride) return cfg;
+  // 回填并行度运行时覆盖(0 = 跟随部署 cfg.backfill.concurrency)：只改并发度，
+  // 不动 maxRecords/timeBudgetMs/callTimeoutMs——那三个仍属部署护栏，要改得改 YAML。
+  const bf = s?.backfillConcurrency ?? 0;
+  const backfillOverride = bf > 0 ? { backfill: { ...(cfg.backfill ?? {}), concurrency: bf } } : null;
+  if (!override && !budgets && !maxInput && !fallbacksTakeover && !chainEffort && !chainFallbacks && !effortInject && !layerChains && !hasChannel && !embedOverride && !cfOverride && !memExportOverride && !backfillOverride && !kwOverride && !rdOverride && !mdsOverride && !mpOverride) return cfg;
   return {
     ...cfg,
     ...(embedOverride ?? {}),
     ...(cfOverride ?? {}),
+    ...(kwOverride ?? {}),
+    ...(rdOverride ?? {}),
+    ...(mdsOverride ?? {}),
+    ...(mpOverride ?? {}),
     ...(memExportOverride ?? {}),
+    ...(backfillOverride ?? {}),
     llm: {
       ...cfg.llm,
       ...(effortInject ?? {}),

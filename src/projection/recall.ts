@@ -168,9 +168,10 @@ export const viewSchema: SchemaLike<RecallView> = {
 };
 
 /** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。
- *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。 */
+ *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。
+ *  `name` 是名称蒸馏产出的短标题，优先作为展示标题。 */
 export interface RecallL1Face {
-  getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo'>>;
+  getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo' | 'name'>>;
 }
 
 /** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
@@ -179,11 +180,31 @@ export interface RecallFeedbackFace {
   lastOf(id: string): number | undefined;
 }
 
-/** 正文首行 → 标题（投影内不引 client 的 format 工具，保持服务端自足）。 */
+/**
+ * 正文首行 → 标题（投影内不引 client 的 format 工具，保持服务端自足）。
+ * 按 markdown 语义解析：
+ * - H1（`# xxx`）是文档标题，直接作为记忆名称；
+ * - H2+（`## xxx`）是正文分节标记，跳过它取第一个实质文本行。
+ * 全部行都是 heading 时回落到第一个非空行。
+ */
 function firstLine(content: string): string {
-  const line = content.split('\n').find((l) => l.trim().length > 0) ?? content;
-  const trimmed = line.trim();
-  return trimmed.length > TITLE_MAX ? trimmed.slice(0, TITLE_MAX) : trimmed;
+  const lines = content.split('\n');
+  // 优先取 H1（文档级标题）
+  const h1 = lines.find((l) => /^#\s/.test(l.trim()));
+  if (h1) return clampTitle(h1.trim());
+  // 无 H1 时跳过 H2+ 分节 heading，取第一个实质文本行
+  const body = lines.find((l) => {
+    const t = l.trim();
+    return t.length > 0 && !/^#{2,6}\s/.test(t);
+  });
+  if (body) return clampTitle(body.trim());
+  // 全是 heading 的极端情况：回落第一个非空行
+  const fallback = lines.find((l) => l.trim().length > 0) ?? content;
+  return clampTitle(fallback.trim());
+}
+
+function clampTitle(s: string): string {
+  return s.length > TITLE_MAX ? s.slice(0, TITLE_MAX) : s;
 }
 
 /** 正文全文 → 泡泡用（去首尾空白，超长截断补省略号）。 */
@@ -237,7 +258,7 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, fe
     items.push({
       id: r.id,
       type: r.type,
-      title: firstLine(r.content),
+      title: r.name || firstLine(r.content),
       priority: r.priority,
       body: clampBody(r.content),
       ...(scenario !== undefined && scenario.length > 0 ? { scenario } : {}),

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { ListRecordsRequest, RetiredRecordView, UiRecord } from '../../../src/contract.js';
 import { fmtTime, registerTypeCatalog, tagClass, typeCatalogIds, typeLabel } from '../format.js';
+import { MarkdownBody } from '../ui/MarkdownBody.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NSel, type NSelOption } from '../ui/NSel.js';
@@ -648,7 +649,7 @@ export function RecordsTab(props: { rpc: RpcFn }) {
                   </NButton>
                 ) : null}
               </div>
-              <div style={S.content}>{m.content}</div>
+              <div style={S.content}><MarkdownBody text={m.content} /></div>
               {open ? (
                 <div style={S.detail}>
                   {'id: ' +
@@ -717,7 +718,7 @@ export function RecordsTab(props: { rpc: RpcFn }) {
                       恢复
                     </NButton>
                   </div>
-                  <div style={S.content}>{m.content}</div>
+                  <div style={S.content}><MarkdownBody text={m.content} /></div>
                 </div>
               ))}
               {retiredTotal > retired.length ? (

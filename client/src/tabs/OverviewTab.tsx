@@ -11,9 +11,10 @@ import { DistillSettings } from './DistillSettings.js';
 import { EmbeddingSection } from './EmbeddingSection.js';
 import { RebuildPanel } from './RebuildPanel.js';
 import { RuminatePanel } from './RuminatePanel.js';
+import { BackfillSection } from './BackfillSection.js';
 
 /** 可通过开关切换的 settings 键。 */
-type ToggleKey = 'enabled' | 'capture' | 'distill' | 'recall' | 'memoryMutate' | 'conflictFreeze' | 'skillsEnabled' | 'toolRoom' | 'toolGraph' | 'toolRuminate' | 'toolConflict' | 'toolMutate';
+type ToggleKey = 'enabled' | 'capture' | 'distill' | 'recall' | 'memoryMutate' | 'conflictFreeze' | 'skillsEnabled' | 'keywordEnabled' | 'redistillEnabled' | 'mdSyncEnabled' | 'memportEnabled' | 'toolRoom' | 'toolGraph' | 'toolRuminate' | 'toolConflict' | 'toolMutate';
 
 export function OverviewTab(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
@@ -71,6 +72,27 @@ export function OverviewTab(props: { rpc: RpcFn }) {
       });
   };
 
+  // 数值型 live 键写入（回填并行度滑块）：与 toggle 同样的乐观 + 失败回滚语义
+  const setNum = (key: 'backfillConcurrency', value: number) => {
+    if (!settingsData) return;
+    const prev = settingsData;
+    const next = { ...prev, settings: { ...prev.settings, [key]: value } };
+    setSettingsData(next);
+    rpc('dsh-memory/settings-set', { [key]: value } as SettingsSetRequest)
+      .then((r) => {
+        if (!r || !r.ok) {
+          setSettingsData(prev);
+          setError(r && r.error ? '并行度写入失败：' + r.error.message : '并行度写入失败');
+        } else {
+          setError(null);
+        }
+      })
+      .catch((e: unknown) => {
+        setSettingsData(prev);
+        setError('并行度写入失败：' + String((e && (e as Error).message) || e));
+      });
+  };
+
   // 概览统计拆两段呈现：瓦片（核心计数，一眼可读）+ 明细行（目录/版本/时间线/进度）
   const tiles: Array<{ num: string; label: string }> = [];
   const infos: Array<[string, string]> = [];
@@ -112,6 +134,13 @@ export function OverviewTab(props: { rpc: RpcFn }) {
   const toolConflict = settingsData && settingsData.settings ? settingsData.settings.toolConflict !== false : true;
   const toolMutate = settingsData && settingsData.settings ? settingsData.settings.toolMutate !== false : true;
   const skillsEnabled = settingsData && settingsData.settings ? settingsData.settings.skillsEnabled === true : false;
+  // 存量回填/进阶功能启用开关（与下方 BackfillSection 的按钮同区）。
+  const keywordEnabled = settingsData && settingsData.settings ? settingsData.settings.keywordEnabled === true : false;
+  const redistillEnabled = settingsData && settingsData.settings ? settingsData.settings.redistillEnabled === true : false;
+  const mdSyncEnabled = settingsData && settingsData.settings ? settingsData.settings.mdSyncEnabled === true : false;
+  const memportEnabled = settingsData && settingsData.settings ? settingsData.settings.memportEnabled === true : false;
+  // 回填并行度：0 = 跟随部署 cfg.backfill.concurrency（当前默认 2）
+  const bfConcurrency = settingsData && settingsData.settings ? (settingsData.settings.backfillConcurrency ?? 0) : 0;
 
   return (
     <div>
@@ -227,6 +256,52 @@ export function OverviewTab(props: { rpc: RpcFn }) {
               toggle('conflictFreeze', v);
             }}
           />
+          {/* 分组：存量回填与整形的启用开关——与下方 BackfillSection / ArchiveSection 的按钮同区；
+              这些面默认关，不开则按钮点了只报“未开启”。 */}
+          <div style={S.panelLabel}>存量回填与整形</div>
+          <SwitchRow
+            label="关键词回填"
+            desc={keywordEnabled ? '已开启：可对存量记忆批量补检索关键词（下方「存量回填与整形」区点按钮）' : '默认关闭；开启后才能跑关键词回填（喂 FTS 关键词轴）'}
+            checked={keywordEnabled}
+            onChange={(v) => { toggle('keywordEnabled', v); }}
+          />
+          <SwitchRow
+            label="重蒸馏整形"
+            desc={redistillEnabled ? '已开启：可把“平”的存量记忆按类型重排成分节骨架（仅动严格更优的）' : '默认关闭；开启后才能跑重蒸馏整形（改正文会重算向量+覆盖 .memory.md）'}
+            checked={redistillEnabled}
+            onChange={(v) => { toggle('redistillEnabled', v); }}
+          />
+          {/* 回填并行度滑块（排查用旋钮）：默认 1 = 串行逐条；拖高只是临时提速。
+              诊断时需要的常常是“立刻降到 1 串行再看一遍”——为此改 YAML + 重启不现实。
+              诚实提示：并发度在启动那一轮就读定了，拖滑块不影响**正在跑**的那次。 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13 }}>回填并行度</span>
+            <input
+              type="range"
+              min={0}
+              max={8}
+              step={1}
+              value={Math.min(8, bfConcurrency)}
+              onChange={(e) => { setNum('backfillConcurrency', Number(e.target.value)); }}
+              style={{ width: 120 }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--dsh-mem-text-3)' }}>
+              {bfConcurrency === 0 ? '0·跟随配置（默认 1=串行）' : bfConcurrency === 1 ? '1·串行逐条' : `${bfConcurrency} 路并发`}
+              · 对**下一次点击**生效（正在跑的那轮不会改道）
+            </span>
+          </div>
+          <SwitchRow
+            label="md 反向同步"
+            desc={mdSyncEnabled ? '已开启：可将 .memory.md 文件侧修改回灌入库（需先开 md 投射 + 高权限）' : '默认关闭；风险高于导出（会写库），需先开 md 投射再开本项'}
+            checked={mdSyncEnabled}
+            onChange={(v) => { toggle('mdSyncEnabled', v); }}
+          />
+          <SwitchRow
+            label="外部记忆来源 Connect"
+            desc={memportEnabled ? '已开启：可登记/扫描外部记忆源并导入' : '默认关闭；开启后 memport 相关端点可用'}
+            checked={memportEnabled}
+            onChange={(v) => { toggle('memportEnabled', v); }}
+          />
           {/* 分组三：蒸馏参数（B 形态分段：全局默认链 + 按层路由 l1/l2/l3 + 预算随层归组；
               旧「蒸馏思考」全局切换器与「蒸馏模型」单路由选择器已并入 RouteChainEditor） */}
           <div style={S.panelLabel}>蒸馏参数</div>
@@ -237,6 +312,7 @@ export function OverviewTab(props: { rpc: RpcFn }) {
       <EmbeddingSection rpc={rpc} />
       <RebuildPanel rpc={rpc} />
       <RuminatePanel rpc={rpc} />
+      <BackfillSection rpc={rpc} />
       {degraded ? (
         <div style={{ ...S.error, marginBottom: 10 }}>
           {'⚠ ' + stats!.message + '。上方数据为最后一次成功读取的值，记忆功能当前未工作。'}

@@ -16,6 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { SLOT_KINDS, SLOT_STATUSES } from '../store/slots.js';
 import type { SlotStore } from '../store/slots.js';
+import { relPathFor } from '../store/memory-md.js';
 
 export const MEMORY_SLOTS_KEY = 'memorySlots';
 
@@ -40,6 +41,15 @@ export interface SlotsViewSlot {
 export interface SlotRefView {
   ref: string;
   title: string;
+  /**
+   * 记忆文件相对路径（`<type>/<name>.memory.md`）。
+   * 拼接绝对地址：
+   * - 有 workspaceId → `<workspaceId>/.agents/memory/<filePath>`
+   * - 无 workspaceId → `<memoriesRoot>/<filePath>`（由消费方自行解析根目录）
+   */
+  filePath?: string;
+  /** 记忆归属的工作区绝对路径；空串/undefined = global（无 workspace）。 */
+  workspaceId?: string;
 }
 
 export interface SlotsProjectionState {
@@ -148,7 +158,7 @@ export const viewSchema: SchemaLike<SlotsView> = {
 
 /** 投影需要的 L1 只读面(结构化声明,避免跨模块类型耦合)。 */
 export interface L1LookupFace {
-  getByIds(ids: string[]): Array<{ id: string; content: string; type: string }>;
+  getByIds(ids: string[]): Array<{ id: string; content: string; type: string; name?: string; workspaceId?: string }>;
 }
 
 /** L1 record_id 的引用形态(newId('mem') 生成)。 */
@@ -179,9 +189,18 @@ function resolveRefViewsUnsafe(recordRefs: readonly string[], l1: L1LookupFace):
   for (const ref of recordRefs) {
     const record = byId.get(ref);
     if (record === undefined) continue;
-    const firstLine = record.content.split('\n', 1)[0] ?? '';
-    const summary = firstLine.length > REF_TITLE_MAX ? firstLine.slice(0, REF_TITLE_MAX) + '…' : firstLine;
-    views.push({ ref, title: '[' + record.type + '] ' + summary });
+    // 优先用 name 字段（名称蒸馏产出的短标题），无 name 时回落 content 首行截断。
+    const raw = record.name || (record.content.split('\n', 1)[0] ?? '');
+    const summary = raw.length > REF_TITLE_MAX ? raw.slice(0, REF_TITLE_MAX) + '…' : raw;
+    // 投射相对路径走单一事实源 `relPathFor`，与写盘/records-meta 端点同算法。
+    const filePath = relPathFor(record);
+    const ws = (record.workspaceId ?? '').trim();
+    views.push({
+      ref,
+      title: '[' + record.type + '] ' + summary,
+      filePath,
+      ...(ws.length > 0 ? { workspaceId: ws } : {}),
+    });
   }
   return views.length > 0 ? views : undefined;
 }

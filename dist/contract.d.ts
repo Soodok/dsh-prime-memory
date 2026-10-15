@@ -106,9 +106,20 @@ export interface MemoryLiveSettings {
     /** 轨2 技能结晶总开关（看板可拨）:true = 注册 memory_skill_* 工具、注入 active 技能、skills-* 端点可用。
      *  默认 false（新功能默认关）；与部署 cfg.skills.enabled 取或（任一开则生效）。 */
     skillsEnabled: boolean;
+    /** 关键词回填启用开关（概览区可拨）:true = 放行 dsh-memory/keyword-backfill。与部署 cfg.keyword.enabled 取或。 */
+    keywordEnabled: boolean;
+    /** 重蒸馏整形启用开关（概览区可拨）:true = 放行 dsh-memory/redistill-backfill。与部署 cfg.redistill.enabled 取或。 */
+    redistillEnabled: boolean;
+    /** md 反向同步启用开关（概览区可拨）:true = 放行 md-sync 回灌。与部署 cfg.mdSync.enabled 取或。 */
+    mdSyncEnabled: boolean;
+    /** 外部记忆来源 Connect 启用开关（概览区可拨）:true = 放行 memport-* 端点。与部署 cfg.memport.enabled 取或。 */
+    memportEnabled: boolean;
     /** md 投射/后缀收敛的单次动作护栏运行时覆盖:0 = 跟随部署 `cfg.memExport.maxRecords`（默认 2000）。
      *  存在的理由：一次点完多少条属于“回填历史时才改一下”的旋钮，不该要求改 YAML + 重启。 */
     mdExportMaxRecords: number;
+    /** 存量回填（keyword/redistill）LLM 批调用的运行时并行度覆盖：0 = 跟随部署
+     *  `cfg.backfill.concurrency`（默认 2）；1–8 = 直接覆盖。概览页 1–3 滑块写的就是它。 */
+    backfillConcurrency: number;
 }
 /** 召回停用原因(session-stats recall.enabled=false 时带出;短路序第一个为假的因子)。 */
 export type RecallDisabledReason = 'deploy' | 'global' | 'session' | 'mode';
@@ -641,11 +652,38 @@ export interface RoomAdminResponse {
     /** retire withRecords 实际退场的记录条数(软删,可恢复)。 */
     retiredRecords?: number;
 }
+/**
+ * 回填端点(wing/keyword/redistill)的请求体。三者都同时是「触发器 + 状态查询」：
+ * - `probe` 缺省/false：空闲时**启动**一轮；已在跑则只回状态(单飞)。
+ * - `probe: true`：**只读快照**,绝不启动——供 UI 离开区域再回来时恢复在途任务的进度
+ *   (否则计时器随组件卸载而清,回到页面只能看到卡住的最后一帧)。
+ */
+export interface BackfillTriggerRequest {
+    probe?: boolean;
+}
 /** dsh-memory/wing-backfill(一键回填,后台任务;端点立即返回,进度以 wing-overview 轮询)。 */
 export interface WingBackfillResponse {
     /** true = 本次触发启动了新任务;false = 已有任务在跑(单飞,不叠加)。 */
     started: boolean;
     running: boolean;
+}
+/** 回填批扫的逐条进度（keyword/redistill 共用）：后台任务一轮可达几分钟，没有它 UI 只能转圈圈。 */
+export interface BackfillProgress {
+    /** 每个请求处理的条数（两个回填都已改成逐条 = 1；保留字段供未来批量形状复用）。 */
+    chunk: number;
+    /** 扫描阶段确定的**真目标**总数（扫描未完成时为已发现数）。 */
+    candidates: number;
+    /** 本次已完成（送过 LLM 且已提交结果）条数。 */
+    processed: number;
+    /** 仍在扫描阶段（此阶段报「扫描中」而不是「第 N 条」）。 */
+    scanning: boolean;
+    /** 已完成条数 / 本次要处理的总条数。 */
+    batchesDone: number;
+    batchTotal: number;
+    /** LLM 批调用并行度（cfg.backfill.concurrency）。 */
+    concurrency: number;
+    /** 预算/上限用尽未处理、留下次的条数（跟“跑完了”区分开的关键一个数）。 */
+    deferred: number;
 }
 /** dsh-memory/keyword-backfill（关键词蒸馏回填，后台任务；门控关时 enabled=false 不启动）。 */
 export interface KeywordBackfillResponse {
@@ -658,6 +696,24 @@ export interface KeywordBackfillResponse {
     updated: number;
     /** 失败/跳过数。 */
     failed: number;
+    /** 分批进度（运行期轮询显示用）。 */
+    progress: BackfillProgress;
+}
+/** dsh-memory/redistill-backfill（存量记忆重蒸馏整形，后台任务；门控关时 enabled=false 不启动）。 */
+export interface RedistillBackfillResponse {
+    /** true = 本次触发启动了新任务；false = 已有任务在跑或门控关。 */
+    started: boolean;
+    running: boolean;
+    /** 门控 `cfg.redistill.enabled`；关时不启动。 */
+    enabled: boolean;
+    /** 本进程累计整形写回条数（重启归零；观测用）。 */
+    updated: number;
+    /** 质量闸判不写（留原文）条数。 */
+    skipped: number;
+    /** 失败/跳过数（LLM 失败、id 配不上、embed 掉线）。 */
+    failed: number;
+    /** 分批进度（运行期轮询显示用）。 */
+    progress: BackfillProgress;
 }
 /** dsh-memory/session-stats(悬浮卡信息区;热路径端点)。 */
 export interface SessionStatsRequest {
@@ -891,6 +947,38 @@ export interface UiRecord {
      * 读时从 recall-feedback sidecar 派生，不进存储/快照。
      */
     userRelevance?: number;
+}
+/** dsh-memory/records-meta（按 ID 批量查元数据，供 .memory.md 查看器拼接 Qoder 风格条目）。 */
+export interface RecordsMetaRequest {
+    /** L1 record_id 列表（上限 50）。 */
+    ids: string[];
+}
+/** 单条轻量元数据（含正文，供 .memory.md 查看器拼接头部条）。 */
+export interface RecordMeta {
+    id: string;
+    /** 名称蒸馏产出的短标题；无 name 时为 null。 */
+    name: string | null;
+    type: string;
+    priority: number;
+    /** 正文全文（markdown）。 */
+    content: string;
+    maturity?: 'low' | 'mid' | 'high';
+    createdAt: string | null;
+    updatedAt: string | null;
+    scene: string;
+    scope: 'global' | 'workspace';
+    workspaceId: string | null;
+    /** 关键词（metadata.dsh_keywords）。 */
+    keywords?: string[];
+    /** 使用场景（metadata.dsh_usage_scenario）。 */
+    usageScenario?: string[];
+    /** 投射文件相对路径 `<type>/<stem>.memory.md`。 */
+    filePath: string;
+    /** 是否已退场（软删）。 */
+    retired: boolean;
+}
+export interface RecordsMetaResponse {
+    items: RecordMeta[];
 }
 export interface ListRecordsResponse {
     items: UiRecord[];
@@ -1661,12 +1749,14 @@ export interface DshMemoryRequestMap {
     'dsh-memory/rooms-export': RoomsExportRequest;
     'dsh-memory/room-register': RoomRegisterRequest;
     'dsh-memory/room-admin': RoomAdminRequest;
-    'dsh-memory/wing-backfill': Record<string, never>;
-    'dsh-memory/keyword-backfill': Record<string, never>;
+    'dsh-memory/wing-backfill': BackfillTriggerRequest;
+    'dsh-memory/keyword-backfill': BackfillTriggerRequest;
+    'dsh-memory/redistill-backfill': BackfillTriggerRequest;
     'dsh-memory/session-stats': SessionStatsRequest;
     'dsh-memory/settings-get': Record<string, never>;
     'dsh-memory/settings-set': SettingsSetRequest;
     'dsh-memory/list-records': ListRecordsRequest;
+    'dsh-memory/records-meta': RecordsMetaRequest;
     'dsh-memory/records-delete': RecordsDeleteRequest;
     'dsh-memory/receipts': ReceiptsRequest;
     'dsh-memory/conflicts': ConflictsRequest;
@@ -1726,10 +1816,12 @@ export interface DshMemoryResponseMap {
     'dsh-memory/room-admin': RoomAdminResponse;
     'dsh-memory/wing-backfill': WingBackfillResponse;
     'dsh-memory/keyword-backfill': KeywordBackfillResponse;
+    'dsh-memory/redistill-backfill': RedistillBackfillResponse;
     'dsh-memory/session-stats': SessionStatsResponse;
     'dsh-memory/settings-get': SettingsGetResponse;
     'dsh-memory/settings-set': SettingsSetResponse;
     'dsh-memory/list-records': ListRecordsResponse;
+    'dsh-memory/records-meta': RecordsMetaResponse;
     'dsh-memory/records-delete': RecordsDeleteResponse;
     'dsh-memory/receipts': ReceiptsResponse;
     'dsh-memory/conflicts': ConflictsResponse;

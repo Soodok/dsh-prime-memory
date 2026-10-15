@@ -123,12 +123,31 @@ export interface MemoryConfig {
         /** active 技能闲置多少天后自动归档（0 = 不做闲置归档）。 */
         idleArchiveDays: number;
     };
-    /** wing 存量回填护栏（默认 300 条/120s；想一次多跑点可调大，代价是后台占用更久）。 */
+    /**
+     * 存量回填护栏（wing / keyword / redistill 共用，默认 300 条 / 30min 总预算 / 串行 / 单条请求 240s）。
+     *
+     * 形状约定（用户定）：**按单元、串行、不合并**——一个请求只装一条记忆，跑完一条再发下一条。
+     * 实测单条 35B 只要 ~2.6s，而 20 条合并成一批要 200s+ 且一次空输出/截断就带走整批，
+     * 所以“批量”在这里不省时间只堆风险。`concurrency` 默认 1；拖高概览页滑块可临时多路在飞。
+     *
+     * 三个旋钮分工（别混淆）：
+     * - `maxRecords` = **一轮最多处理多少条**（防一次点击拖过久；真实队列没跑完的计入 deferred，
+     *   再点一次继续）。注意它**不是**请求批大小：逐条形状下每个请求只装 1 条。
+     * - `timeBudgetMs` = **本轮总墙钟预算**（防跑飞）。与 maxRecords 谁先到谁生效：
+     *   默认 300 条 × ~2.6s ≈ 13min < 30min，正常由 maxRecords 先结算。
+     * - `callTimeoutMs` = **一次 `callLLM`（含整条回退链）**的超时。不能沿用 `llm.timeoutMs`（120s）：
+     *   它是**整次调用**的预算而非每条路由各享一份——真机踩到主路由（9B）空输出吃 95s，
+     *   降到 35B 后只剩余量在线上被掐死（看似“35B 也跑不完”）。默认 240s 按「路由数 × 单路由耗时」留余量。
+     */
     backfill: {
         /** 单次回填处理条数上限。 */
         maxRecords: number;
-        /** 单次回填墙钟预算(ms)，超时剩留待再次触发。 */
+        /** 单次回填总墙钟预算(ms)，超时剩留待再次触发。 */
         timeBudgetMs: number;
+        /** LLM 批调用的并行度(1 = 串行)。 */
+        concurrency: number;
+        /** 一次 LLM 调用（含整条回退链）的超时(ms)，比对话蒸馏的 llm.timeoutMs 宽；按路由数留余量。 */
+        callTimeoutMs: number;
     };
     /**
      * 内容路由（workspace 归属）：按「这条记忆**谈到**哪个项目」给记录补 `workspace_id`。
@@ -203,6 +222,20 @@ export interface MemoryConfig {
      * 否则关键词轴对存量记录不生效。
      */
     keyword: {
+        enabled: boolean;
+    };
+    /**
+     * 存量记忆重蒸馏整形（redistill）：**独立回填批扫**，把活跃且 `scoreSkeleton` 判「骨架不齐备」
+     * 的 L1 正文按 G2 分类型骨架重排，并顺带产 `dsh_keywords` / `dsh_usage_scenario`。由
+     * `dsh-memory/redistill-backfill` 端点触发，镜像 keyword/wing 回填（单飞/后台/有界）。
+     *
+     * **默认关**：关时不整形、content/FTS/投射逐字不变（零漂移）。护栏复用 `backfill`。
+     * 与 keyword 回填的关键差异：本项**改 content**，写回走 `L1Store.appendNew`（追加 JSONL 事实源
+     * + 重嵌 + FTS + 投射点火），且入口要求 `vectorsReady()`（embed 未就绪时改正文会静默丢向量）。
+     * 只有整形后骨架分严格更优才写回，并盖整形版本戳（`dsh_reshape_ver`）；未过闸的留原文**不打标记**，
+     * 下轮仍可再试——即只有「成功替换的」不再进入。
+     */
+    redistill: {
         enabled: boolean;
     };
     /**

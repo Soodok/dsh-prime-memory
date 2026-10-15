@@ -1276,6 +1276,39 @@ export class MemoryDb {
         }
     }
     /**
+     * 游标分批取**活跃** L1 的骨架判定所需列（`id / type / content / metadata`）。
+     *
+     * 为什么单开一个方法而不是复用 `getAllL1Lite`：后者刻意不返 content（防写回把正文清空），
+     * 而 redistill 的**扫描阶段就要用 content 判骨架**——把筛子下推到扫描期，才能像反刍
+     * 重标定那样“只把真目标送 LLM”，而不是每批 hydrate 20 条候选后发现只有 4 条要整形。
+     *
+     * 退场判据走 `retiredL1Sql()`（全库唯一事实源）下推到 SQL：活跃集本就只占全库
+     * 两成（真机 289/1221），先筛掉退场行可把扫描代价降到五分之一。
+     * 分页同 `getAllL1Lite`：`ORDER BY record_id`（主键不变 ⇒ 无分页漂移）。
+     */
+    getActiveL1ForSkeleton(limit, offset) {
+        if (this.degraded)
+            return [];
+        if (limit <= 0)
+            return [];
+        try {
+            const rows = this.db
+                .prepare(`SELECT record_id, type, content, metadata_json FROM l1_records
+                  WHERE NOT (${retiredL1Sql()}) ORDER BY record_id LIMIT ? OFFSET ?`)
+                .all(limit, offset);
+            return rows.map((r) => ({
+                id: r.record_id,
+                type: r.type,
+                content: r.content ?? '',
+                metadata: parseMetadataJson(r.metadata_json),
+            }));
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} L1 骨架取数失败(返回空,本轮跳过): ${err instanceof Error ? err.message : String(err)}`);
+            return [];
+        }
+    }
+    /**
      * **只**更新 metadata_json(顺带 updated_time),绝不碰 content 或其它列。
      *
      * 为什么需要它:分批巡检后调用方手里**没有 content**(L1MetaLite 只有三列),

@@ -123,6 +123,18 @@ export declare class L1Store {
      */
     allLite(limit: number, offset: number): L1MetaLite[];
     /**
+     * 游标分批取**活跃**记录的骨架判定输入（含 content）——redistill 扫描阶段专用。
+     *
+     * 与 `allLite` 的分工：本方法**只为读**（判骨架），写回仍走 `appendNew`（改正文）/
+     * `patchMetadata`（只打标）——不得拿本投影去 upsert，退场行已被 SQL 排除。
+     */
+    activeForSkeleton(limit: number, offset: number): Array<{
+        id: string;
+        type: string;
+        content: string;
+        metadata: Record<string, unknown>;
+    }>;
+    /**
      * 只更新 metadata_json 的最小写回(不动 content 与其它列)。
      * 返回 false 表示 id 不存在或写入失败——调用方须记账,不许静默。
      */

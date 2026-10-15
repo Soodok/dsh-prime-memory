@@ -220,6 +220,18 @@ export function fileStemFor(r: Pick<MemoryRecord, 'id' | 'name' | 'content'>): s
   return sanitizeFilename(base).replace(/\.md$/i, '') || `mem-${r.id.slice(-8)}`;
 }
 
+/**
+ * 一条记录的投射相对路径 `<dir>/<stem>.memory.md`（分隔符恒 `/`）。
+ *
+ * 单一事实源：`renderRecord` 写盘、`dsh-memory/records-meta` 端点、槽位投影的
+ * `refViews.filePath` 都走这里。各自抄一份清洗规则必然漂移——漂移之后「投影给的地址」
+ * 和「磁盘上的真文件」对不上，而这三处本来就是给人核对同一个事实用的。
+ */
+export function relPathFor(r: Pick<MemoryRecord, 'id' | 'name' | 'content' | 'type'>): string {
+  const dir = MEMORY_TYPE_DIRS.has(r.type) ? r.type : UNSORTED_DIR;
+  return `${dir}/${fileStemFor(r)}.memory.md`;
+}
+
 /** 把值写成可解析回读的 frontmatter 标量/数组（JSON 编码，转义由它负责）。 */
 function fmLine(key: string, value: string | number | boolean | string[]): string {
   return `${key}: ${JSON.stringify(value)}`;
@@ -232,9 +244,9 @@ function fmLine(key: string, value: string | number | boolean | string[]): strin
  * @returns `relPath`（相对投射根，已归一分隔符）与 `text`（全文）。
  */
 export function renderRecord(r: MdRecordInput): { relPath: string; text: string } {
-  const dir = MEMORY_TYPE_DIRS.has(r.type) ? r.type : UNSORTED_DIR;
+  const relPath = normalize(relPathFor(r)).replace(/\\/g, '/');
+  // frontmatter 的 `name` 必须与文件名干同一值，所以单独再取一次（同一纯函数，不会漂）。
   const stem = fileStemFor(r);
-  const relPath = normalize(`${dir}/${stem}.memory.md`).replace(/\\/g, '/');
   const scenario = Array.isArray(r.metadata?.dsh_usage_scenario)
     ? (r.metadata?.dsh_usage_scenario as string[]).filter((s) => typeof s === 'string')
     : [];

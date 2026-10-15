@@ -36,6 +36,15 @@ export interface SlotsViewSlot {
 export interface SlotRefView {
     ref: string;
     title: string;
+    /**
+     * 记忆文件相对路径（`<type>/<name>.memory.md`）。
+     * 拼接绝对地址：
+     * - 有 workspaceId → `<workspaceId>/.agents/memory/<filePath>`
+     * - 无 workspaceId → `<memoriesRoot>/<filePath>`（由消费方自行解析根目录）
+     */
+    filePath?: string;
+    /** 记忆归属的工作区绝对路径；空串/undefined = global（无 workspace）。 */
+    workspaceId?: string;
 }
 export interface SlotsProjectionState {
     rev: number;
@@ -76,6 +85,8 @@ export interface L1LookupFace {
         id: string;
         content: string;
         type: string;
+        name?: string;
+        workspaceId?: string;
     }>;
 }
 export declare function registerSlotsProjection(ctx: Context, store: SlotStore, l1?: L1LookupFace): void;

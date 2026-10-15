@@ -17,6 +17,25 @@
   - **建议状态(`longtask-hint-get`)以纯端点提供**:判定 = 上下文占用达 `contextThresholdPct` 或 todo 漂移达 `driftThreshold`(部署配置可调);配合 `longtask-compress-tail` 作手动压缩入口。
   - **撤下浮动球 UI(`client/src/longtask-fab.ts`;beta.1 起曾随包发布)**:悬浮建议面板的归属本在 context-compression 侧(「建议启动压缩」是其领域),pm 属误载——2026-10-02 用户裁定撤下。撤下不违座位契约(settings.section 恰一个 + 输入栏 pill,body 单例不占座位),但全应用级 overlay 会与其他插件的悬浮 UI 抢占屏幕角落;长任务开关与手动压缩入口待长任务定版时落记忆设置分节。
   - **`session-mode-set` 的 `mode` 转为可选**:与 `longTask` 二选一必传——纯切长任务开关不再被迫发送档位(旧客户端恒传 mode,行为不变)。响应 `mode` 改回当前生效值。
+
+## [0.26.0] — 2026-10-14
+
+### 新增
+
+- **存量记忆重蒸馏整形（`redistill`）**：新增独立回填批扫 `src/redistill-backfill.ts`（镜像 wing/keyword 回填：单飞/后台/有界/失败原记录不动），把**活跃且骨架不齐备**的存量 L1 正文按 G2 分类型「前因后果」骨架重排，并顺带产 `metadata.dsh_keywords` / `metadata.dsh_usage_scenario`。新端点 `dsh-memory/redistill-backfill`（立即返回 `{started,running,enabled,updated,skipped,failed}`）、面板（WingWheel）加「重蒸馏整形」按钮。配置 `redistill.enabled` **默认关**——关时不整形、content/FTS/投射逐字不变（零漂移）。
+  - **质量闸**：只有整形后 `scoreSkeleton` 骨架命中数**严格更优**才写回，并盖整形版本戳 `dsh_reshape_ver`（下轮不再入列）；未过闸的留原文**不打标记**、下轮仍可重试——绝不为「看起来有格式」贴假标签或编造。
+  - **只碰活跃**：已退场/被取代的记录不补做优化。
+- **改正文的持久写回路径**：整形写回走 `L1Store.appendNew`，一次完成 JSONL 事实源追加 + 重算 embedding + `l1_fts` 重索引 + `.memory.md` 投射覆盖（导出器按库重渲染、不同即覆盖），保证「库改了、检索/向量/磁盘同步跟上」。入口要求 `vectorsReady()`——嵌入未就绪时整轮跳过，避免改正文静默丢向量。
+
+- **`dsh-memory/records-meta` 端点**：按 `record_id` 批量（≤50）取单条记忆的全量元数据与正文（name/type/priority/content/maturity/createdAt/updatedAt/scene/scope/workspaceId/keywords/usageScenario/filePath/retired），走 `stores.l1.getByIds` 直读 SQLite。记忆查看器因此**不需要读 `.memory.md` 文件**——旧方案（伪装文件名的 fileViewer）会被宿主 EditorHost 当物理路径 fsRead，必报 ENOENT。契约入 `contract.ts`，端点集 62→63（`tests/contract-keys.test.ts` 同步钉数）。
+- **展示标题不再从正文猜**：召回投影 `memoryRecall` 与槽位 `refViews` 的 title 优先取 `name`（名称蒸馏产出的短标题），无 `name` 才回落正文首行。`firstLine()` 改为 markdown 感知：H1（`# xxx`）是文档标题保留作标题，H2+（`## 结论/事实`）是分节标记一律跳过——此前 `## 结论/事实` 会被当成「记忆名称」显示，而它明显是正文。
+- **投射路径单一事实源 `relPathFor()`**：`renderRecord` 写盘、`records-meta` 的 `filePath`、槽位 `refViews.filePath` 三处收敛到同一算法。此前投影里另抄了一份清洗正则，同一条记忆会算出两个不同文件名——「投影给的地址」与「磁盘上的真文件」对不上，而这三处本就是给人核对同一事实的。`refViews` 同时透出 `filePath`/`workspaceId`，消费方按 `<workspaceId>/.agents/memory/<filePath>`（workspace 范围）或投射根（global）拼绝对地址。
+- **检索面板正文 markdown 化**（client）：RecordsTab 展开详情走新增的 `client/src/ui/MarkdownBody.tsx`（heading 层级 / 粗体 / 行内代码 / 列表，零外部依赖），`## 结论/事实` 不再是一行裸文本。
+
+### 修复
+
+- **`client-session-recalled-bundle` 回归守卫**：0.25.0 把「本会话召回」pill 渲染移交 dsh-brief-sidebar 后，该测试仍断言 pill 含召回串（发版时漏更）。改为断言 prime-memory pill **不**再重复渲染召回，保留投影接线断言。
+
 ## [0.25.0] — 2026-10-14
 
 ### 新增

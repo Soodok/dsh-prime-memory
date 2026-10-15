@@ -1,4 +1,5 @@
 import { SLOT_KINDS, SLOT_STATUSES } from '../store/slots.js';
+import { relPathFor } from '../store/memory-md.js';
 export const MEMORY_SLOTS_KEY = 'memorySlots';
 function invalid(what, detail) {
     throw new Error(`${what}: ${detail}`);
@@ -100,9 +101,18 @@ function resolveRefViewsUnsafe(recordRefs, l1) {
         const record = byId.get(ref);
         if (record === undefined)
             continue;
-        const firstLine = record.content.split('\n', 1)[0] ?? '';
-        const summary = firstLine.length > REF_TITLE_MAX ? firstLine.slice(0, REF_TITLE_MAX) + '…' : firstLine;
-        views.push({ ref, title: '[' + record.type + '] ' + summary });
+        // 优先用 name 字段（名称蒸馏产出的短标题），无 name 时回落 content 首行截断。
+        const raw = record.name || (record.content.split('\n', 1)[0] ?? '');
+        const summary = raw.length > REF_TITLE_MAX ? raw.slice(0, REF_TITLE_MAX) + '…' : raw;
+        // 投射相对路径走单一事实源 `relPathFor`，与写盘/records-meta 端点同算法。
+        const filePath = relPathFor(record);
+        const ws = (record.workspaceId ?? '').trim();
+        views.push({
+            ref,
+            title: '[' + record.type + '] ' + summary,
+            filePath,
+            ...(ws.length > 0 ? { workspaceId: ws } : {}),
+        });
     }
     return views.length > 0 ? views : undefined;
 }

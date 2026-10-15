@@ -14,7 +14,7 @@
  * 层级：设置页全局闸 ⊃ 会话闸（图形外）⊃ 域范围（图形内）。
  */
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { ActionButton, Segmented } from '../ui/controls.js';
+import { Segmented } from '../ui/controls.js';
 import type { RpcFn } from '../rpc.js';
 import type { WingOverviewResponse } from '../../../src/contract.js';
 import { ensureThemeStyle } from '../theme.js';
@@ -96,19 +96,6 @@ export function WingWheel(props: {
   ensureThemeStyle();
   const isOff = props.mode === 'off';
   const [overview, setOverview] = useState<WingOverviewResponse | null>(null);
-  const [backfillBusy, setBackfillBusy] = useState(false);
-  // 关键词回填：忙碌态 + 完成后的结果行（本区串按文件惯例硬编码中文，同 wing 回填）。
-  const [kwBusy, setKwBusy] = useState(false);
-  const [kwSummary, setKwSummary] = useState<string | null>(null);
-  const [localError, setLocalError] = useState<string | null>(null);
-  // 回填后的轮询计时器（卸载时统一清除）
-  const timersRef = useRef<number[]>([]);
-  useEffect(
-    () => () => {
-      for (const t of timersRef.current) window.clearTimeout(t);
-    },
-    [],
-  );
 
   // 角计数与词表随打开拉取一次
   useEffect(() => {
@@ -131,83 +118,8 @@ export function WingWheel(props: {
     return overview.corners.find((c) => c.id === id)?.count ?? 0;
   };
 
-  /** 一键回填：对存量未打标记忆批量补打 wing 标签。 */
-  const backfill = () => {
-    if (backfillBusy || !overview || overview.unlabeled === 0) return;
-    setBackfillBusy(true);
-    setLocalError(null);
-    let polls = 0;
-    const finish = () => setBackfillBusy(false);
-    const tick = () => {
-      polls++;
-      props
-        .rpc('dsh-memory/wing-overview', {})
-        .then((r) => {
-          const v = r && r.ok ? r.value : null;
-          if (v) setOverview(v);
-          if ((v && v.unlabeled === 0) || polls >= 20) finish();
-          else {
-            const t = window.setTimeout(tick, 3000);
-            timersRef.current.push(t);
-          }
-        })
-        .catch(() => finish());
-    };
-    props
-      .rpc('dsh-memory/wing-backfill', {})
-      .then((r) => {
-        if (!r || !r.ok) {
-          setLocalError(r && r.error ? '回填失败：' + r.error.message : '回填失败');
-          finish();
-          return;
-        }
-        timersRef.current.push(window.setTimeout(tick, 3000));
-      })
-      .catch((e: unknown) => {
-        setLocalError('回填失败：' + String((e && (e as Error).message) || e));
-        finish();
-      });
-  };
-
-  /**
-   * 关键词蒸馏回填：对缺 `dsh_keywords` 的存量记忆批量补关键词，喂 FTS 关键词轴。
-   * 进口同一端点带单飞守卫：运行中重复调只读状态不重启，首次 running=false 即停——不会误触发二次扫描。
-   */
-  const keywordBackfill = () => {
-    if (kwBusy) return;
-    setKwBusy(true);
-    setKwSummary(null);
-    setLocalError(null);
-    let polls = 0;
-    const finish = () => setKwBusy(false);
-    const showResult = (v: { updated?: number; failed?: number }) => {
-      const fail = v.failed ?? 0;
-      setKwSummary(`关键词回填完成：成功 ${v.updated ?? 0} 条${fail > 0 ? `，失败 ${fail} 条` : ''}`);
-    };
-    const failMsg = (m: string) => { setLocalError(m); finish(); };
-    const tick = () => {
-      polls++;
-      props
-        .rpc('dsh-memory/keyword-backfill', {})
-        .then((r: { ok?: boolean; value?: { enabled?: boolean; running?: boolean; updated?: number; failed?: number }; error?: { message?: string } }) => {
-          const v = r && r.ok ? r.value : null;
-          if (!v) { failMsg('关键词回填失败'); return; }
-          if (!v.enabled) { failMsg('关键词回填未开启：请先在设置里打开 keyword.enabled'); return; }
-          if (!v.running) { showResult(v); finish(); return; }
-          if (polls >= 20) { showResult(v); finish(); return; }
-          timersRef.current.push(window.setTimeout(tick, 3000));
-        })
-        .catch(() => failMsg('关键词回填失败'));
-    };
-    props
-      .rpc('dsh-memory/keyword-backfill', {})
-      .then((r: { ok?: boolean; value?: { enabled?: boolean; running?: boolean }; error?: { message?: string } }) => {
-        if (!r || !r.ok) { failMsg(r && r.error ? '关键词回填失败：' + r.error.message : '关键词回填失败'); return; }
-        if (!r.value || !r.value.enabled) { failMsg('关键词回填未开启：请先在设置里打开 keyword.enabled'); return; }
-        timersRef.current.push(window.setTimeout(tick, 3000));
-      })
-      .catch((e: unknown) => failMsg('关键词回填失败：' + String((e && (e as Error).message) || e)));
-  };
+  // 三个存量维护动作（wing 回填 / 关键词回填 / 重蒸馏整形）及其轮询 handler 已迁至概览页 BackfillSection；
+  // 本浮层只保留 `overview`（wing-overview）供转盘角计数与边界“另有 N 条未打标”展示。
 
   // ── 离散换挡：档位永远是整数角；中心(智能)同样是可停档位，沿辐条径向滑入 ──
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -580,51 +492,11 @@ export function WingWheel(props: {
         </Row>
       ) : null}
 
-      {/* 未打标回填 */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 8,
-          marginTop: 10,
-        }}
-      >
-        <span style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)' }}>
-          {overview ? `未打标 ${overview.unlabeled} 条` : '未打标计数加载中'}
-        </span>
-        <ActionButton
-          label={backfillBusy ? '回填中…' : '回填'}
-          title="对存量未打标记忆批量补打 wing 标签"
-          disabled={!overview || overview.unlabeled === 0 || backfillBusy}
-          onClick={() => backfill()}
-        />
-      </div>
-
-      {/* 关键词回填（keyword 检索轴产出方）*/}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 8,
-          marginTop: 10,
-        }}
-      >
-        <span style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)' }}>
-          {kwSummary || '为存量记忆补检索关键词'}
-        </span>
-        <ActionButton
-          label={kwBusy ? '回填中…' : '关键词回填'}
-          title="对缺 dsh_keywords 的存量记忆批量补关键词，喂 FTS 关键词检索轴（需先开 keyword.enabled）"
-          disabled={kwBusy}
-          onClick={() => keywordBackfill()}
-        />
-      </div>
-
-      {props.error || localError ? (
+      {/* 存量维护三项（wing 回填 / 关键词回填 / 重蒸馏整形）已迁至概览页 BackfillSection：
+          它们是运维批处理，与「重建记忆」「反刍整理」同类，堆在输入区浮层会把弹窗撑太高。 */}
+      {props.error ? (
         <div style={{ fontSize: 11, color: 'var(--dsh-mem-danger)', marginTop: 8 }}>
-          {props.error || localError}
+          {props.error}
         </div>
       ) : null}
 

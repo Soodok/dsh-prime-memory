@@ -106,6 +106,14 @@ export declare function recordDigest(r: Pick<MemoryRecord, 'content'>): string;
  */
 export declare function fileStemFor(r: Pick<MemoryRecord, 'id' | 'name' | 'content'>): string;
 /**
+ * 一条记录的投射相对路径 `<dir>/<stem>.memory.md`（分隔符恒 `/`）。
+ *
+ * 单一事实源：`renderRecord` 写盘、`dsh-memory/records-meta` 端点、槽位投影的
+ * `refViews.filePath` 都走这里。各自抄一份清洗规则必然漂移——漂移之后「投影给的地址」
+ * 和「磁盘上的真文件」对不上，而这三处本来就是给人核对同一个事实用的。
+ */
+export declare function relPathFor(r: Pick<MemoryRecord, 'id' | 'name' | 'content' | 'type'>): string;
+/**
  * 渲染一条记录。
  *
  * @param r - L1 记录（含已退场的——退场也要有投影，否则人在文件树里看不到它）。

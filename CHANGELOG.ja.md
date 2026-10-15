@@ -9,6 +9,24 @@
 
 本ファイルは **0.12.0** リリースノートと現在の**未リリース**変更の日本語版です。全履歴は [CHANGELOG.md](./CHANGELOG.md)（中文）を参照してください。
 
+## [0.26.0] — 2026-10-14
+
+### 追加
+
+- **`dsh-memory/records-meta` 端点**：`record_id` の一括照会（≤50）で単条記憶の全量メタデータ＋本文（name/type/priority/content/maturity/createdAt/updatedAt/scene/scope/workspaceId/keywords/usageScenario/filePath/retired）を `stores.l1.getByIds` で SQLite から直接返す。記憶ビューアはこれで **`.memory.md` を読まなくてよい**——以前の fileViewer 方式（`<id>.memory` を偽装）は宿主 EditorHost に物理パスとして解決され必ず ENOENT。契約は `contract.ts`、端点数 62→63（`tests/contract-keys.test.ts` が固定）。
+- **表示タイトルを本文から推測しない**：`memoryRecall` と槽位 `refViews` の title は `name`（名称蒸留の短題）を優先し、無い時だけ本文先頭行へ回退。`firstLine()` は markdown 対応になり、H1（`# xxx`）は文書タイトルとして保持、H2+（`## 結論/事実`）は分節マーカーとしてスキップ——以前は明らかに本文の `## 結論/事実` が記憶「名称」として表示されていた。
+- **投射パスの単一事実源 `relPathFor()`**：`renderRecord`（ディスク書込）、`records-meta` の `filePath`、槽位 `refViews.filePath` の三箇所が同一アルゴリズムに集約。以前は投射側が独自のサニタイズ正規表現を写しており、同一記憶から二つの異なるファイル名が生じ得た——投射が示すアドレスとディスク上の実ファイルが一致せず、まさにこの三箇所が照合すべき事実そのもの。`refViews` は `filePath`/`workspaceId` も透出し、消費側は `<workspaceId>/.agents/memory/<filePath>`（workspace 範囲）または投射ルート（global）で絶対パスを組む。
+- **検索パネルの本文を markdown 化**（client）：RecordsTab の展開本文は新し `client/src/ui/MarkdownBody.tsx`（見出し階層 / 太字 / インラインコード / リスト、外部依存ゼロ）を経由し、`## 結論/事実` は裸のテキスト行ではなくなる。
+
+- **既存記憶の再蒸留整形（`redistill`）**：独立バッチスキャン `src/redistill-backfill.ts`（wing/keyword 回填を镜像：単飛/後台/有界/失敗時原記録不変）が、**アクティブかつ骨格不全**の L1 本文を G2 類型別の「前因後果」分節形式に再編し、同時に `metadata.dsh_keywords` / `metadata.dsh_usage_scenario` を産出。新端点 `dsh-memory/redistill-backfill`（`{started,running,enabled,updated,skipped,failed}` を即返）、パネル（WingWheel）に「再蒸留整形」ボタン。設定 `redistill.enabled` はデフォルト**关**——关時は整形せず content/FTS/投射が逐字不変（ゼロドリフト）。
+  - **品質ゲート**：整形後 `scoreSkeleton` の命中数が**厳密に優れる**時だけ書き戻し、整形バージョン `dsh_reshape_ver` を刻印（次回以降は対象外）；未達なら原文を残し**刻印せず**、次回も再試行可能——「見かけ上フォーマット付き」のために偽ラベルを貼ったり捏造したりは一切しない。
+  - **アクティブのみ**：退場/取代会済みは対象外。
+- **本文変更の永続書込経路**：整形の書込は `L1Store.appendNew` を経由し、JSONL 事実源追記 + 埋め込み再計算 + `l1_fts` 再インデックス + `.memory.md` 投射上書き（エクスポータは库から再レンダし差分があれば上書き）を一度に完了。入口は `vectorsReady()` を要求——埋め込み未就绪時はラン全体をスキップし、ベクトルの静默消失を防ぐ。
+
+### 修正
+
+- **`client-session-recalled-bundle` 回帰ガード**：0.25.0 で「本会話召回」の pill レンダリングを dsh-brief-sidebar へ移管した後、このテストは依然 pill に召回文字列があると主張していた（リリース時の更新漏れ）。現在は prime-memory pill が召回を**重複レンダリングしない**ことを主張し、投影接線の主張は保持。
+
 ## [0.25.0] — 2026-10-14
 
 ### 追加

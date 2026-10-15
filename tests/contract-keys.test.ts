@@ -53,6 +53,13 @@ const MEMORY_LIVE_SETTINGS_KEYS = [
   'embedRemoteModel',
   'embedRemoteDimensions',
   'memoryMutate',
+  // 0.26.0:存量回填/进阶功能启用开关（进概览开关组，与部署 cfg.<x>.enabled 取或）
+  'keywordEnabled',
+  'redistillEnabled',
+  'mdSyncEnabled',
+  'memportEnabled',
+  // 0.26.0:回填并行度运行时覆盖（概览页滑块；0 = 跟随部署 cfg.backfill.concurrency）
+  'backfillConcurrency',
 ] as const;
 
 /** 端点全集(40 个;含 records-delete / 图谱两端点 / receipts / §C 冲突队列读写+丢弃留痕三端点 / ruminate 三端点 / 退场与快照五端点)。 */
@@ -68,10 +75,12 @@ const ENDPOINTS = [
   'dsh-memory/room-admin',
   'dsh-memory/wing-backfill',
   'dsh-memory/keyword-backfill',
+  'dsh-memory/redistill-backfill',
   'dsh-memory/session-stats',
   'dsh-memory/settings-get',
   'dsh-memory/settings-set',
   'dsh-memory/list-records',
+  'dsh-memory/records-meta',
   'dsh-memory/records-delete',
   'dsh-memory/receipts',
   'dsh-memory/conflicts',
@@ -159,10 +168,10 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 61 contracted endpoints, records-delete and graph included', () => {
-    // 61 = 60 + `keyword-backfill`（关键词蒸馏回填，喂 l1_fts 关键词轴的产出方）。
-    expect(ENDPOINTS.length).toBe(61);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(61);
+  it('exposes exactly the 63 contracted endpoints, records-delete and graph included', () => {
+    // 63 = 62 + `records-meta`（按 ID 批量查元数据，供 memory 查看器消费）。
+    expect(ENDPOINTS.length).toBe(63);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(63);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {
@@ -198,8 +207,8 @@ describe('endpoint surface', () => {
 });
 
 describe('memory live settings key registry', () => {
-  it('registers 19 keys incl. the v0.9.0 reverse-engineered ones', () => {
-    expect(MEMORY_LIVE_SETTINGS_KEYS.length).toBe(19);
+  it('registers 24 keys incl. the v0.9.0 reverse-engineered ones', () => {
+    expect(MEMORY_LIVE_SETTINGS_KEYS.length).toBe(24);
     for (const k of ['embedRemoteBaseURL', 'embedRemoteApiKey', 'embedRemoteModel', 'embedRemoteDimensions', 'memoryMutate']) {
       expect(MEMORY_LIVE_SETTINGS_KEYS).toContain(k);
     }
@@ -243,6 +252,13 @@ describe('memory live settings key registry', () => {
       'journey',
     ]);
     expect((defaults.tokenCost as Record<string, unknown>).retentionDays).toBe(365);
+    // 回填护栏：形状是“按单元、串行、不合并”（用户定）——一个请求只装一条、默认串行；
+    // callTimeoutMs 是“一次调用（含回退链）”的预算，不能沿用蒸馏的 120s（真机在 202s 掐死降级路由）。
+    const bf = defaults.backfill as Record<string, unknown>;
+    expect(bf.maxRecords).toBe(300);
+    expect(bf.timeBudgetMs).toBe(1_800_000);
+    expect(bf.concurrency).toBe(1);
+    expect(bf.callTimeoutMs).toBe(240_000);
     expect(defaults.tools).toBe(true);
     expect(defaults.benchControl).toBe(false);
     // §C 矛盾冻结:新功能默认关(冻结消耗人的注意力,不可默认全开)

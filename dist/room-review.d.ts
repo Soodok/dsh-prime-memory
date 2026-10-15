@@ -83,19 +83,20 @@ export declare function parseRoomCandidateItems(parsed: ReadonlyArray<{
     room: string;
     count: number;
 }>): RoomCandidate[];
-/** 候选标注系统 prompt:喂现有 Room 词表(带计数),优先挂靠、少量新建兜底。 */
+/** 候选标注系统 prompt:喂现有 Room 词表(带计数),优先挂靠、少量新建兜底(逐条)。 */
 export declare function roomCandidateSystemPrompt(roomCatalog: ReadonlyArray<{
     room: string;
     count: number;
 }>): string;
-/** 候选标注器:一批孤儿记录 → 候选 Room(优先现有词表;失败返回空,调用方零改动)。 */
-export declare function roomCandidateChunk(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, chunk: MemoryRecord[], roomCatalog: ReadonlyArray<{
+/**
+ * 候选标注器:一条孤儿记录 → 候选 Room(优先现有词表;失败返回 null,调用方零改动)。
+ *
+ * **一个请求只装一条**(旧名 `roomCandidateChunk`,多条一次,已废)。
+ */
+export declare function roomCandidateOne(ctx: Context, cfg: MemoryConfig, logger: MemoryLogger, rec: MemoryRecord, roomCatalog: ReadonlyArray<{
     room: string;
     count: number;
-}>): Promise<Array<{
-    id: string;
-    rooms: string[];
-}>>;
+}>): Promise<string[] | null>;
 export interface OrphanAnnotateIO {
     l1: RoomReviewStore;
     logger: MemoryLogger;
@@ -113,16 +114,14 @@ export interface OrphanAnnotateIO {
  * 写前重读合并(与 relabel 同纪律);失败单条跳过、原记录零改动。
  */
 export interface OrphanAnnotateOverrides {
-    /** 测试注入口:替换 LLM 候选标注器(默认走真实 callLLM 路径);第二参为合并词表。 */
-    chunkAnnotator?: (chunk: MemoryRecord[], catalog: ReadonlyArray<{
+    /** 测试注入口:替换 LLM 候选标注器(默认走真实 callLLM 路径);第二参为合并词表。
+     *  **逐条**形状:返回该条的候选 slug(空数组 = 无法判断),失败返回 null。 */
+    annotator?: (rec: MemoryRecord, catalog: ReadonlyArray<{
         room: string;
         count: number;
         label?: string;
         description?: string;
-    }>) => Promise<Array<{
-        id: string;
-        rooms: string[];
-    }>>;
+    }>) => Promise<string[] | null>;
 }
 export declare function annotateOrphanCandidates(ctx: Context, cfg: MemoryConfig, io: OrphanAnnotateIO, limit?: number, overrides?: OrphanAnnotateOverrides): Promise<{
     selected: number;

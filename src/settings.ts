@@ -126,8 +126,14 @@ const ALWAYS_ON: MemoryLiveSettings = {
   memoryMutate: false,
   conflictFreeze: false,
   skillsEnabled: false,
+  keywordEnabled: false,
+  redistillEnabled: false,
+  mdSyncEnabled: false,
+  memportEnabled: false,
   // md 投射护栏运行时覆盖:0 = 跟随部署 cfg.memExport.maxRecords（面板上可改）
   mdExportMaxRecords: 0,
+  // 回填并行度运行时覆盖:0 = 跟随部署 cfg.backfill.concurrency（概览页滑块可改）
+  backfillConcurrency: 0,
   toolRoom: true,
   toolGraph: true,
   toolRuminate: true,
@@ -384,8 +390,15 @@ function resolveSettings(value: unknown): MemoryLiveSettings {
     conflictFreeze: v.conflictFreeze === true,
     // 轨2 技能结晶:严格 === true(默认关,新功能默认关)
     skillsEnabled: v.skillsEnabled === true,
+    // 存量回填/进阶功能启用开关:严格 === true(默认关)
+    keywordEnabled: v.keywordEnabled === true,
+    redistillEnabled: v.redistillEnabled === true,
+    mdSyncEnabled: v.mdSyncEnabled === true,
+    memportEnabled: v.memportEnabled === true,
     // md 投射护栏钳 0~10000（与 live schema 同上限）；0 = 跟随部署默认
     mdExportMaxRecords: Math.min(10_000, Math.max(0, num(v.mdExportMaxRecords))),
+    // 回填并行度钳 0~8（与 live schema 同上限）；0 = 跟随部署 cfg.backfill.concurrency
+    backfillConcurrency: Math.min(8, Math.max(0, Math.floor(num(v.backfillConcurrency)))),
     // 工具分组封印:严格 !== false(缺省/异常值 = 未封印,工具照常注册)
     toolRoom: v.toolRoom !== false,
     toolGraph: v.toolGraph !== false,

@@ -62,8 +62,8 @@ describe('relabelPass 机械校验(零 LLM 部分)', () => {
     const stats = await relabelPass(
       { ctx, cfg, backend: new InProcMemoryBackend(l1), logger: noopLogger },
       {
-        wingLabeler: async (chunk) => chunk.filter((r) => r.id === 'r3').map((r) => ({ record: r, wing: 'creative' })),
-        tagger: async (chunk) => chunk.map((r) => ({ record: r, tags: ['Riley-College', 'x_9', 'ok-tag'] })),
+        wingLabeler: async (rec) => (rec.id === 'r3' ? 'creative' : null),
+        tagger: async () => ['Riley-College', 'x_9', 'ok-tag'],
       },
     );
     expect(stats.checked).toBe(3);
@@ -88,7 +88,7 @@ describe('relabelPass 机械校验(零 LLM 部分)', () => {
     let llmCalled = false;
     const stats = await relabelPass(
       { ctx, cfg: { hall: { enabled: [] } } as unknown as MemoryConfig, backend: new InProcMemoryBackend(l1), logger: noopLogger },
-      { wingLabeler: async () => { llmCalled = true; return []; }, tagger: async () => [] },
+      { wingLabeler: async () => { llmCalled = true; return null; }, tagger: async () => null },
     );
     expect(llmCalled).toBe(false);
     expect(stats.wingLabeled).toBe(0);
@@ -101,7 +101,7 @@ describe('relabelPass 机械校验(零 LLM 部分)', () => {
     let llmCalled = false;
     const stats = await relabelPass(
       { ctx, cfg, backend: new InProcMemoryBackend(l1), logger: noopLogger },
-      { wingLabeler: async () => { llmCalled = true; return []; }, tagger: async () => [] },
+      { wingLabeler: async () => { llmCalled = true; return null; }, tagger: async () => null },
     );
     expect(stats.checked).toBe(0);
     expect(llmCalled).toBe(false);
@@ -116,7 +116,7 @@ describe('relabelPass 机械校验(零 LLM 部分)', () => {
     const seen: Array<{ label?: string; done: number; total: number }> = [];
     await relabelPass(
       { ctx, cfg, backend: new InProcMemoryBackend(l1), logger: noopLogger },
-      { wingLabeler: async () => [], tagger: async () => [] },
+      { wingLabeler: async () => null, tagger: async () => null },
       { progress: (_text, done, total, label) => seen.push({ label, done, total }) },
     );
     // 机械巡检是第一个上报的段,且必须带 label(面板靠它区分机械段与 LLM 段)

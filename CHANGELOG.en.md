@@ -7,6 +7,23 @@
 
 This file covers the **0.12.0** release notes and the current **unreleased** changes in English. For the full history, see [CHANGELOG.md](./CHANGELOG.md) (Chinese).
 
+## [0.26.0] — 2026-10-14
+
+### Added
+
+- **Existing-memory re-distillation reshaping (`redistill`)**: new independent batch scan `src/redistill-backfill.ts` (mirrors wing/keyword backfill: single-flight / background / bounded / failures leave records untouched) rewrites the body of **active, skeleton-incomplete** L1 records into the G2 per-type "cause→effect" sectioned form, and produces `metadata.dsh_keywords` / `metadata.dsh_usage_scenario` in the same pass. New endpoint `dsh-memory/redistill-backfill` (returns `{started,running,enabled,updated,skipped,failed}` immediately); a "Re-distill & Reshape" button in the WingWheel panel. Config `redistill.enabled` defaults **off** — off means no reshaping and content/FTS/projection byte-for-byte unchanged (zero drift).
+  - **Quality gate**: writes back only when the reshaped body's `scoreSkeleton` hit count is **strictly better**, and stamps the reshape version `dsh_reshape_ver` (excluded from later runs); otherwise it keeps the original **unstamped** so it stays eligible for a retry — never fakes a label or fabricates content just to "look structured".
+  - **Active only**: retired/superseded records are not touched.
+- **Durable write-back for content edits**: reshaping writes via `L1Store.appendNew`, which in one shot appends to the JSONL fact source, recomputes the embedding, re-indexes `l1_fts`, and overwrites the `.memory.md` projection (the exporter re-renders from the DB and overwrites on any difference). Entry requires `vectorsReady()` — the whole run is skipped when embeddings aren't ready, to avoid silently dropping a record's vector.
+- **`dsh-memory/records-meta` endpoint**: batch lookup (≤50) by `record_id` returning full metadata *and* body (name/type/priority/content/maturity/createdAt/updatedAt/scene/scope/workspaceId/keywords/usageScenario/filePath/retired) straight from SQLite via `stores.l1.getByIds`. The memory viewer therefore **no longer reads `.memory.md` files** — the earlier fileViewer approach (a fake `<id>.memory` path) was resolved by the host's EditorHost as a physical file and always hit ENOENT. Contract lives in `contract.ts`; endpoint count 62→63 (`tests/contract-keys.test.ts` pins it).
+- **Display titles stop guessing from the body**: `memoryRecall` and slot `refViews` prefer the record's `name` (the short title the name-distillation produces) and only fall back to the first body line. `firstLine()` is now markdown-aware: H1 (`# xxx`) is a document title and is kept, H2+ (`## Findings`) is a section marker and is skipped — previously `## Findings` was rendered as the memory's "name" although it is plainly body text.
+- **Single source of truth for projection paths, `relPathFor()`**: `renderRecord` (disk write), `records-meta`'s `filePath` and slot `refViews.filePath` now share one algorithm. The projection had copied its own sanitizing regex, so a single record could yield two different file names — the address the projection reports would not match the file on disk, which is exactly what those three consumers exist to cross-check. `refViews` also carry `filePath`/`workspaceId` so callers can build `<workspaceId>/.agents/memory/<filePath>` (workspace scope) or resolve against the projection root (global).
+- **Markdown-rendered bodies in the records panel** (client): expanded record bodies go through the new `client/src/ui/MarkdownBody.tsx` (heading levels / bold / inline code / lists, zero external deps), so `## Findings` is no longer a bare line of text.
+
+### Fixed
+
+- **`client-session-recalled-bundle` regression guard**: after 0.25.0 handed the pill's "this-session recalled" rendering to dsh-brief-sidebar, this test still asserted the pill contained the recalled strings (missed in that release). Now asserts the prime-memory pill does **not** re-render recalled, keeping the projection-wiring assertions.
+
 ## [0.25.0] — 2026-10-14
 
 ### Added

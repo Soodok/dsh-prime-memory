@@ -92,9 +92,10 @@ export declare const stateSchema: SchemaLike<RecallProjectionState>;
 /** view 校验（出网前调用；未知键容忍，同 slots 投影的语义边界）。 */
 export declare const viewSchema: SchemaLike<RecallView>;
 /** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。
- *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。 */
+ *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。
+ *  `name` 是名称蒸馏产出的短标题，优先作为展示标题。 */
 export interface RecallL1Face {
-    getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo'>>;
+    getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo' | 'name'>>;
 }
 /** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
 export interface RecallFeedbackFace {

@@ -358,6 +358,7 @@ describe('refs / refViews 解析(v0.20.2)', () => {
         id,
         content: '回复永远是中文,技术名词保留英文。' + (id.includes('long') ? '很长的正文'.repeat(30) : ''),
         type: 'work_fact',
+        ...(id === 'mem_named9' ? { name: '语言红线', workspaceId: 'e:/proj/x' } : {}),
       })),
   };
 
@@ -372,7 +373,21 @@ describe('refs / refViews 解析(v0.20.2)', () => {
     const view = def.wire.view(def.init());
     const slot = view.slots[0]!;
     expect(slot.refs).toEqual(['mem_abc123', 'notes/a.md', 'https://x.y']);
-    expect(slot.refViews).toEqual([{ ref: 'mem_abc123', title: '[work_fact] 回复永远是中文,技术名词保留英文。' }]);
+    expect(slot.refViews).toEqual([{ ref: 'mem_abc123', title: '[work_fact] 回复永远是中文,技术名词保留英文。', filePath: 'work_fact/回复永远是中文-技术名词保留英文.memory.md' }]);
+  });
+
+  it('有 name 时标题走 name，并透出 filePath/workspaceId（与投射写盘同一算法）', async () => {
+    const { def, store } = await captured(L1);
+    await store.upsert({ title: '命名引用', refs: ['mem_named9'] });
+    const slot = def.wire.view(def.init()).slots[0]!;
+    expect(slot.refViews).toEqual([
+      {
+        ref: 'mem_named9',
+        title: '[work_fact] 语言红线',
+        filePath: 'work_fact/语言红线.memory.md',
+        workspaceId: 'e:/proj/x',
+      },
+    ]);
   });
 
   it('超长 content 截断;缺失记录不产生条目;无 record_id 时 refViews 缺席', async () => {

@@ -134,12 +134,31 @@ export interface MemoryConfig {
     /** active 技能闲置多少天后自动归档（0 = 不做闲置归档）。 */
     idleArchiveDays: number;
   };
-  /** wing 存量回填护栏（默认 300 条/120s；想一次多跑点可调大，代价是后台占用更久）。 */
+  /**
+   * 存量回填护栏（wing / keyword / redistill 共用，默认 300 条 / 30min 总预算 / 串行 / 单条请求 240s）。
+   *
+   * 形状约定（用户定）：**按单元、串行、不合并**——一个请求只装一条记忆，跑完一条再发下一条。
+   * 实测单条 35B 只要 ~2.6s，而 20 条合并成一批要 200s+ 且一次空输出/截断就带走整批，
+   * 所以“批量”在这里不省时间只堆风险。`concurrency` 默认 1；拖高概览页滑块可临时多路在飞。
+   *
+   * 三个旋钮分工（别混淆）：
+   * - `maxRecords` = **一轮最多处理多少条**（防一次点击拖过久；真实队列没跑完的计入 deferred，
+   *   再点一次继续）。注意它**不是**请求批大小：逐条形状下每个请求只装 1 条。
+   * - `timeBudgetMs` = **本轮总墙钟预算**（防跑飞）。与 maxRecords 谁先到谁生效：
+   *   默认 300 条 × ~2.6s ≈ 13min < 30min，正常由 maxRecords 先结算。
+   * - `callTimeoutMs` = **一次 `callLLM`（含整条回退链）**的超时。不能沿用 `llm.timeoutMs`（120s）：
+   *   它是**整次调用**的预算而非每条路由各享一份——真机踩到主路由（9B）空输出吃 95s，
+   *   降到 35B 后只剩余量在线上被掐死（看似“35B 也跑不完”）。默认 240s 按「路由数 × 单路由耗时」留余量。
+   */
   backfill: {
     /** 单次回填处理条数上限。 */
     maxRecords: number;
-    /** 单次回填墙钟预算(ms)，超时剩留待再次触发。 */
+    /** 单次回填总墙钟预算(ms)，超时剩留待再次触发。 */
     timeBudgetMs: number;
+    /** LLM 批调用的并行度(1 = 串行)。 */
+    concurrency: number;
+    /** 一次 LLM 调用（含整条回退链）的超时(ms)，比对话蒸馏的 llm.timeoutMs 宽；按路由数留余量。 */
+    callTimeoutMs: number;
   };
   /**
    * 内容路由（workspace 归属）：按「这条记忆**谈到**哪个项目」给记录补 `workspace_id`。
@@ -214,6 +233,20 @@ export interface MemoryConfig {
    * 否则关键词轴对存量记录不生效。
    */
   keyword: {
+    enabled: boolean;
+  };
+  /**
+   * 存量记忆重蒸馏整形（redistill）：**独立回填批扫**，把活跃且 `scoreSkeleton` 判「骨架不齐备」
+   * 的 L1 正文按 G2 分类型骨架重排，并顺带产 `dsh_keywords` / `dsh_usage_scenario`。由
+   * `dsh-memory/redistill-backfill` 端点触发，镜像 keyword/wing 回填（单飞/后台/有界）。
+   *
+   * **默认关**：关时不整形、content/FTS/投射逐字不变（零漂移）。护栏复用 `backfill`。
+   * 与 keyword 回填的关键差异：本项**改 content**，写回走 `L1Store.appendNew`（追加 JSONL 事实源
+   * + 重嵌 + FTS + 投射点火），且入口要求 `vectorsReady()`（embed 未就绪时改正文会静默丢向量）。
+   * 只有整形后骨架分严格更优才写回，并盖整形版本戳（`dsh_reshape_ver`）；未过闸的留原文**不打标记**，
+   * 下轮仍可再试——即只有「成功替换的」不再进入。
+   */
+  redistill: {
     enabled: boolean;
   };
   /**
@@ -461,6 +494,22 @@ export function liveSettingsSchema(): VolatileRef<MemoryLiveSettings> {
     conflictFreeze: Schema.boolean().default(false),
     // 轨2 技能结晶总开关(看板可拨):默认 false。开=注册 memory_skill_* 工具 + 注入 active 技能 + skills-* 端点可用。
     skillsEnabled: Schema.boolean().default(false),
+    // 存量回填/进阶功能的启用开关（概览「存量回填与整形」区可拨）：默认 false，
+    // 与部署 cfg.<x>.enabled 取或（经 effectiveCfg）——部署可强制开，live 只能追加开。
+    // 存在的理由：这些面都有对应按钮/端点，若开关只住 YAML，用户点了只会报“未开启”却没处翻。
+    keywordEnabled: Schema.boolean().default(false),
+    redistillEnabled: Schema.boolean().default(false),
+    mdSyncEnabled: Schema.boolean().default(false),
+    memportEnabled: Schema.boolean().default(false),
+    /**
+     * 存量回填（keyword / redistill）LLM 批调用的**运行时并行度**覆盖：
+     * `0` = 跟随部署 `cfg.backfill.concurrency`；1–8 = 直接覆盖。
+     *
+     * 为什么要是 live 而不是只住 YAML：真机出过“3 并发把每请求拖过超时线、13 批全 abort”，
+     * 排查时需要的恰好是“立刻降到 1 串行再看一遍”——为此改 YAML + 重启不现实。
+     * 概览页 0–8 滑块写的就是它（0 = 跟随部署，默认部署值是 1 串行）。
+     */
+    backfillConcurrency: Schema.number().min(0).max(8).default(0),
     // 工具分组封印(v0.21.0):false = 该组工具不注册,从模型工具列表消失。
     // 核心读(memory_search/read_scene/receipts/conversation_search)与槽位三件不受控。
     toolRoom: Schema.boolean().default(true),
@@ -557,10 +606,14 @@ export const memorySchema: ConfigSchema = Schema.object({
     excerptChars: Schema.number().min(0).max(4000).default(240),
     idleArchiveDays: Schema.number().min(0).max(3650).default(90),
   }),
-  // wing 回填护栏：默认与旧行为一致(300 条 / 120s)，需一次多跑点时调大。
+  // wing/keyword/redistill 回填护栏。maxRecords 是“一轮处理多少条”，timeBudgetMs 是“本轮不跑飞”，
+  // callTimeoutMs 是“单次请求（含回退链）不撞线”；逐条形状下每请求只装 1 条（不是 20 条一批）。
+  // maxRecords 不得低于真实队列量级：真机活跃集里待整形真目标 251 条，砍到 40 就等于“点一次只动 40”。
   backfill: Schema.object({
     maxRecords: Schema.number().min(1).max(10_000).default(300),
-    timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+    timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(1_800_000),
+    concurrency: Schema.number().min(1).max(8).default(1),
+    callTimeoutMs: Schema.number().min(1000).max(1_800_000).default(240_000),
   }),
   /**
    * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
@@ -621,6 +674,10 @@ export const memorySchema: ConfigSchema = Schema.object({
   }),
   // 关键词蒸馏回填：默认关（关时不回填、不产 dsh_keywords、FTS 逐字不变）；护栏复用 backfill。
   keyword: Schema.object({
+    enabled: Schema.boolean().default(false),
+  }),
+  // 存量记忆重蒸馏整形：默认关（关时不整形、content/FTS/投射逐字不变）；护栏复用 backfill。
+  redistill: Schema.object({
     enabled: Schema.boolean().default(false),
   }),
   // 类型叙述模板（G2）：默认**开**；开时抽取 prompt 追加分类型 content 骨架（关时仍逐字不变）。

@@ -80,6 +80,22 @@ export function liveSettingsSchema() {
         conflictFreeze: Schema.boolean().default(false),
         // 轨2 技能结晶总开关(看板可拨):默认 false。开=注册 memory_skill_* 工具 + 注入 active 技能 + skills-* 端点可用。
         skillsEnabled: Schema.boolean().default(false),
+        // 存量回填/进阶功能的启用开关（概览「存量回填与整形」区可拨）：默认 false，
+        // 与部署 cfg.<x>.enabled 取或（经 effectiveCfg）——部署可强制开，live 只能追加开。
+        // 存在的理由：这些面都有对应按钮/端点，若开关只住 YAML，用户点了只会报“未开启”却没处翻。
+        keywordEnabled: Schema.boolean().default(false),
+        redistillEnabled: Schema.boolean().default(false),
+        mdSyncEnabled: Schema.boolean().default(false),
+        memportEnabled: Schema.boolean().default(false),
+        /**
+         * 存量回填（keyword / redistill）LLM 批调用的**运行时并行度**覆盖：
+         * `0` = 跟随部署 `cfg.backfill.concurrency`；1–8 = 直接覆盖。
+         *
+         * 为什么要是 live 而不是只住 YAML：真机出过“3 并发把每请求拖过超时线、13 批全 abort”，
+         * 排查时需要的恰好是“立刻降到 1 串行再看一遍”——为此改 YAML + 重启不现实。
+         * 概览页 0–8 滑块写的就是它（0 = 跟随部署，默认部署值是 1 串行）。
+         */
+        backfillConcurrency: Schema.number().min(0).max(8).default(0),
         // 工具分组封印(v0.21.0):false = 该组工具不注册,从模型工具列表消失。
         // 核心读(memory_search/read_scene/receipts/conversation_search)与槽位三件不受控。
         toolRoom: Schema.boolean().default(true),
@@ -164,10 +180,14 @@ export const memorySchema = Schema.object({
         excerptChars: Schema.number().min(0).max(4000).default(240),
         idleArchiveDays: Schema.number().min(0).max(3650).default(90),
     }),
-    // wing 回填护栏：默认与旧行为一致(300 条 / 120s)，需一次多跑点时调大。
+    // wing/keyword/redistill 回填护栏。maxRecords 是“一轮处理多少条”，timeBudgetMs 是“本轮不跑飞”，
+    // callTimeoutMs 是“单次请求（含回退链）不撞线”；逐条形状下每请求只装 1 条（不是 20 条一批）。
+    // maxRecords 不得低于真实队列量级：真机活跃集里待整形真目标 251 条，砍到 40 就等于“点一次只动 40”。
     backfill: Schema.object({
         maxRecords: Schema.number().min(1).max(10_000).default(300),
-        timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
+        timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(1_800_000),
+        concurrency: Schema.number().min(1).max(8).default(1),
+        callTimeoutMs: Schema.number().min(1000).max(1_800_000).default(240_000),
     }),
     /**
      * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
@@ -228,6 +248,10 @@ export const memorySchema = Schema.object({
     }),
     // 关键词蒸馏回填：默认关（关时不回填、不产 dsh_keywords、FTS 逐字不变）；护栏复用 backfill。
     keyword: Schema.object({
+        enabled: Schema.boolean().default(false),
+    }),
+    // 存量记忆重蒸馏整形：默认关（关时不整形、content/FTS/投射逐字不变）；护栏复用 backfill。
+    redistill: Schema.object({
         enabled: Schema.boolean().default(false),
     }),
     // 类型叙述模板（G2）：默认**开**；开时抽取 prompt 追加分类型 content 骨架（关时仍逐字不变）。

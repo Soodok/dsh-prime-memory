@@ -94,7 +94,7 @@ export function parseRoomCandidateItems(
   return [...byId.entries()].map(([id, rooms]) => ({ id, rooms }));
 }
 
-/** 候选标注系统 prompt:喂现有 Room 词表(带计数),优先挂靠、少量新建兜底。 */
+/** 候选标注系统 prompt:喂现有 Room 词表(带计数),优先挂靠、少量新建兜底(逐条)。 */
 export function roomCandidateSystemPrompt(roomCatalog: ReadonlyArray<{ room: string; count: number }>): string {
   const catalog =
     roomCatalog.length > 0
@@ -104,47 +104,52 @@ export function roomCandidateSystemPrompt(roomCatalog: ReadonlyArray<{ room: str
           .join('\n')
       : '(暂无现有 Room)';
   return (
-    '你是记忆库的 Room 归类器。给你若干条记忆(带 id)与现有 Room 词表(带计数),' +
-    '为每条记忆选出它最可能归属的 1-3 个 Room slug。规则:\n' +
+    '你是记忆库的 Room 归类器。给你一条记忆与现有 Room 词表(带计数),' +
+    '为这条记忆选出它最可能归属的 1-3 个 Room slug。规则:\n' +
     '1. **优先从现有 Room 词表里选**(保持分类收敛,避免碎片化);\n' +
     '2. 词表确实没有合适主题时,才提议最多 2 个新 slug(小写字母/数字/连字符);\n' +
     '3. 完全无法判断时返回空数组(宁缺毋滥,不硬猜)。\n' +
     `现有 Room 词表:\n${catalog}\n\n` +
-    '输出 JSON 数组:[{"id":"<原id>","rooms":["slug1","slug2"]}]。只输出 JSON,不要多余文字。'
+    '输出 JSON 对象:{"rooms":["slug1","slug2"]}。只输出 JSON,不要多余文字。'
   );
 }
 
-/** 候选标注器:一批孤儿记录 → 候选 Room(优先现有词表;失败返回空,调用方零改动)。 */
-export async function roomCandidateChunk(
+/**
+ * 候选标注器:一条孤儿记录 → 候选 Room(优先现有词表;失败返回 null,调用方零改动)。
+ *
+ * **一个请求只装一条**(旧名 `roomCandidateChunk`,多条一次,已废)。
+ */
+export async function roomCandidateOne(
   ctx: Context,
   cfg: MemoryConfig,
   logger: MemoryLogger,
-  chunk: MemoryRecord[],
+  rec: MemoryRecord,
   roomCatalog: ReadonlyArray<{ room: string; count: number }>,
-): Promise<Array<{ id: string; rooms: string[] }>> {
-  const list = chunk.map((r, i) => `${i + 1}. id=${r.id}\n${r.content.slice(0, 300)}`).join('\n\n');
+): Promise<string[] | null> {
+  const user = `记忆:\n${rec.content.slice(0, 900)}`;
   try {
     const raw = await callLLM(ctx, cfg, {
       system: roomCandidateSystemPrompt(roomCatalog),
-      user: `记忆列表:\n${list}`,
-      maxTokens: 4096,
+      user,
+      maxTokens: 1024,
       layer: 'l1-extract',
       logger,
     });
-    const parsed = parseJsonLogged<Array<{ id?: unknown; rooms?: unknown }>>(raw, 'Room 候选标注', logger);
-    if (!Array.isArray(parsed)) return [];
-    const shape = parsed
-      .map((item) => ({
-        id: typeof item?.id === 'string' ? item.id : '',
-        rooms: Array.isArray(item?.rooms) ? (item.rooms as string[]) : [],
-      }))
-      .filter((x) => x.id !== '');
-    return parseRoomCandidateItems(shape, chunk.map((r) => r.id), roomCatalog);
+    const parsed = parseJsonLogged<Record<string, unknown> | Array<Record<string, unknown>>>(raw, 'Room 候选标注', logger);
+    // 通吃两种形状:模型偶尔回单元素数组(或带 id 的旧形状)。
+    const obj = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!obj || typeof obj !== 'object') return [];
+    const roomsRaw = Array.isArray((obj as { rooms?: unknown }).rooms)
+      ? ((obj as { rooms: unknown[] }).rooms as string[])
+      : [];
+    // 复用既有清洗(目录内优先排前、去重、截断 3):用单元素数组喂它(忽略模型回的自报 id)。
+    const cleaned = parseRoomCandidateItems([{ id: rec.id, rooms: roomsRaw }], [rec.id], roomCatalog);
+    return cleaned[0]?.rooms ?? [];
   } catch (err) {
     logger.warn(
-      `[memory] Room 候选标注块失败(跳过 ${chunk.length} 条,原记录未改): ${err instanceof Error ? err.message : String(err)}`,
+      `[memory] Room 候选标注单条失败(id=${rec.id},原记录未改): ${err instanceof Error ? err.message : String(err)}`,
     );
-    return [];
+    return null;
   }
 }
 
@@ -181,11 +186,12 @@ function selectPendingOrphans(
  * 写前重读合并(与 relabel 同纪律);失败单条跳过、原记录零改动。
  */
 export interface OrphanAnnotateOverrides {
-  /** 测试注入口:替换 LLM 候选标注器(默认走真实 callLLM 路径);第二参为合并词表。 */
-  chunkAnnotator?: (
-    chunk: MemoryRecord[],
+  /** 测试注入口:替换 LLM 候选标注器(默认走真实 callLLM 路径);第二参为合并词表。
+   *  **逐条**形状:返回该条的候选 slug(空数组 = 无法判断),失败返回 null。 */
+  annotator?: (
+    rec: MemoryRecord,
     catalog: ReadonlyArray<{ room: string; count: number; label?: string; description?: string }>,
-  ) => Promise<Array<{ id: string; rooms: string[] }>>;
+  ) => Promise<string[] | null>;
 }
 
 export async function annotateOrphanCandidates(
@@ -206,24 +212,27 @@ export async function annotateOrphanCandidates(
     ...regActive.map((e) => ({ room: e.slug, count: 0, label: e.label, description: e.description })),
     ...grown.filter((r) => !regSet.has(r.room)).map((r) => ({ room: r.room, count: r.count })),
   ].slice(0, 120);
-  const rows =
-    overrides.chunkAnnotator !== undefined
-      ? await overrides.chunkAnnotator(selected, merged)
-      : await roomCandidateChunk(ctx, cfg, io.logger, selected, merged);
+  const annotate =
+    overrides.annotator ??
+    ((rec: MemoryRecord) => roomCandidateOne(ctx, cfg, io.logger, rec, merged));
   let written = 0;
-  for (const { id, rooms: candidates } of rows) {
-    if (candidates.length === 0) continue;
-    const fresh = io.l1.getByIds([id])[0];
+  let candidates = 0;
+  // 逐条串行:取一条 → 产候选 → 当场写 pending。不攒批、不合并。
+  for (const rec of selected) {
+    const rooms = await annotate(rec, merged);
+    if (!rooms || rooms.length === 0) continue;
+    candidates++;
+    const fresh = io.l1.getByIds([rec.id])[0];
     if (!fresh) continue;
     const meta = { ...(fresh.metadata ?? {}) } as Record<string, unknown>;
-    meta[ROOM_CANDIDATES_KEY] = candidates;
+    meta[ROOM_CANDIDATES_KEY] = rooms;
     meta[ROOM_REVIEW_KEY] = 'pending';
-    if (io.l1.patchMetadata(id, meta)) written++;
+    if (io.l1.patchMetadata(rec.id, meta)) written++;
   }
   io.logger.info(
-    `[memory] 孤儿候选预标记:选中 ${selected.length},产候选 ${rows.length},写 pending ${written} 条(待 agent 复查)`,
+    `[memory] 孤儿候选预标记:选中 ${selected.length},产候选 ${candidates},写 pending ${written} 条(待 agent 复查)`,
   );
-  return { selected: selected.length, candidates: rows.length, written };
+  return { selected: selected.length, candidates, written };
 }
 
 /** 待复查队列:pending 且有候选的活跃孤儿,按更新时间升序(最旧的先复查)。 */

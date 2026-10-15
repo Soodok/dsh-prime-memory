@@ -32,8 +32,9 @@ import { WING_CATALOG, WING_FALLBACK } from './types.js';
 import { isRoomSlug } from './metadata-validators.js';
 import { InProcMemoryBackend } from './store/memory-backend.js';
 import { isWingCorner } from './store/session-modes.js';
-import { startWingBackfill } from './wing-backfill.js';
+import { startWingBackfill, wingBackfillState } from './wing-backfill.js';
 import { startKeywordBackfill, keywordBackfillState } from './keyword-backfill.js';
+import { startRedistillBackfill, redistillBackfillState } from './redistill-backfill.js';
 import { errDetail } from './util/filelog.js';
 import { snapshotTokenCost } from './token-cost.js';
 import { computeMaturity } from './util/maturity.js';
@@ -42,13 +43,31 @@ import { relinkWorkspaces } from './pipeline/workspace-relink.js';
 import { reconcileLedger } from './store/memory-md-export.js';
 import { mdRunStatus, runProjection } from './store/memory-md-run.js';
 import { disableProjectionFile } from './store/memory-md-disable.js';
-import { MEMORY_TYPE_DIRS, UNSORTED_DIR, resolveMemoriesRoot, targetFor } from './store/memory-md.js';
+import { MEMORY_TYPE_DIRS, UNSORTED_DIR, resolveMemoriesRoot, targetFor, relPathFor } from './store/memory-md.js';
 import { ensureTypeSkeleton } from './store/memory-md-skeleton.js';
 import { sweepOrphanFiles } from './store/memory-md-orphan.js';
 import { collectProjectionFiles } from './store/memory-md-archive.js';
 import { syncFromFiles } from './pipeline/md-sync.js';
 const require = createRequire(import.meta.url);
 export const PLUGIN_VERSION = require('../package.json').version;
+/**
+ * 批扫模块的内部状态 → 契约进度体（keyword 与 redistill 同形状，故共用一个映射）。
+ *
+ * 写成显式字段而不是 `as`：两边 state 类型各自演化时，这里漏一个字段就是编译错，
+ * 而强转会造出一个能编译、但面板上永远显示旧值的进度。
+ */
+function backfillProgress(s) {
+    return {
+        chunk: s.chunk,
+        candidates: s.candidates,
+        processed: s.processed,
+        scanning: s.scanning,
+        batchesDone: s.batchesDone,
+        batchTotal: s.batchTotal,
+        concurrency: s.concurrency,
+        deferred: s.deferred,
+    };
+}
 /**
  * 端点全集运行时清单(与 tests/contract-keys.test.ts 的 ENDPOINTS 及
  * contract.ts 类型映射表三方对齐,漂移由键集 diff 测试暴露)。
@@ -72,10 +91,12 @@ export const MEMORY_ENDPOINTS = [
     'dsh-memory/room-admin',
     'dsh-memory/wing-backfill',
     'dsh-memory/keyword-backfill',
+    'dsh-memory/redistill-backfill',
     'dsh-memory/session-stats',
     'dsh-memory/settings-get',
     'dsh-memory/settings-set',
     'dsh-memory/list-records',
+    'dsh-memory/records-meta',
     'dsh-memory/records-delete',
     'dsh-memory/receipts',
     'dsh-memory/conflicts',
@@ -633,10 +654,11 @@ export async function handleEndpoint(endpoint, payload, deps) {
         case 'dsh-memory/mem-sync': {
             // P2 反向同步：文件 → 库。与导出的**风险不对称**——导出只写文件，本项会写库，
             // 所以多两道门：要先开投射（没导出过 = 账本为空 = 判不出“谁变了”），要高权限。
-            const syn = cfg.mdSync;
+            const ec = effectiveCfg(cfg, live);
+            const syn = ec.mdSync;
             if (syn?.enabled !== true)
-                throw new Error('md 反向同步未开启（cfg.mdSync.enabled）');
-            if (cfg.memExport?.enabled !== true)
+                throw new Error('md 反向同步未开启（概览页开关，或 config mdSync.enabled）');
+            if (ec.memExport?.enabled !== true)
                 throw new Error('md 反向同步需先开启 md 投射（cfg.memExport.enabled）');
             if (!live?.get().memoryMutate)
                 throw new Error('记忆写删未开放：请在记忆库面板开启「高权限模式」后才能回灌文件侧修改。');
@@ -794,7 +816,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
         }
         // ── 轨3 外部记忆来源（Connect）：登记/列表/退役/只读扫描。整面默认关（cfg.memport.enabled）。
         case 'dsh-memory/memory-sources-list': {
-            const enabled = cfg.memport?.enabled === true;
+            const enabled = effectiveCfg(cfg, live).memport?.enabled === true;
             const v = {
                 sources: enabled && memorySources
                     ? memorySources.list().map((e) => ({
@@ -813,8 +835,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
             return v;
         }
         case 'dsh-memory/memory-sources-add': {
-            if (cfg.memport?.enabled !== true)
-                throw new Error('外部记忆来源未启用（config memport.enabled）。');
+            if (effectiveCfg(cfg, live).memport?.enabled !== true)
+                throw new Error('外部记忆来源未启用（概览页开关，或 config memport.enabled）。');
             if (!memorySources)
                 throw new Error('外部来源注册表未装配（需要插件重载以初始化）。');
             if (!live?.get().memoryMutate)
@@ -834,8 +856,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
             return v;
         }
         case 'dsh-memory/memory-sources-retire': {
-            if (cfg.memport?.enabled !== true)
-                throw new Error('外部记忆来源未启用（config memport.enabled）。');
+            if (effectiveCfg(cfg, live).memport?.enabled !== true)
+                throw new Error('外部记忆来源未启用（概览页开关，或 config memport.enabled）。');
             if (!memorySources)
                 throw new Error('外部来源注册表未装配（需要插件重载以初始化）。');
             if (!live?.get().memoryMutate)
@@ -853,8 +875,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
             return v;
         }
         case 'dsh-memory/memport-scan': {
-            if (cfg.memport?.enabled !== true) {
-                const v = { enabled: false, sources: [], notice: '外部记忆扫描未启用（config memport.enabled）。' };
+            if (effectiveCfg(cfg, live).memport?.enabled !== true) {
+                const v = { enabled: false, sources: [], notice: '外部记忆扫描未启用（概览页开关，或 config memport.enabled）。' };
                 return v;
             }
             if (!memorySources) {
@@ -864,7 +886,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
             const p = (payload ?? {});
             const all = memorySources.listEnabled();
             const targets = p.sourceId ? all.filter((e) => e.id === p.sourceId) : all;
-            const maxRecords = cfg.memport?.scanMaxRecords ?? 5000;
+            const maxRecords = effectiveCfg(cfg, live).memport?.scanMaxRecords ?? 5000;
             // 只读扫描：不写库（写走 memory_import）。逐个标扫描时间（失败不影响预览）。
             const sources = await scanSources({ sources: targets, l1: stores.l1, maxRecords });
             const nowIso = new Date().toISOString();
@@ -1134,6 +1156,10 @@ export async function handleEndpoint(endpoint, payload, deps) {
             return v;
         }
         case 'dsh-memory/wing-backfill': {
+            // probe=true 只读快照：不启动（UI 离开区域再回来时恢复在途任务用）。
+            if (payload?.probe === true) {
+                return { started: false, running: wingBackfillState().running };
+            }
             const r = startWingBackfill({
                 ctx: deps.ctx,
                 cfg: deps.cfg,
@@ -1143,17 +1169,47 @@ export async function handleEndpoint(endpoint, payload, deps) {
             return r;
         }
         case 'dsh-memory/keyword-backfill': {
-            // 门控关：不启动，如实报 enabled=false（面板据此提示“先开关键词回填开关”）。
-            if (!cfg.keyword?.enabled)
-                return { started: false, running: false, enabled: false, updated: 0, failed: 0 };
+            // 门控看生效配置（live.keywordEnabled 覆盖部署 cfg.keyword.enabled）；关时不启动。
+            const ec = effectiveCfg(cfg, live);
+            const st0 = keywordBackfillState();
+            // probe=true 只读快照：不启动（UI 离开区域再回来时恢复在途任务用）。
+            if (payload?.probe === true) {
+                return { started: false, running: st0.running, enabled: ec.keyword?.enabled === true, updated: st0.updated, failed: st0.failed, progress: backfillProgress(st0) };
+            }
+            if (!ec.keyword?.enabled)
+                return { started: false, running: false, enabled: false, updated: 0, failed: 0, progress: backfillProgress(st0) };
             const r = startKeywordBackfill({
                 ctx: deps.ctx,
-                cfg: deps.cfg,
+                cfg: ec,
                 backend: stores.backend ?? new InProcMemoryBackend(stores.l1),
                 logger: deps.logger,
+                // 运行时并发读取器：拖概览页滑块对**正在跑**的任务即时生效（弹性池每完成一条重读）。
+                concurrency: () => effectiveCfg(cfg, live).backfill?.concurrency,
             });
             const st = keywordBackfillState();
-            return { started: r.started, running: r.running, enabled: true, updated: st.updated, failed: st.failed };
+            return { started: r.started, running: r.running, enabled: true, updated: st.updated, failed: st.failed, progress: backfillProgress(st) };
+        }
+        case 'dsh-memory/redistill-backfill': {
+            // 门控看生效配置（live.redistillEnabled 覆盖部署 cfg.redistill.enabled）；关时不启动。
+            const ec = effectiveCfg(cfg, live);
+            const st0 = redistillBackfillState();
+            // probe=true 只读快照：不启动（UI 离开区域再回来时恢复在途任务用）。
+            if (payload?.probe === true) {
+                return { started: false, running: st0.running, enabled: ec.redistill?.enabled === true, updated: st0.updated, skipped: st0.skipped, failed: st0.failed, progress: backfillProgress(st0) };
+            }
+            if (!ec.redistill?.enabled)
+                return { started: false, running: false, enabled: false, updated: 0, skipped: 0, failed: 0, progress: backfillProgress(st0) };
+            // 改 content 需进程内重嵌 + 追加 JSONL + 投射点火，直取 stores.l1（不经 worker backend）。
+            const r = startRedistillBackfill({
+                ctx: deps.ctx,
+                cfg: ec,
+                l1: stores.l1,
+                logger: deps.logger,
+                // 运行时并发读取器：拖概览页滑块对**正在跑**的任务即时生效（弹性池每完成一条重读）。
+                concurrency: () => effectiveCfg(cfg, live).backfill?.concurrency,
+            });
+            const st = redistillBackfillState();
+            return { started: r.started, running: r.running, enabled: true, updated: st.updated, skipped: st.skipped, failed: st.failed, progress: backfillProgress(st) };
         }
         // ── 会话级统计(悬浮卡信息区;热路径端点,见 SessionInfoSource 的零 I/O 硬规则) ──
         case 'dsh-memory/session-stats': {
@@ -1264,7 +1320,12 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     memoryMutate: false,
                     conflictFreeze: live?.get()?.conflictFreeze === true,
                     skillsEnabled: live?.get()?.skillsEnabled === true,
+                    keywordEnabled: live?.get()?.keywordEnabled === true,
+                    redistillEnabled: live?.get()?.redistillEnabled === true,
+                    mdSyncEnabled: live?.get()?.mdSyncEnabled === true,
+                    memportEnabled: live?.get()?.memportEnabled === true,
                     mdExportMaxRecords: live?.get()?.mdExportMaxRecords ?? 0,
+                    backfillConcurrency: live?.get()?.backfillConcurrency ?? 0,
                 }),
                 // 静态部署上限(cordis.patch.yml):运行时开关与它取 AND
                 ceilings: { capture: cfg.capture.enabled, distill: cfg.extract.enabled, recall: cfg.recall.enabled },
@@ -1303,7 +1364,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
             const patch = (payload ?? {});
             const clean = {};
             // 布尔开关组:memoryMutate(高权限写删门)与主开关同列;conflictFreeze(§C 人工冲突裁决)
-            for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'skillsEnabled', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate']) {
+            for (const key of ['enabled', 'capture', 'distill', 'recall', 'memoryMutate', 'conflictFreeze', 'skillsEnabled', 'keywordEnabled', 'redistillEnabled', 'mdSyncEnabled', 'memportEnabled', 'toolRoom', 'toolGraph', 'toolRuminate', 'toolConflict', 'toolMutate']) {
                 if (typeof patch[key] === 'boolean')
                     clean[key] = patch[key];
             }
@@ -1311,6 +1372,11 @@ export async function handleEndpoint(endpoint, payload, deps) {
             // 不加进白名单的话，面板上那个输入框会“写成功但被静默丢”——看得到数字、不生效。
             if (typeof patch.mdExportMaxRecords === 'number' && Number.isFinite(patch.mdExportMaxRecords)) {
                 clean.mdExportMaxRecords = Math.min(10_000, Math.max(0, Math.floor(patch.mdExportMaxRecords)));
+            }
+            // 回填并行度运行时覆盖（概览页滑块）：不收白名单 = “写成功但被静默丢”，
+            // 而用户会拿着“并行 1”的 UI 去判断串行跑的结果——比没有这个旋钮更坏。
+            if (typeof patch.backfillConcurrency === 'number' && Number.isFinite(patch.backfillConcurrency)) {
+                clean.backfillConcurrency = Math.min(8, Math.max(0, Math.floor(patch.backfillConcurrency)));
             }
             // 运行时统一路由链：结构校验后整体写入（空数组 = 回到跟随部署配置）
             if (patch.distillChain !== undefined) {
@@ -1629,6 +1695,37 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     created_at: r.createdAt,
                 })),
             };
+        }
+        case 'dsh-memory/records-meta': {
+            const p = (payload ?? {});
+            if (!Array.isArray(p.ids) || p.ids.length === 0)
+                throw new Error('ids 必须是非空字符串数组');
+            const ids = p.ids.filter((x) => typeof x === 'string' && x.length > 0).slice(0, 50);
+            if (ids.length === 0)
+                throw new Error('ids 过滤后为空');
+            const records = stores.l1.getByIds(ids);
+            const items = records.map((r) => {
+                // 与写盘、槽位投影同一算法，不各自抄一份清洗规则。
+                const filePath = relPathFor(r);
+                return {
+                    id: r.id,
+                    name: r.name ?? null,
+                    type: r.type,
+                    priority: r.priority,
+                    content: r.content,
+                    maturity: computeMaturity({ priority: r.priority, usage: null, agingWeight: null, mark: null }),
+                    createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+                    updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : null,
+                    scene: r.scene_name,
+                    scope: (r.scope === 'workspace' ? 'workspace' : 'global'),
+                    workspaceId: r.scope === 'workspace' ? (r.workspaceId ?? '') || null : null,
+                    ...(Array.isArray(r.metadata?.dsh_keywords) ? { keywords: r.metadata.dsh_keywords.filter((k) => typeof k === 'string' && k !== '') } : {}),
+                    ...(Array.isArray(r.metadata?.dsh_usage_scenario) ? { usageScenario: r.metadata.dsh_usage_scenario } : {}),
+                    filePath,
+                    retired: r.validTo !== undefined,
+                };
+            });
+            return { items };
         }
         case 'dsh-memory/records-delete': {
             // 面板高权限删除指定记忆;写入删权限门(memoryMutate)防御。

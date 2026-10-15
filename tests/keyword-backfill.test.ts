@@ -37,7 +37,7 @@ vi.mock('../src/llm.js', async (io) => {
   };
 });
 
-const { labelKeywordChunk, runKeywordBackfillOnce } = await import('../src/keyword-backfill.js');
+const { labelKeywordOne, runKeywordBackfillOnce } = await import('../src/keyword-backfill.js');
 
 const warned: string[] = [];
 const logger = { info: () => {}, warn: (m: string) => warned.push(m), error: () => {}, debug: () => {} } as unknown as MemoryLogger;
@@ -47,39 +47,38 @@ function rec(id: string, content = '内容'): MemoryRecord {
   return { id, content } as unknown as MemoryRecord;
 }
 
-describe('labelKeywordChunk 解析契约', () => {
+describe('labelKeywordOne 解析契约（一个请求只装一条）', () => {
   it('接受合法输出；normKeywords 去重 + 截 ≤5', async () => {
     warned.length = 0;
-    llmReplies.push(JSON.stringify([{ id: 'm1', keywords: ['a', 'b', 'a', 'c', 'd', 'e', 'f'], usage_scenario: ['x', 'y'] }]));
-    const out = await labelKeywordChunk(ctx, cfg, logger, [rec('m1')]);
-    expect(out).toHaveLength(1);
-    expect(out[0].record.id).toBe('m1');
-    expect(out[0].keywords).toEqual(['a', 'b', 'c', 'd', 'e']); // 去重 'a' + 上限 5
-    expect(out[0].usageScenario).toEqual(['x', 'y']);
+    llmReplies.push(JSON.stringify({ keywords: ['a', 'b', 'a', 'c', 'd', 'e', 'f'], usage_scenario: ['x', 'y'] }));
+    const out = await labelKeywordOne(ctx, cfg, logger, rec('m1'));
+    expect(out).not.toBeNull();
+    expect(out!.keywords).toEqual(['a', 'b', 'c', 'd', 'e']); // 去重 'a' + 上限 5
+    expect(out!.usageScenario).toEqual(['x', 'y']);
   });
 
-  it('id 配对失败被丢弃且留痕（不许静默）', async () => {
-    warned.length = 0;
-    llmReplies.push(JSON.stringify([{ id: 'ghost', keywords: ['k1'] }]));
-    expect(await labelKeywordChunk(ctx, cfg, logger, [rec('m1')])).toEqual([]);
-    expect(warned.some((w) => w.includes('id 配对失败'))).toBe(true);
+  it('模型回单元素数组也能解', async () => {
+    llmReplies.push(JSON.stringify([{ keywords: ['k1'], usage_scenario: [] }]));
+    expect((await labelKeywordOne(ctx, cfg, logger, rec('m1')))?.keywords).toEqual(['k1']);
   });
 
-  it('keywords 全空/非法 → 该条跳过（不写空关键词轴）', async () => {
+  it('keywords 全空/非法 → null（不写空关键词轴，不静默）', async () => {
     warned.length = 0;
-    llmReplies.push(JSON.stringify([{ id: 'm1', keywords: ['', '  '] }]));
-    expect(await labelKeywordChunk(ctx, cfg, logger, [rec('m1')])).toEqual([]);
+    llmReplies.push(JSON.stringify({ keywords: ['', '  '] }));
+    expect(await labelKeywordOne(ctx, cfg, logger, rec('m1'))).toBeNull();
     expect(warned.some((w) => w.includes('normKeywords 结果为空'))).toBe(true);
   });
 
-  it('系统提示词含反例(禁抽象压缩词)与 id 照抄约束（字段名与解析同源）', async () => {
+  it('系统提示词含反例(禁抽象压缩词)且是单条形状（输出对象、不要求回写 id）', async () => {
     llmCalls.length = 0;
-    llmReplies.push('[]');
-    await labelKeywordChunk(ctx, cfg, logger, [rec('m1')]);
+    llmReplies.push('null');
+    await labelKeywordOne(ctx, cfg, logger, rec('m1'));
     const sys = llmCalls[0]?.system ?? '';
     expect(sys).toContain('批量流量判定'); // 明确列出的抽象反例
-    expect(sys).toContain('原样照抄');
     expect(sys).toContain('keywords');
+    expect(sys, '单条形状：输出一个对象').toContain('一个 JSON 对象');
+    expect(sys, '逐条后不再要求回写 id').not.toContain('原样照抄');
+    expect(llmCalls[0]?.user, 'user 只装一条').not.toContain('记忆列表');
   });
 });
 

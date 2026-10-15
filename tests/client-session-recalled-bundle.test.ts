@@ -1,8 +1,9 @@
 /**
  * G-live「本会话召回」显示层的边界守卫（读构建产物，纯 node 断言，不拉 DOM）。
  *
- * 钉住两件易被回退的事：
- *   1. 显示在 **client 浮层**（pill）里：端点字面量与区块标题必须进 `dist/client.js`；
+ * 钉住几件易被回退的事（0.25.0 起「本会话召回」的 pill 渲染已移交 dsh-brief-sidebar）：
+ *   1. **pill 不再重复渲染召回**：prime-memory 的 client 浮层不再挂 `session-recalled` 端点/
+ *      「本会话召回」区块（输入区弹窗再渲染一份就是重复）——`dist/client.js` 不得再出现这些串；
  *   2. **形式不挂持久槽位**：`memorySlots` 投影（dist/projection/slots.js）不得出现任何
  *      recalled 痕迹——召回集一旦流经投影，就会被渲染成"槽位注册表"，而召回不是常驻约定；
  *   3. **展示契约不抽掉**：服务端入口继续接线 slots 投影。宿主对缺席是优雅降级
@@ -22,19 +23,12 @@ const serverEntry = readFileSync(join(HERE, '..', 'dist', 'index.js'), 'utf8');
 const slotsProjection = readFileSync(join(HERE, '..', 'dist', 'projection', 'slots.js'), 'utf8');
 
 describe('本会话召回显示层（构建产物）', () => {
-  it('client 侧消费 session-recalled 端点并渲染区块标题', () => {
-    expect(client).toContain('dsh-memory/session-recalled');
-    expect(client).toContain('本会话召回');
-  });
-
-  it('pill 折叠“已被摘要取代”的条目而不显示（用户裁定，与 brief 同口径）', () => {
-    // 旁注 UI 必须彻底撤掉：留着它就是“半隐藏”，比纯隐藏更误导。
+  it('pill 不再渲染本会话召回（0.25.0 移交 brief-sidebar，防重复渲染回退）', () => {
+    // 召回展示已由 dsh-brief-sidebar 接管；prime-memory 输入区弹窗再渲染一份就是重复。
+    // SessionRecalledArea 组件文件保留以备回滚，但不再被 import → 这些串不该进包。
+    expect(client).not.toContain('dsh-memory/session-recalled');
+    expect(client).not.toContain('本会话召回');
     expect(client).not.toContain('recalled-superseded');
-    // 但过滤判据仍要在（不读 superseded 字段就无法折叠）。
-    expect(client).toContain('superseded');
-    // 全被折叠时的空态不得谎称“还没召回到记忆”，两个分支都要在包里。
-    expect(client).toContain('正文已被摘要取代');
-    expect(client).toContain('还没召回到记忆');
   });
 
   it('投影侧（memorySlots）不得挂任何召回痕迹——形式不是持久槽位', () => {

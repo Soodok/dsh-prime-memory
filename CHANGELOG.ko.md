@@ -9,6 +9,24 @@
 
 이 파일은 **0.12.0** 릴리스 노트와 현재 **미출시** 변경 사항의 한국어판입니다. 전체 이력은 [CHANGELOG.md](./CHANGELOG.md)（中文）를 참조하세요.
 
+## [0.26.0] — 2026-10-14
+
+### 신규
+
+- **`dsh-memory/records-meta` 엔드포인트**: `record_id` 일괄 조회(≤50)로 단일 기억의 전량 메타데이터와 본문(name/type/priority/content/maturity/createdAt/updatedAt/scene/scope/workspaceId/keywords/usageScenario/filePath/retired)을 `stores.l1.getByIds` 로 SQLite 에서 직접 반환。기억 뷰어는 이로써 **`.memory.md` 를 읽지 않아도 됨**——이전의 fileViewer 방식(`<id>.memory` 위장)은 호스트 EditorHost 가 물리 경로로 해석해 반드시 ENOENT。계약은 `contract.ts`, 엔드포인트 수 62→63(`tests/contract-keys.test.ts` 고정)。
+- **표시 제목을 본문에서 추정하지 않음**: `memoryRecall` 과 슬롯 `refViews` 의 title 은 `name`(명칭 증류가 만든 짧은 제목)을 우선하고, 없을 때만 본문 첫 줄로 회퇴。`firstLine()` 은 markdown 인지 방식으로 바뀌어 H1(`# xxx`)은 문서 제목으로 보존, H2+(`## 결론/사실`)는 분절 마커로 건너뜀——이전에는 명백히 본문인 `## 결론/사실` 이 기억 “이름”으로 표시됨。
+- **투사 경로의 단일 사실원 `relPathFor()`**: `renderRecord`(디스크 기록), `records-meta` 의 `filePath`, 슬롯 `refViews.filePath` 세 곳이 동일 알고리즘으로 수렴。이전은 투사 측이 자체 정제 정규식을 옮겨 같은 기억에서 두 개의 다른 파일명이 나올 수 있었음——투사가 알려준 주소와 디스크의 실제 파일이 맞지 않는데, 이 세 곳이야말로 사람을 위해 같은 사실을 대조하는 자리다。`refViews` 는 `filePath`/`workspaceId` 도 노출하여 소비자는 `<workspaceId>/.agents/memory/<filePath>`(workspace 범위) 또는 투사 루트(global)로 절대 경로를 조립。
+- **검색 패널 본문의 markdown 렌더**(client): RecordsTab 펼침 본문은 새로 생긴 `client/src/ui/MarkdownBody.tsx`(제목 계층 / 굵게 / 인라인 코드 / 목록, 외부 의존성 없음)를 거치며, `## 결론/사실` 이 맨 텍스트 줄로 보이지 않음。
+
+- **기존 기억 재증류 성형(`redistill`)**: 독립 일괄 스캔 `src/redistill-backfill.ts`(wing/keyword 백필 미러: 단일비행/후대/유계/실패시 원 기록불변)가 **활성이고 골격 불비**인 L1 본문을 G2 유형별 “전인후과” 분절 형식으로 재배열하고, 동시에 `metadata.dsh_keywords` / `metadata.dsh_usage_scenario` 를 산출。新 엔드 `dsh-memory/redistill-backfill`(`{started,running,enabled,updated,skipped,failed` 즉시 반환), 패널(WingWheel)에 “재증류 성형” 버튼。설정 `redistill.enabled` **기본关**——关 시 성형 없음、content/FTS/투사 글자 그대로 동일(영 드리프트)。
+  - **품질 게이트**: 성형 후 `scoreSkeleton` 적중 수가 **엄격히 우수**할 때만 기입하고 성형 버전 `dsh_reshape_ver` 를 찍어(이후 회차 제외), 미달이면 원문을 보존하고 표시를 남기지 않아 다음 회차에 재시도 가능——“겉보기 형식”을 위해 거짓 라벨이나 날조를 일체 하지 않음。
+  - **활성만**: 퇴장/대체됨 기록은 대상 외。
+- **본문 변경의 지속 기입 경로**: 성형 기입은 `L1Store.appendNew` 를 경유해 JSONL 사실원 추기 + 임베딩 재계산 + `l1_fts` 재인덱싱 + `.memory.md` 투사 덮어쓰기(exporter 는库에서 재렌더, 다르면 덮어씀)를 한 번에 완료。입구는 `vectorsReady()` 를 요구——임베딩 미준비 시 런 전체를 건너뛰어 벡터의 조용한 소실을 방지。
+
+### 수정
+
+- **`client-session-recalled-bundle` 회귀 가드**: 0.25.0 에서 “본 대화召回” pill 렌더링을 dsh-brief-sidebar 에 넘긴 후, 이 테스트는 여전히 pill 에召回 문자열이 있다고 주장(발판 시 누락)。이제는 prime-memory pill 이召回를 **중복 렌더링하지 않음**을 주장하고, 투사 배선 주장은 보존。
+
 ## [0.25.0] — 2026-10-14
 
 ### 신규
