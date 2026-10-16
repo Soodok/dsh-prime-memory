@@ -29,8 +29,6 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-const noopLogger: MemoryLogger = { info: () => {}, warn: () => {}, error: () => {} };
-
 /** 最小配置:关 L2/L3 保证 hermetic(不触 LLM),保留 extract.enabled 以穿过 start() 守卫。 */
 function cfg(dataDir: string, memExport: Partial<MemoryConfig['memExport']> = {}): MemoryConfig {
   return {

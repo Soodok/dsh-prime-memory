@@ -394,7 +394,7 @@ describe('refs / refViews 解析(v0.20.2)', () => {
     const { def, store } = await captured(L1);
     await store.upsert({ title: '长文', refs: ['mem_long1', 'mem_gone'] });
     let view = def.wire.view(def.init());
-    let slot = view.slots[0]!;
+    const slot = view.slots[0]!;
     expect(slot.refViews).toHaveLength(1);
     expect(slot.refViews![0]!.ref).toBe('mem_long1');
     expect(slot.refViews![0]!.title.length).toBeLessThanOrEqual('[work_fact] '.length + 81);

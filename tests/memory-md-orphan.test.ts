@@ -193,7 +193,7 @@ describe('sweepOrphanFiles', () => {
     // 这条直接对应本轮修掉的缺陷类：配额若数“遍历”，收敛的库会把配额全花在确认没差上，
     // 报告就会一边说 capped 一边说 orphans=0 —— 那是把谎报写进护栏。
     const many = Array.from({ length: 12 }, (_, i) => rec(`u${i}`, `认领记录 ${i}`, { name: `claimed-${i}` }));
-    const { dataDir, store, ledger, root, run } = await setup(many);
+    const { dataDir, store, ledger, run } = await setup(many);
     await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 100, timeBudgetMs: 60_000 });
     // 改掉一条的名字：旧路径仍挂在账本里，但已经没记录认领它了。
     expect(store.rename('u11', 'claimed-11-moved').ok).toBe(true);

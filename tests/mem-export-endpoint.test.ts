@@ -108,7 +108,7 @@ describe('dsh-memory/mem-export', () => {
 
 describe('dsh-memory/mem-reconcile', () => {
   it('导出后对账 → 全 same；未导出前 → 全 firstTime', async () => {
-    const { d, store, ledger } = await deps();
+    const { d, ledger } = await deps();
     (d.stores as unknown as { mdLedger: MdLedgerStore }).mdLedger = ledger;
     const first = await handleEndpoint('dsh-memory/mem-reconcile', {}, d) as { firstTime: number; same: number };
     expect(first.firstTime).toBe(1);

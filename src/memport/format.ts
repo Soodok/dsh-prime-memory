@@ -223,7 +223,7 @@ export function parseBundle(text: string): Bundle {
     declaredSha: null,
     bodyLines: [],
   };
-  const clean = text.replace(/^﻿/, '');
+  const clean = text.replace(/^\uFEFF/, '');
   const rawLines = clean.split(/\r?\n/);
   const body: string[] = [];
   let seqLine = 0;

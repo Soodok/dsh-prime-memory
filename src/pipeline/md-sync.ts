@@ -349,7 +349,7 @@ export async function syncFromFiles(deps: MdSyncDeps): Promise<MdSyncReport> {
       continue;
     }
     const cached = textCache.get(abs);
-    let text = '';
+    let text: string; // catch 分支必 continue，初始值从未被读
     try {
       text = cached ?? await readFile(abs, 'utf8');
     } catch (err) {

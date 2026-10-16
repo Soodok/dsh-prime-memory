@@ -112,7 +112,7 @@ describe('exportRecords', () => {
   });
 
   it('没名字的记录回落到 mem-<id8>，两条同内容也不崩', async () => {
-    const { store, ledger, root, dataDir } = await setup([
+    const { store, ledger, dataDir } = await setup([
       rec('mem_aaaa1111', '同样的首行内容'),
       rec('mem_bbbb2222', '同样的首行内容'),
     ]);

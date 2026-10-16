@@ -97,7 +97,7 @@ export const EXTRACTION_FEW_SHOT = `
 ${TITLE_GOOD_EXAMPLES.map(renderGoodExample).join('\n\n')}
 
 【不要这样】
-${TITLE_BAD_EXAMPLES.map((b) => `- ✗ ${b.title}　→ ${b.why}`).join('\n')}
+${TITLE_BAD_EXAMPLES.map((b) => `- ✗ ${b.title}\u3000→ ${b.why}`).join('\n')}
 `;
 
 /**

@@ -240,6 +240,7 @@ function startsNarrativeLeadIn(s: string): boolean {
  * 真机坏味 `buildTurnCompactSystemPr`（ASCII 函数名硬切腰斩）即此类。
  */
 function isBareCodeIdentifier(s: string): boolean {
+  // eslint-disable-next-line no-control-regex -- 这里就是要按 ASCII 码位段判非 ASCII（CJK 等），\x00 是语义本身不是笔误
   if (/[^\x00-\x7F]/.test(s)) return false // 含非 ASCII（CJK 等）不算
   if (/[\s\-_]/.test(s)) return false // 有分隔符即为短语，放行
   return /[a-z][A-Z]/.test(s) // 词中大写翻转 = 驼峰标识符

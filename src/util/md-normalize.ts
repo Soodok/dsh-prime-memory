@@ -113,7 +113,7 @@ export function normalizeContentMd(text: string): string {
       out.push(raw);
       continue;
     }
-    let line = settleBullet(settleHeading(settleEol(raw)));
+    const line = settleBullet(settleHeading(settleEol(raw)));
 
     if (line.trim().length === 0) {
       blanks += 1;

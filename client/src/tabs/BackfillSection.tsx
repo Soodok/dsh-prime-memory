@@ -337,8 +337,8 @@ export function BackfillSection(props: { rpc: RpcFn }) {
     keywordBackfill('resume');
     redistillBackfill('resume');
     wingBackfill('resume');
-    // 仅挂载时探测一次；三个 resume 都是幂等的只读查询，StrictMode 双调用无副作用。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 仅挂载时探测一次；三个 resume 都是幂等的只读查询，StrictMode 双调用 无副作用。
+    // （本仓未装 eslint-plugin-react-hooks，exhaustive-deps 未启用；将来接入插件时需恢复 disable 指令）
   }, []);
 
   const rowStyle: React.CSSProperties = {
