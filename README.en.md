@@ -61,7 +61,7 @@
 > Compatibility mechanism: settings registration uses a three-way runtime branch
 > (`register` → `installSection` bridge → always-on degradation); see the 0.11.0 entry
 > in [CHANGELOG.md](./CHANGELOG.md). `dsh.plugin.json` declares
-> `engines.dsh: ">=0.2.0-rc.1 <0.2.1-0"`.
+> `engines.dsh` 为逐 rc 精确枚举串（0.1.0-rc.2 → 0.2.1-rc.2，17 rc）.
 
 ## Getting Started
 

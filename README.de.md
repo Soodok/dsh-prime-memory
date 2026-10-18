@@ -61,7 +61,7 @@ alt="DeepSeek Harness Hero-Banner: Unterhaltungen werden automatisch zu mehrschi
 > Kompatibilitätsmechanismus: Die Settings-Registrierung durchläuft zur Laufzeit drei Zweige
 > (`register` → `installSection`-Brücke → Dauerein-Notbetrieb), siehe Eintrag 0.11.0 im
 > [CHANGELOG.md](./CHANGELOG.md). `dsh.plugin.json` deklariert
-> `engines.dsh: ">=0.2.0-rc.1 <0.2.1-0"`.
+> `engines.dsh` 为逐 rc 精确枚举串（0.1.0-rc.2 → 0.2.1-rc.2，17 rc）.
 
 ## Schnellstart
 

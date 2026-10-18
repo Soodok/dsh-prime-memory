@@ -321,7 +321,7 @@ export async function syncFromFiles(deps) {
             continue;
         }
         const cached = textCache.get(abs);
-        let text = '';
+        let text; // catch 分支必 continue，初始值从未被读
         try {
             text = cached ?? await readFile(abs, 'utf8');
         }

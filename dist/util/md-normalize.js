@@ -113,7 +113,7 @@ export function normalizeContentMd(text) {
             out.push(raw);
             continue;
         }
-        let line = settleBullet(settleHeading(settleEol(raw)));
+        const line = settleBullet(settleHeading(settleEol(raw)));
         if (line.trim().length === 0) {
             blanks += 1;
             // 空行只在已有内容时才可能保留，且最多一个

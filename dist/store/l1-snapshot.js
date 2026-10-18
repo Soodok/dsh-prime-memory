@@ -388,7 +388,7 @@ export async function exportThenPurge(db, dataDir, ids, reason, logger, now = ne
     // 门禁第二半——**批次级投影**。不再拿整库哈希当门禁：那会把“本批逐字未动、但库里有
     // 别的东西被并发改过”误判成不安全，而事实恰好相反——要删的那批在快照里完整可信，
     // 删错了能原样回灌。整库漂移仍计数（它是要给人看的信息），但它不拦住删除。
-    let subset = [];
+    let subset; // try 内先赋值后读，初始空数组从未被用
     let otherChanged = 0;
     try {
         const want = new Set(ids);

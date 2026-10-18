@@ -83,7 +83,7 @@ export const EXTRACTION_FEW_SHOT = `
 ${TITLE_GOOD_EXAMPLES.map(renderGoodExample).join('\n\n')}
 
 【不要这样】
-${TITLE_BAD_EXAMPLES.map((b) => `- ✗ ${b.title}　→ ${b.why}`).join('\n')}
+${TITLE_BAD_EXAMPLES.map((b) => `- ✗ ${b.title}\u3000→ ${b.why}`).join('\n')}
 `;
 /**
  * 各类型的"前因后果"要素表（照 G2 `NARRATIVE_CLAUSE` 写，不另造一套定义）。

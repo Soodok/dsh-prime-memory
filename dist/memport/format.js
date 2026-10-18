@@ -178,7 +178,7 @@ export function parseBundle(text) {
         declaredSha: null,
         bodyLines: [],
     };
-    const clean = text.replace(/^﻿/, '');
+    const clean = text.replace(/^\uFEFF/, '');
     const rawLines = clean.split(/\r?\n/);
     const body = [];
     let seqLine = 0;
