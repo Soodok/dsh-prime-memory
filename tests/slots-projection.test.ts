@@ -218,8 +218,9 @@ describe('init / apply / view 语义', () => {
       getByIds: () => [{ id: 'mem_found', content: '规则正文', type: 'rule' }],
     });
     await store.upsert({ title: '有效引用', refs: ['mem_found'] });
+    // 与 L402 同口径：refViews 全形状含 filePath（relPathFor 单一事实源，'rule' 非族类名→unclassified）
     expect(def.wire.view(def.init()).slots[0]?.refViews).toEqual([
-      { ref: 'mem_found', title: '[rule] 规则正文' },
+      { ref: 'mem_found', title: '[rule] 规则正文', filePath: 'unclassified/规则正文.memory.md' },
     ]);
   });
 
