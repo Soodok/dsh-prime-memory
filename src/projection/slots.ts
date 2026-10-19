@@ -209,7 +209,8 @@ function buildState(store: SlotStore, l1: L1LookupFace | undefined): SlotsProjec
   const snap = store.projectionSnapshot();
   const slots = snap.slots.map((slot) => {
     if (slot.refs === undefined) return slot;
-    return { ...slot, refViews: resolveRefViews(slot.refs, l1) };
+    const refViews = resolveRefViews(slot.refs, l1);
+    return refViews === undefined ? { ...slot } : { ...slot, refViews };
   });
   return { rev: store.revision(), count: snap.count, openCount: snap.openCount, slots };
 }

@@ -200,6 +200,29 @@ describe('init / apply / view 语义', () => {
     expect(next).toMatchObject({ rev: 1, count: 1 });
   });
 
+  it('无可解析引用时省略 refViews，保持投影视图为无损 JSON', async () => {
+    const { def, store } = await captured();
+    await store.upsert({ title: '路径引用', refs: ['docs/guide.md'] });
+    const state = def.init();
+    const slot = state.slots[0]!;
+    expect(Object.hasOwn(slot, 'refViews')).toBe(false);
+    expect(Object.hasOwn(def.wire.view(state).slots[0]!, 'refViews')).toBe(false);
+
+    const { def: missing, store: missingStore } = await captured({ getByIds: () => [] });
+    await missingStore.upsert({ title: '已退场引用', refs: ['mem_missing'] });
+    expect(Object.hasOwn(missing.init().slots[0]!, 'refViews')).toBe(false);
+  });
+
+  it('可解析 L1 引用仍保留 refViews', async () => {
+    const { def, store } = await captured({
+      getByIds: () => [{ id: 'mem_found', content: '规则正文', type: 'rule' }],
+    });
+    await store.upsert({ title: '有效引用', refs: ['mem_found'] });
+    expect(def.wire.view(def.init()).slots[0]?.refViews).toEqual([
+      { ref: 'mem_found', title: '[rule] 规则正文' },
+    ]);
+  });
+
   it('view 引用稳定(I1)且不含 body(F9)', async () => {
     const { def, store } = await captured();
     const before = def.init(); // rev 0

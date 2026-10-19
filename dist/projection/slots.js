@@ -121,7 +121,8 @@ function buildState(store, l1) {
     const slots = snap.slots.map((slot) => {
         if (slot.refs === undefined)
             return slot;
-        return { ...slot, refViews: resolveRefViews(slot.refs, l1) };
+        const refViews = resolveRefViews(slot.refs, l1);
+        return refViews === undefined ? { ...slot } : { ...slot, refViews };
     });
     return { rev: store.revision(), count: snap.count, openCount: snap.openCount, slots };
 }
