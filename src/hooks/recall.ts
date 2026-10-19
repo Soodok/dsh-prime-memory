@@ -157,6 +157,22 @@ export function ownInjectionFromEvent(ev: InjectionEventLike): OwnInjectionFacts
   };
 }
 
+/**
+ * 会话事件统一读形状（issue #8）：旧宿主 `session.events` 是数组属性；
+ * 0.2.x 宿主已删该属性，官方访问器是 `snapshotEvents()`（全量日志，seq 与日志
+ * 位置对齐，含 fork 前缀——与旧属性同口径）。两者都拿不到时返回 undefined，
+ * 由调用点的既有退路处置（粗标记 / 存储回填）；不假设形状，不抛。
+ * 导出供双形状单测钉住。
+ */
+export function readSessionEvents(session: {
+  events?: readonly InjectionEventLike[];
+  snapshotEvents?: () => readonly InjectionEventLike[];
+}): readonly InjectionEventLike[] | undefined {
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === 'function') return session.snapshotEvents();
+  return undefined;
+}
+
 export function buildRecallQuery(
   messages: Array<{ content: unknown }>,
   tailMessages = RECALL_QUERY_TAIL_MESSAGES,
@@ -741,15 +757,18 @@ export function registerRecall(
     if (recalled === undefined || sessionId.length === 0) return false;
     try {
       // 可选服务一律走 ctx.get() 的宽容路径（属性访问对未 inject 的服务会抛）
+      // events 形状双面：旧宿主数组属性 / 0.2.x snapshotEvents() 方法（issue #8）
       const sessions = ctx.get?.('sessions') as
-        | { get?: (id: SessionId) => { surface: { nodes: readonly number[] }; events: ReadonlyArray<InjectionEventLike> } | undefined }
+        | { get?: (id: SessionId) => { surface: { nodes: readonly number[] }; events?: readonly InjectionEventLike[]; snapshotEvents?: () => readonly InjectionEventLike[] } | undefined }
         | undefined;
       const session = typeof sessions?.get === 'function' ? sessions.get(sessionId as SessionId) : undefined;
       if (session === undefined) return false;
+      const events = readSessionEvents(session);
+      if (events === undefined) return false; // 事件面不可得：调用方回退粗标记
       const visibleSeqs = new Set(session.surface.nodes);
       const visibleIds = new Set<string>();
       const knownIds = new Set<string>();
-      for (const ev of session.events) {
+      for (const ev of events) {
         const own = ownInjectionFromEvent(ev);
         if (own === undefined || own.id.length === 0) continue;
         knownIds.add(own.id);
@@ -800,14 +819,18 @@ export function registerRecall(
     try {
       // cordis 属性访问(ctx.sessions)对未 inject 的服务抛 "without inject";
       // 可选服务一律走 ctx.get() 的宽容路径
+      // events 形状双面：旧宿主数组属性 / 0.2.x snapshotEvents() 方法（issue #8）
       const sessions = ctx.get?.('sessions') as
-        | { get?: (id: SessionId) => { surface: { nodes: readonly number[] }; events: ReadonlyArray<{ type: string; seq: number; data?: { source?: Record<string, unknown>; content?: ReadonlyArray<{ type?: string; text?: string }> } }> } | undefined }
+        | { get?: (id: SessionId) => { surface: { nodes: readonly number[] }; events?: readonly InjectionEventLike[]; snapshotEvents?: () => readonly InjectionEventLike[] } | undefined }
         | undefined;
       const session = typeof sessions?.get === 'function' ? sessions.get(sessionId as SessionId) : undefined;
       if (session) {
+        const events = readSessionEvents(session);
+        // 事件形状不可得：与「不在 live store」同一退路，走存储回填，不再静默归 null
+        if (events === undefined) return estimateRecallFromStorage(sessionId);
         const visible = new Set(session.surface.nodes);
         let total = 0;
-        for (const ev of session.events) {
+        for (const ev of events) {
           const own = ownInjectionFromEvent(ev);
           // 无 seq = 无法证明它可见，就不能算进份额（与原行为一致：原来它必须 visible.has(seq)）。
           if (own === undefined || own.chars === 0 || own.seq === undefined || !visible.has(own.seq)) continue;

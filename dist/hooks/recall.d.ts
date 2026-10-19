@@ -78,6 +78,17 @@ export interface OwnInjectionFacts {
  * 署名判定走 `isOwnRecallSource`，同时吃 v4 `plugin:memory` 与 v3 旧行形状。
  */
 export declare function ownInjectionFromEvent(ev: InjectionEventLike): OwnInjectionFacts | undefined;
+/**
+ * 会话事件统一读形状（issue #8）：旧宿主 `session.events` 是数组属性；
+ * 0.2.x 宿主已删该属性，官方访问器是 `snapshotEvents()`（全量日志，seq 与日志
+ * 位置对齐，含 fork 前缀——与旧属性同口径）。两者都拿不到时返回 undefined，
+ * 由调用点的既有退路处置（粗标记 / 存储回填）；不假设形状，不抛。
+ * 导出供双形状单测钉住。
+ */
+export declare function readSessionEvents(session: {
+    events?: readonly InjectionEventLike[];
+    snapshotEvents?: () => readonly InjectionEventLike[];
+}): readonly InjectionEventLike[] | undefined;
 export declare function buildRecallQuery(messages: Array<{
     content: unknown;
 }>, tailMessages?: number, maxChars?: number): string;
