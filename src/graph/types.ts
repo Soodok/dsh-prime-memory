@@ -169,3 +169,10 @@ export const GRAPH_PREVIEW_NEIGHBORS = 10;
 /** 面板图谱预览:种子评分中因果边的权重(score = degree + causal×此值)——
  *  因果链比共现邻接更值得画,预览侧单源读 GRAPH_CAUSAL_RELATIONS。 */
 export const GRAPH_PREVIEW_CAUSAL_WEIGHT = 2;
+
+/** 全图星图（mode:'full'）节点上限：超限截断并置 truncated（截断标记而非硬拒——
+ *  星图是展示面，宁可少画几颗也不报错；G6 舒适区 <2000 留余量）。 */
+export const GRAPH_PREVIEW_FULL_NODES = 1500;
+
+/** 全图星图 active 边上限（同一 truncated 语义；悬挂边已在截断前剔除）。 */
+export const GRAPH_PREVIEW_FULL_EDGES = 3000;

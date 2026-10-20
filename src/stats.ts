@@ -2253,11 +2253,16 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
 
     case 'dsh-memory/graph-preview': {
       // 面板图谱预览:缺省种子推荐榜,seedId 给定展开该邻域(悬挂/不可见→空 seeds 不抛)。
-      const p = (payload ?? {}) as { seedId?: unknown };
+      // mode==='full' 附全图轻量块(大图星图);非 'full' 一律按缺省——无 full 键零漂移。
+      const p = (payload ?? {}) as { seedId?: unknown; mode?: unknown };
       const seedId = typeof p.seedId === 'string' && p.seedId.length > 0 ? p.seedId.slice(0, 200) : undefined;
+      const mode = p.mode === 'full' ? ('full' as const) : undefined;
       const graph = stores.graph;
-      if (!graph) return { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
-      return graph.buildPreview(seedId);
+      if (!graph) {
+        const zero = { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
+        return mode === 'full' ? { ...zero, full: { nodes: [], edges: [], truncated: false } } : zero;
+      }
+      return graph.buildPreview(seedId, mode);
     }
 
     case 'dsh-memory/scenes': {

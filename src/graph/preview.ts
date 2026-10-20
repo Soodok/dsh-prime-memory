@@ -10,7 +10,13 @@
  * 确定性 = 同输入两次调用逐位一致(同分裁决链落到 id 升序兜底)。
  */
 import { GRAPH_CAUSAL_RELATIONS } from './constraints.js';
-import { GRAPH_PREVIEW_CAUSAL_WEIGHT, GRAPH_PREVIEW_NEIGHBORS, GRAPH_PREVIEW_SEEDS } from './types.js';
+import {
+  GRAPH_PREVIEW_CAUSAL_WEIGHT,
+  GRAPH_PREVIEW_FULL_EDGES,
+  GRAPH_PREVIEW_FULL_NODES,
+  GRAPH_PREVIEW_NEIGHBORS,
+  GRAPH_PREVIEW_SEEDS,
+} from './types.js';
 import type { GraphEdge, GraphNode, GraphNodeType } from './types.js';
 
 const CAUSAL_SET: ReadonlySet<string> = new Set<string>(GRAPH_CAUSAL_RELATIONS);
@@ -205,5 +211,70 @@ export function buildGraphPreview(
   return {
     seeds: picked.map((n) => seedView(n, edges, byId, dm, neighborLimit)),
     stats,
+  };
+}
+
+// ============================
+// 全图星图轻量块（mode:'full'）
+// ============================
+
+/** 全图节点轻量项（星图渲染只需这三字段，facts/sources 不下发——带宽与隐私面同步收紧）。 */
+export interface FullViewNode {
+  id: string;
+  name: string;
+  type: GraphNodeType;
+}
+
+/** 全图边轻量项（causal 由单源词表判出，渲染侧不再抄词表）。 */
+export interface FullViewEdge {
+  from: string;
+  to: string;
+  relation: string;
+  causal: boolean;
+}
+
+export interface GraphFullView {
+  nodes: FullViewNode[];
+  edges: FullViewEdge[];
+  /** 任一维触顶即 true（截断标记而非硬拒；渲染侧可据此提示"仅画部分"）。 */
+  truncated: boolean;
+}
+
+export interface FullViewCaps {
+  nodeCap?: number;
+  edgeCap?: number;
+}
+
+/**
+ * 全图星图数据块（纯函数，不查库）：可见节点轻量投影 × active 边，
+ * 双上限截断。**顺序纪律**：节点按入参序截断（调用方 loadGraph 的行序），
+ * 悬挂边（端点之一被截掉/不可见）在截断前剔除——星图上不画悬空线。
+ */
+export function buildFullView(
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+  caps: FullViewCaps = {},
+): GraphFullView {
+  const nodeCap = Math.max(1, Math.floor(caps.nodeCap ?? GRAPH_PREVIEW_FULL_NODES));
+  const edgeCap = Math.max(1, Math.floor(caps.edgeCap ?? GRAPH_PREVIEW_FULL_EDGES));
+  const visibleNodes = nodes.filter(visible);
+  const nodesTruncated = visibleNodes.length > nodeCap;
+  const drawn = visibleNodes.slice(0, nodeCap);
+  const keep = new Set<string>(drawn.map((n) => n.id));
+  const outEdges: FullViewEdge[] = [];
+  let edgesTruncated = false;
+  for (const e of edges) {
+    if (e.status !== 'active') continue;
+    if (!keep.has(e.fromNodeId) || !keep.has(e.toNodeId)) continue;
+    if (outEdges.length >= edgeCap) {
+      edgesTruncated = true;
+      break;
+    }
+    outEdges.push({ from: e.fromNodeId, to: e.toNodeId, relation: e.relation, causal: CAUSAL_SET.has(e.relation) });
+  }
+  return {
+    nodes: drawn.map((n) => ({ id: n.id, name: n.name, type: n.type })),
+    edges: outEdges,
+    truncated: nodesTruncated || edgesTruncated,
   };
 }

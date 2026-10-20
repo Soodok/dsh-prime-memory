@@ -21,7 +21,7 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { applyGraphProjection } from '../graph/apply.js';
 import { expandHitRecordIds, searchGraphNodes } from '../graph/search.js';
-import { buildGraphPreview } from '../graph/preview.js';
+import { buildFullView, buildGraphPreview } from '../graph/preview.js';
 import type { GraphPreviewResult } from '../graph/preview.js';
 import {
   GRAPH_JOB_BACKOFF_BASE_MS,
@@ -587,10 +587,12 @@ export class GraphStore {
    * 面板图谱预览存储缝(契约 `dsh-memory/graph-preview` 的数据源):
    * loadGraph 一次 + job 计数(pending/running/failed 未定项与全量分母)传入纯函数。
    * 降级(db 未就绪)返**全零结构**不抛——预览是展示面,永不拖垮端点。
+   * mode==='full' 时响应附 `full` 轻量块;**缺省时该键缺席**(可选键零漂移纪律,
+   * 不是 undefined 占位——消费方 `'full' in res` 与 JSON 形状双判据都干净)。
    */
-  buildPreview(seedId?: string): GraphPreviewResult {
+  buildPreview(seedId?: string, mode?: 'full'): GraphPreviewResult & { full?: ReturnType<typeof buildFullView> } {
     const zero = { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
-    if (!this.db) return zero;
+    if (!this.db) return mode === 'full' ? { ...zero, full: { nodes: [], edges: [], truncated: false } } : zero;
     const { nodes, edges } = this.loadGraph();
     let pendingJobs = 0;
     let jobsTotal = 0;
@@ -603,6 +605,7 @@ export class GraphStore {
       this.logger?.warn(`${TAG} 预览 job 计数失败(计数回零): ${err instanceof Error ? err.message : String(err)}`);
     }
     const r = buildGraphPreview(nodes, edges, { seedId, pendingJobs, jobsTotal });
+    if (mode === 'full') return { ...r, full: buildFullView(nodes, edges) };
     return r;
   }
 

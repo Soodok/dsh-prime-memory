@@ -1228,6 +1228,9 @@ export interface GraphNodeGetResponse {
 export interface GraphPreviewRequest {
   /** 给定即以该节点为唯一中心(悬挂 id 返空 seeds,不解析不抛——graph-node-get 同款宽容)。 */
   seedId?: string;
+  /** 'full' = 响应附全图轻量块(mode:'full' 与大图星图共用同端点,一次 loadGraph 全供)。
+   *  非 'full' 一律按缺省——无 mode 响应形状与旧版逐字一致(可选键缺席=零漂移)。 */
+  mode?: 'full';
 }
 export interface GraphPreviewResponse {
   seeds: Array<{
@@ -1244,6 +1247,13 @@ export interface GraphPreviewResponse {
     pendingJobs: number;
     /** 全量 job 数(含各状态),"构建中 x/y"的分母——名字即分母,不拿 done 冒充分子。 */
     jobsTotal: number;
+  };
+  /** mode==='full' 才出现;全图星图轻量块(可见节点×active 边,截断标记 truncated)。
+   *  不带此键时响应与旧形状逐字节一致——消费方按需读 `res.full?`。 */
+  full?: {
+    nodes: Array<{ id: string; name: string; type: string }>;
+    edges: Array<{ from: string; to: string; relation: string; causal: boolean }>;
+    truncated: boolean;
   };
 }
 

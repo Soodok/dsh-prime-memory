@@ -11,7 +11,8 @@
  * ⑦ pendingJobs/jobsTotal 透传进 stats(构建中 x/y 的数据源)。
  */
 import { describe, expect, it } from 'vitest';
-import { buildGraphPreview, degreeMaps } from '../src/graph/preview.js';
+import { DatabaseSync } from 'node:sqlite';
+import { buildFullView, buildGraphPreview, degreeMaps } from '../src/graph/preview.js';
 import { GRAPH_PREVIEW_CAUSAL_WEIGHT } from '../src/graph/types.js';
 import type { GraphEdge, GraphNode } from '../src/graph/types.js';
 import { GraphStore } from '../src/store/graph-store.js';
@@ -160,5 +161,86 @@ describe('GraphStore.buildPreview 降级缝', () => {
       stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 },
     });
     expect(g.buildPreview('anything').seeds).toEqual([]);
+  });
+});
+
+describe('buildFullView —— 全图星图轻量块', () => {
+  it('可见性过滤:不可见节点不下发;端点不可见/非 active 的边剔除(星图不画悬空线)', () => {
+    const nodes = [node('a'), node('b'), node('gone', { status: 'archived' })];
+    const edges = [edge('a', 'b'), edge('a', 'gone'), edge('a', 'b', '使用', 'superseded')];
+    const v = buildFullView(nodes, edges);
+    expect(v.nodes.map((n) => n.id).sort()).toEqual(['a', 'b']);
+    expect(v.edges.length).toBe(1); // 只剩 a-b active 边一条
+    expect(v.truncated).toBe(false);
+  });
+
+  it('双上限截断:节点触顶/边触顶各置 truncated,且边集只引用存活节点', () => {
+    const nodes = [node('a'), node('b'), node('c')];
+    const edges = [edge('a', 'b'), edge('b', 'c'), edge('a', 'c')];
+    const nv = buildFullView(nodes, edges, { nodeCap: 2 });
+    expect(nv.truncated).toBe(true);
+    expect(nv.nodes.length).toBe(2);
+    expect(nv.edges.every((e) => nv.nodes.some((n) => n.id === e.from) && nv.nodes.some((n) => n.id === e.to))).toBe(true);
+    const ev = buildFullView(nodes, edges, { edgeCap: 1 });
+    expect(ev.truncated).toBe(true);
+    expect(ev.edges.length).toBe(1);
+  });
+
+  it('轻量字段形状:节点仅 id/name/type 三键、边仅 from/to/relation/causal 四键(facts/sources 不外泄)', () => {
+    const nodes = [node('a', { sources: ['r1', 'r2'] }), node('b')];
+    const v = buildFullView(nodes, [edge('a', 'b', '导致')]);
+    expect(Object.keys(v.nodes[0]).sort()).toEqual(['id', 'name', 'type']);
+    expect(Object.keys(v.edges[0]).sort()).toEqual(['causal', 'from', 'relation', 'to']);
+    expect(v.edges[0].causal).toBe(true);
+  });
+});
+
+describe('GraphStore.buildPreview mode:full 与零漂移', () => {
+  function storeWithGraph(): { db: DatabaseSync; g: GraphStore } {
+    const db = new DatabaseSync(':memory:');
+    const g = new GraphStore();
+    g.init(db, undefined, { dimensions: 0 });
+    db.prepare(
+      `INSERT INTO graph_nodes (node_id, name, type, aliases_json, tags_json, current_state, facts_json,
+         status, confidence, source_record_ids_json, families_json, created_time, updated_time)
+       VALUES ('n1', '甲项目', 'project', '[]', '[]', '', '[]', 'active', 0.8, '["r1"]', '["work"]', '', '')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO graph_nodes (node_id, name, type, aliases_json, tags_json, current_state, facts_json,
+         status, confidence, source_record_ids_json, families_json, created_time, updated_time)
+       VALUES ('n2', '乙工具', 'tool', '[]', '[]', '', '[]', 'active', 0.8, '["r2"]', '["work"]', '', '')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO graph_edges (edge_id, from_node_id, to_node_id, relation, status, valid_from, valid_to,
+         confidence, source_record_ids_json, created_time, updated_time)
+       VALUES ('e1', 'n1', 'n2', '导致', 'active', '', '', 0.8, '[]', '', '')`,
+    ).run();
+    return { db, g };
+  }
+
+  it('无 mode 响应 **无 full 键**(零漂移硬判据:键缺席而非 undefined)', () => {
+    const { db, g } = storeWithGraph();
+    try {
+      const r = g.buildPreview() as Record<string, unknown>;
+      expect('full' in r).toBe(false);
+      expect(r.seeds).toBeInstanceOf(Array);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("mode='full' 附全图块:节点/边/因果标记齐全;降级态也带空 full 块", () => {
+    const { db, g } = storeWithGraph();
+    try {
+      const r = g.buildPreview(undefined, 'full');
+      expect(r.full).toBeDefined();
+      expect(r.full!.nodes.map((n) => n.id).sort()).toEqual(['n1', 'n2']);
+      expect(r.full!.edges).toEqual([{ from: 'n1', to: 'n2', relation: '导致', causal: true }]);
+      expect(r.full!.truncated).toBe(false);
+    } finally {
+      db.close();
+    }
+    const fresh = new GraphStore();
+    expect(fresh.buildPreview(undefined, 'full').full).toEqual({ nodes: [], edges: [], truncated: false });
   });
 });
