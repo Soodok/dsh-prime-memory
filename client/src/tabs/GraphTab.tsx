@@ -16,7 +16,8 @@
  * - 邻域不再打 seedId 请求：子图与关系词都从 full 块本地算，少一次往返。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { GraphPreviewResponse } from '../../../src/contract.js';
+import type { GraphPreviewResponse, GraphNodeGetResponse, RecordsMetaResponse, RecordMeta } from '../../../src/contract.js';
+import type { GraphNode } from '../../../src/graph/types.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NButton } from '../ui/primitives.js';
@@ -54,6 +55,10 @@ export function GraphTab(props: { rpc: RpcFn }) {
   const [hops, setHops] = useState(2);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 实体详情卡数据(邻域态自动拉取 graph-node-get + records-meta)。 */
+  const [entityDetail, setEntityDetail] = useState<GraphNode | null>(null);
+  const [sourceRecords, setSourceRecords] = useState<RecordMeta[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const call = useCallback(
     (payload: Record<string, unknown>) =>
@@ -92,6 +97,31 @@ export function GraphTab(props: { rpc: RpcFn }) {
   const stats = board?.stats ?? null;
   const fullBlock = board?.full;
   const seedId = egoSeed ?? board?.seeds[0]?.node.id ?? null;
+
+  // ── 实体详情自动拉取(邻域态下随 seedId 变化刷新) ────────────────
+  useEffect(() => {
+    if (view !== 'ego' || !seedId) { setEntityDetail(null); setSourceRecords([]); return; }
+    let cancelled = false;
+    setDetailLoading(true);
+    rpc('dsh-memory/graph-node-get', { id: seedId })
+      .then((r) => {
+        if (cancelled) return;
+        const resp = (r?.ok ? r.value : null) as GraphNodeGetResponse | null;
+        const node = resp?.node ?? null;
+        setEntityDetail(node);
+        // 拉来源记录元数据
+        const ids = node?.sourceRecordIds?.slice(0, 50) ?? [];
+        if (ids.length === 0) { setSourceRecords([]); return; }
+        return rpc('dsh-memory/records-meta', { ids }).then((mr) => {
+          if (cancelled) return;
+          const metaResp = (mr?.ok ? mr.value : null) as RecordsMetaResponse | null;
+          setSourceRecords(metaResp?.items ?? []);
+        });
+      })
+      .catch(() => { /* 详情卡失败不拖垂主视图 */ })
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, seedId, rpc]);
 
   const meta = useMemo(() => new Map((fullBlock?.nodes ?? []).map((n) => [n.id, n])), [fullBlock]);
   const sub = useMemo(() => egoSubgraph(fullBlock, seedId, hops), [fullBlock, seedId, hops]);
@@ -144,7 +174,11 @@ export function GraphTab(props: { rpc: RpcFn }) {
             ? '加载中…'
             : stats
               ? `节点 ${stats.nodes} · 边 ${stats.edges} · 因果 ${stats.causalEdges}` +
-                (stats.pendingJobs > 0 ? ` · 构建中 ${stats.jobsTotal - stats.pendingJobs}/${stats.jobsTotal}` : '')
+                (stats.pendingJobs > 0 || (stats.deadJobs ?? 0) > 0
+                  ? (stats.deadJobs && stats.deadJobs > 0
+                    ? ` · 投影 完成${stats.jobsTotal - stats.pendingJobs - stats.deadJobs}/失败${stats.deadJobs}/排队${stats.pendingJobs}`
+                    : ` · 构建中 ${stats.jobsTotal - stats.pendingJobs}/${stats.jobsTotal}`)
+                  : '')
               : '—'}
         </span>
         <div style={S.grow} />
@@ -282,6 +316,43 @@ export function GraphTab(props: { rpc: RpcFn }) {
             ) : (
               <p style={S.intro}>这个起点在 {hops} 跳内没有其它可达节点（孤点，或关系还没投影出来）。</p>
             )}
+
+            {/* ── 实体详情卡（自动拉取 graph-node-get + records-meta） ── */}
+            {detailLoading ? (
+              <div style={{ ...S.muted, marginTop: 12 }}>加载实体详情…</div>
+            ) : entityDetail ? (
+              <div style={{ marginTop: 12, padding: '10px 12px', border: '1px solid var(--dsh-mem-border)', borderRadius: 6, fontSize: 12.5, lineHeight: 1.6 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  {entityDetail.name}
+                  <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 6 }}>({entityDetail.type})</span>
+                  {entityDetail.aliases.length > 0 && (
+                    <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 6 }}>别名: {entityDetail.aliases.join(', ')}</span>
+                  )}
+                </div>
+                <div><span style={{ color: 'var(--dsh-mem-text-3)' }}>状态:</span> {entityDetail.status} · <span style={{ color: 'var(--dsh-mem-text-3)' }}>置信度:</span> {(entityDetail.confidence * 100).toFixed(0)}%</div>
+                {entityDetail.currentState && <div style={{ marginTop: 3 }}><span style={{ color: 'var(--dsh-mem-text-3)' }}>当前状态:</span> {entityDetail.currentState}</div>}
+                {entityDetail.facts.length > 0 && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>Facts ({entityDetail.facts.length})</summary>
+                    {entityDetail.facts.filter((f) => f.status === 'active').map((f) => (
+                      <div key={f.id} style={{ paddingLeft: 8 }}>{f.key}: {Array.isArray(f.value) ? f.value.join(', ') : f.value}</div>
+                    ))}
+                  </details>
+                )}
+                {sourceRecords.length > 0 && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>来源记录 ({sourceRecords.length})</summary>
+                    {sourceRecords.map((r) => (
+                      <div key={r.id} style={{ paddingLeft: 8, marginBottom: 2 }}>
+                        <span style={{ color: 'var(--dsh-mem-text-3)' }}>[{r.type}]</span>{' '}
+                        {r.name ?? r.content.slice(0, 60)}
+                        {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 4 }}>{r.updatedAt.slice(0, 10)}</span>}
+                      </div>
+                    ))}
+                  </details>
+                )}
+              </div>
+            ) : null}
           </div>
         )
       ) : null}

@@ -27,6 +27,7 @@ import {
   GRAPH_JOB_BACKOFF_BASE_MS,
   GRAPH_JOB_BATCH,
   GRAPH_JOB_MAX_ATTEMPTS,
+  GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS,
   GRAPH_PRIORITY_BACKFILL,
   GRAPH_PROJECTOR_VERSION,
   GRAPH_VEC_SEED_CAP,
@@ -596,15 +597,17 @@ export class GraphStore {
     const { nodes, edges } = this.loadGraph();
     let pendingJobs = 0;
     let jobsTotal = 0;
+    let deadJobs = 0;
     try {
       pendingJobs = (this.db
         .prepare("SELECT COUNT(1) AS c FROM graph_projection_jobs WHERE status IN ('pending','running','failed')")
         .get() as { c: number }).c;
       jobsTotal = (this.db.prepare('SELECT COUNT(1) AS c FROM graph_projection_jobs').get() as { c: number }).c;
+      deadJobs = (this.db.prepare("SELECT COUNT(1) AS c FROM graph_projection_jobs WHERE status = 'dead'").get() as { c: number }).c;
     } catch (err) {
       this.logger?.warn(`${TAG} 预览 job 计数失败(计数回零): ${err instanceof Error ? err.message : String(err)}`);
     }
-    const r = buildGraphPreview(nodes, edges, { seedId, pendingJobs, jobsTotal });
+    const r = buildGraphPreview(nodes, edges, { seedId, pendingJobs, jobsTotal, deadJobs });
     if (mode === 'full') return { ...r, full: buildFullView(nodes, edges) };
     return r;
   }
@@ -719,7 +722,7 @@ export class GraphStore {
                AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
              ORDER BY priority DESC, created_time ASC LIMIT 1`,
           )
-          .get(GRAPH_PROJECTOR_VERSION, GRAPH_JOB_MAX_ATTEMPTS, nowMs) as JobRow | undefined;
+          .get(GRAPH_PROJECTOR_VERSION, GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS, nowMs) as JobRow | undefined;
         if (!row) return null;
         db.prepare(
           `UPDATE graph_projection_jobs SET status = 'running', attempts = attempts + 1, error = NULL, updated_time = ? WHERE job_id = ?`,
@@ -801,26 +804,29 @@ export class GraphStore {
   }
 
   /**
-   * 投影失败收尾:attempts 已在 claim 时 +1——封顶转 dead(放掉 mapping,允许
-   * 重新入队);未封顶转 failed + 指数退避 nextAttemptAt(mapping 保留防重复入队)。
+   * 投影失败收尾:attempts 已在 claim 时 +1——根据错误分类选不同封顶:
+   * - 永久错误(校验/解析):attempts >= GRAPH_JOB_MAX_ATTEMPTS(3) → dead
+   * - 瞬态错误(aborted/timeout/网络):attempts >= GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS(6) → dead
+   * dead 放掉 mapping(允许下次 backfill 重新入队);未封顶转 failed + 指数退避。
    */
-  fail(jobId: string, error: string): void {
+  fail(jobId: string, error: string, opts?: { transient?: boolean }): void {
     if (!this.db) return;
     try {
       const db = this.db;
       const nowMs = Date.now();
       const nowIso = new Date(nowMs).toISOString();
+      const cap = opts?.transient ? GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS : GRAPH_JOB_MAX_ATTEMPTS;
       this.tx(() => {
         const row = db.prepare('SELECT attempts FROM graph_projection_jobs WHERE job_id = ?').get(jobId) as
           | { attempts: number }
           | undefined;
         if (!row) return;
-        if (row.attempts >= GRAPH_JOB_MAX_ATTEMPTS) {
+        if (row.attempts >= cap) {
           db.prepare(`UPDATE graph_projection_jobs SET status = 'dead', error = ?, updated_time = ? WHERE job_id = ?`).run(
             error.slice(0, 500), nowIso, jobId,
           );
           db.prepare('DELETE FROM graph_job_records WHERE job_id = ?').run(jobId);
-          this.logger?.warn(`${TAG} 投影任务达重试上限,标记 dead(job=${jobId}): ${error.slice(0, 200)}`);
+          this.logger?.warn(`${TAG} 投影任务达重试上限(${opts?.transient ? '瞬态' : '永久'}cap=${cap}),标记 dead(job=${jobId}): ${error.slice(0, 200)}`);
         } else {
           const backoffMs = GRAPH_JOB_BACKOFF_BASE_MS * 2 ** (row.attempts - 1);
           db.prepare(`UPDATE graph_projection_jobs SET status = 'failed', error = ?, next_attempt_at = ?, updated_time = ? WHERE job_id = ?`).run(

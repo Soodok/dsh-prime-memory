@@ -1247,6 +1247,8 @@ export interface GraphPreviewResponse {
     pendingJobs: number;
     /** 全量 job 数(含各状态),"构建中 x/y"的分母——名字即分母,不拿 done 冒充分子。 */
     jobsTotal: number;
+    /** 永久失败作业数(dead),可选(零漂移先例);>0 → UI 拆成"完成/失败/排队"三档显示。 */
+    deadJobs?: number;
   };
   /** mode==='full' 才出现;全图星图轻量块(可见节点×active 边,截断标记 truncated)。
    *  不带此键时响应与旧形状逐字节一致——消费方按需读 `res.full?`。 */

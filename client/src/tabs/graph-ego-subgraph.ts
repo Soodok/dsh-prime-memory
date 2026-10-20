@@ -123,8 +123,8 @@ export function canGrow(full: GraphFull | undefined, seedId: string | null | und
 
 /* ── 关系归组与显示名（清单侧用；拓扑侧不需要） ───────────────────────── */
 
-/** 名字截断字数（与画布标签同口径，两处视图一致才不致“同一个节点两个名字”）。 */
-export const EGO_NAME_CLIP = 8;
+/** 显示宽度预算(半角单位、与 graph-canvas-data 同源: 英文≥20、CJK≥10 字符可见)。 */
+export const EGO_NAME_CLIP = 20;
 
 /** 服务端按边下发的邻居条目（契约 GraphPreviewResponse.seeds[].neighbors 的元素形状）。 */
 export interface RawNeighbor {
@@ -169,5 +169,11 @@ export function groupNeighbors(neighbors: readonly RawNeighbor[]): EgoNeighbor[]
 
 /** 截断显示名（超出加省略号；全名给 title / 清单）。 */
 export function clipName(name: string): string {
-  return name.length > EGO_NAME_CLIP ? `${name.slice(0, EGO_NAME_CLIP)}…` : name;
+  let w = 0;
+  for (let i = 0; i < name.length; i++) {
+    const cw = name.charCodeAt(i) > 0x7f ? 2 : 1;
+    if (w + cw > EGO_NAME_CLIP) return `${name.slice(0, i)}\u2026`;
+    w += cw;
+  }
+  return name;
 }

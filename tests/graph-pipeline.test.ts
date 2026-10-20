@@ -14,6 +14,7 @@ import { GRAPH_PROJECTION_EXAMPLE, getGraphProjectionSystemPrompt } from '../src
 import {
   GRAPH_CONTEXT_EDGE_LIMIT,
   GRAPH_CONTEXT_NODE_LIMIT,
+  isTransientGraphFailure,
   parseProjection,
   runGraphProjection,
   selectContextEdges,
@@ -231,5 +232,21 @@ describe('端到端投影(假 LLM)', () => {
     expect(job.attempts).toBe(1);
     expect(job.nextAttemptAt!).toBeGreaterThan(Date.now());
     db.close();
+  });
+});
+
+describe('瞬态失败分类(isTransientGraphFailure)', () => {
+  it('网关掉断/超时/网络/空输出判瞬态', () => {
+    expect(isTransientGraphFailure('llm aborted: Request was aborted')).toBe(true);
+    expect(isTransientGraphFailure('llm error: terminated')).toBe(true);
+    expect(isTransientGraphFailure('direct empty output: http://x/m 端点返回 0 字符')).toBe(true);
+    expect(isTransientGraphFailure('AbortError: This operation was aborted')).toBe(true);
+    expect(isTransientGraphFailure('fetch failed: ECONNREFUSED')).toBe(true);
+    expect(isTransientGraphFailure('socket hang up')).toBe(true);
+  });
+  it('校验/解析类判永久(不占瞬态重试位)', () => {
+    expect(isTransientGraphFailure('invalid node type: foo')).toBe(false);
+    expect(isTransientGraphFailure('JSON parse failed')).toBe(false);
+    expect(isTransientGraphFailure('sourceRecordIds 引用了批外记录')).toBe(false);
   });
 });

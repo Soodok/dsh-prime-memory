@@ -61,6 +61,8 @@ export interface GraphPreviewStats {
   pendingJobs: number;
   /** 全量 job 数(分母)。 */
   jobsTotal: number;
+  /** 永久失败(dead)作业数,可选(零漂移先例);>0 → UI 拆三档。 */
+  deadJobs?: number;
 }
 
 export interface GraphPreviewResult {
@@ -75,6 +77,7 @@ export interface PreviewOpts {
   neighborLimit?: number;
   pendingJobs?: number;
   jobsTotal?: number;
+  deadJobs?: number;
 }
 
 /** S-2:邻接统计——active 边且两端都可见才计度(双向)。 */
@@ -168,6 +171,7 @@ export function buildGraphPreview(
     causalEdges: visEdges.filter((e) => CAUSAL_SET.has(e.relation)).length,
     pendingJobs: opts.pendingJobs ?? 0,
     jobsTotal: opts.jobsTotal ?? 0,
+    ...(opts.deadJobs != null && opts.deadJobs > 0 ? { deadJobs: opts.deadJobs } : {}),
   };
   const seedLimit = Math.min(Math.max(Math.floor(opts.seedLimit ?? GRAPH_PREVIEW_SEEDS), 1), 20);
   const neighborLimit = Math.min(Math.max(Math.floor(opts.neighborLimit ?? GRAPH_PREVIEW_NEIGHBORS), 1), 40);

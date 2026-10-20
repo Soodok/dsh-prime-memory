@@ -134,8 +134,10 @@ describe('groupNeighbors（按边下发 → 按节点归组）', () => {
   });
 
   it('超 8 字截断加省略号（与画布标签同口径）', () => {
-    expect(clipName('一二三四五六七八九')).toBe('一二三四五六七八…');
+    expect(clipName('一二三四五六七八九十')).toBe('一二三四五六七八九十'); // 10 CJK = 20 单位，正好吃满预算
+    expect(clipName('一二三四五六七八九十a')).toBe('一二三四五六七八九十\u2026'); // 21 单位超预算
     expect(clipName('短')).toBe('短');
-    expect(EGO_NAME_CLIP).toBe(8);
+    expect(clipName('dsh-prime-memory')).toBe('dsh-prime-memory'); // 16 英文字符不截
+    expect(EGO_NAME_CLIP).toBe(20);
   });
 });

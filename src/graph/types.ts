@@ -145,8 +145,19 @@ export const GRAPH_PRIORITY_NEW = 10000;
 /** 存量补投影的优先级(启动/周期补齐;恒低于新蒸馏)。 */
 export const GRAPH_PRIORITY_BACKFILL = 100;
 
-/** 单 job 最大尝试次数:claim 时 +1,达到即转 dead(不再重试)。 */
+/** 单 job 最大尝试次数(永久错误:校验/解析类——3 次不过就 dead)。
+ *  瞬态错误(aborted/timeout/网络)走 GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS。 */
 export const GRAPH_JOB_MAX_ATTEMPTS = 3;
+
+/** 瞬态错误(attempt 不消耗到 3 即 dead):网关负载或超时引起的 aborted、
+ *  terminated、网络抖动、模型空输出——这些与 prompt/数据无关，退避后重试即恢复。
+ *  6 次 ≈ 5 轮退避(~30 分钟)覆盖 local-35 负载低谷。 */
+export const GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS = 6;
+
+/** 图谱投影 LLM 单次调用超时(含整条回退链):沿用 llm.timeoutMs(120s) 在 8-record
+ *  批 + 上下文节点/边 + 12 关系词 prompt 下真机撞线(14 dead 全是 aborted×13 + terminated×1)。
+ *  照 backfill callTimeoutMs 先例给 240s,按「路由数 × 单路由耗时」留余量。 */
+export const GRAPH_PROJECTION_CALL_TIMEOUT_MS = 240_000;
 
 /** 失败指数退避基数:第 n 次失败后 nextAttemptAt = now + base × 2^(n-1)。 */
 export const GRAPH_JOB_BACKOFF_BASE_MS = 60_000;

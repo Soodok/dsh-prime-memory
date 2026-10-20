@@ -11,8 +11,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  NAME_CLIP,
+  LABEL_WIDTH_BUDGET,
   STAR_COUNT,
+  clipByWidth,
   degreeMapOf,
   hash32,
   nodeKeyOf,
@@ -125,9 +126,22 @@ describe('starField 星点背层', () => {
   });
 });
 
-describe('常量口径', () => {
-  it('名字截断字数与径向卡同为 8（两处视图同口径）', () => {
-    expect(NAME_CLIP).toBe(8);
+describe('宽度截断(clipByWidth)', () => {
+  it('预算 = 20 半角单位', () => {
+    expect(LABEL_WIDTH_BUDGET).toBe(20);
+  });
+  it('英文 20 字符不截，21 字符截并加…', () => {
+    const s20 = 'a'.repeat(20);
+    expect(clipByWidth(s20)).toBe(s20);
+    expect(clipByWidth(s20 + 'b')).toBe(`${s20}\u2026`);
+  });
+  it('CJK 每字算 2 单位：10 个汉字不截，11 个截', () => {
+    const cjk10 = '一二三四五六七八九十';
+    expect(clipByWidth(cjk10)).toBe(cjk10);
+    expect(clipByWidth(cjk10 + '一')).toBe(`${cjk10}\u2026`);
+  });
+  it('混合串按累计宽度裁决(dsh-prime-memory 15字不截)', () => {
+    expect(clipByWidth('dsh-prime-memory')).toBe('dsh-prime-memory');
   });
 });
 

@@ -18,6 +18,7 @@ import { normalizeEntityName } from '../graph/apply.js';
 import { tokenize } from '../util/text.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 import type { GraphEdge, GraphNode, GraphProjectionResult } from '../graph/types.js';
+import { GRAPH_PROJECTION_CALL_TIMEOUT_MS } from '../graph/types.js';
 import { errDetail } from '../util/filelog.js';
 
 /** claim 上下文装配的节点上限(词法相关 + 最近更新,总量封顶)。 */
@@ -83,6 +84,30 @@ export function selectContextEdges(
 }
 
 /**
+ * 瞬态失败判据(与永久错误分流,由 GraphStore.fail 选不同重试封顶)。
+ *
+ * 真机归因(2026-10-20 审计):14 个 dead 全是 `llm aborted: Request was aborted` ×13 +
+ * `llm error: terminated` ×1——零校验类失败,全部是网关负载/超时把在飞请求掉断。
+ * 这类错误与 prompt/数据无关,退避后重试即可恢复,不该和“模型真的产坏了”同封顶。
+ * 匹配串源自 callLLM/callRoute/callDirect 的实际抛出形态(小写子串包含)。
+ */
+export function isTransientGraphFailure(msg: string): boolean {
+  const low = msg.toLowerCase();
+  return (
+    low.includes('aborted') ||
+    low.includes('timeout') ||
+    low.includes('timed out') ||
+    low.includes('terminated') ||
+    low.includes('empty output') ||
+    low.includes('econn') ||
+    low.includes('etimedout') ||
+    low.includes('fetch failed') ||
+    low.includes('socket hang') ||
+    low.includes('network')
+  );
+}
+
+/**
  * 执行一次图谱投影(claim 一个 job → LLM → 校验落库;无 job 时静默返回)。
  * 返回是否实际认领了任务(泵据此决定是否续排)。失败转 fail(退避/封顶由
  * GraphStore 管),不向 runner 上抛。
@@ -106,11 +131,16 @@ export async function runGraphProjection(
       maxTokens: resolveLayerTokens(cfg, 'graph'),
       layer: 'graph',
       logger,
+      // 自带宽超时信号:不传则沿用 cfg.llm.timeoutMs(120s)——图谱批 prompt 在本地网关上
+      // 实测 ~2min/job,正好撞线(14 dead 根因);照 backfill callTimeoutMs 先例给 240s。
+      signal: AbortSignal.timeout(GRAPH_PROJECTION_CALL_TIMEOUT_MS),
     });
     graphs.complete(job.id, parseProjection(raw, logger), { now: new Date().toISOString() });
   } catch (err) {
-    logger.warn(`[memory] 图谱投影失败(job=${job.id},attempts=${job.attempts}): ${errDetail(err)}`);
-    graphs.fail(job.id, errDetail(err));
+    const detail = errDetail(err);
+    logger.warn(`[memory] 图谱投影失败(job=${job.id},attempts=${job.attempts}): ${detail}`);
+    // 瞬态(网关掉断/超时/空输出)与永久(校验/解析)分档——前者多给 3 次退避重试机会。
+    graphs.fail(job.id, detail, { transient: isTransientGraphFailure(detail) });
   }
   return true;
 }

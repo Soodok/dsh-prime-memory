@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Graph } from '@antv/g6';
 import type { EdgeData, IElementEvent, NodeData } from '@antv/g6';
 import {
-  NAME_CLIP,
+  clipByWidth,
   hash32,
   nodeKeyOf,
   radiusForDegree,
@@ -119,10 +119,7 @@ export function GraphCanvas(props: {
           fillOpacity: 0.9,
           stroke: (d: NodeData) => (isSeed(d) ? strongColor : 'transparent'),
           lineWidth: (d: NodeData) => (isSeed(d) ? 2.5 : 0),
-          labelText: (d: NodeData) => {
-            const name = String(d.data?.name ?? '');
-            return name.length > NAME_CLIP ? `${name.slice(0, NAME_CLIP)}…` : name;
-          },
+          labelText: (d: NodeData) => clipByWidth(String(d.data?.name ?? '')),
           labelFill: textColor,
           labelFontSize: 10,
           labelFontWeight: (d: NodeData) => (isSeed(d) ? 'bold' : 'normal'),

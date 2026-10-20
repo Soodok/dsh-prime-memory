@@ -12,8 +12,24 @@ import { seedPositions } from './graph-seed-layout.js';
 
 export type GraphFull = NonNullable<GraphPreviewResponse['full']>;
 
-/** 名字截断字数(与径向卡同值,两处视图口径一致)。 */
-export const NAME_CLIP = 8;
+/** 标签显示宽度预算(半角单位):≥20 英文字符可见、≥10 CJK 可见。
+ *  旧版写死 8 字——英文实体名(如 “dsh-prime-memory”)整个被…掉,
+ *  只有悬浮 tooltip 才能看全称;而用户要求“不悬浮也能读”。 */
+export const LABEL_WIDTH_BUDGET = 20;
+
+/**
+ * 按显示宽度截断(CJK=2 单位、latin=1 单位)。
+ * 超预算时截并加…，不超则原样返回。
+ */
+export function clipByWidth(name: string, budget: number = LABEL_WIDTH_BUDGET): string {
+  let w = 0;
+  for (let i = 0; i < name.length; i++) {
+    const cw = name.charCodeAt(i) > 0x7f ? 2 : 1;
+    if (w + cw > budget) return `${name.slice(0, i)}\u2026`;
+    w += cw;
+  }
+  return name;
+}
 /** 星点条数(纯装饰层;再多会拖 DOM,再少不像星空)。 */
 export const STAR_COUNT = 90;
 /** 星点半径/透明度钳制区间(视觉下限:再小就看不见;上限:再大就成光斑)。 */
