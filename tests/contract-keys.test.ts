@@ -89,6 +89,7 @@ const ENDPOINTS = [
   'dsh-memory/graph-search',
   'dsh-memory/graph-node-get',
   'dsh-memory/graph-preview',
+  'dsh-memory/graph-cleanup-dead',
   'dsh-memory/scenes',
   'dsh-memory/persona',
   'dsh-memory/log-tail',
@@ -169,10 +170,10 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 64 contracted endpoints, records-delete and graph included', () => {
-    // 64 = 63 + `graph-preview`（面板图谱预览:种子推荐榜+邻域展开）。上一阶 63 = 62 + `records-meta`。
-    expect(ENDPOINTS.length).toBe(64);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(64);
+  it('exposes exactly the 65 contracted endpoints, records-delete and graph included', () => {
+    // 65 = 64 + `graph-cleanup-dead`（清理历史 dead 作业）。上一阶 64 = 63 + `graph-preview`。
+    expect(ENDPOINTS.length).toBe(65);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(65);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {

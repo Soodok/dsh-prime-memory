@@ -1259,6 +1259,10 @@ export interface GraphPreviewResponse {
   };
 }
 
+/** dsh-memory/graph-cleanup-dead(清理历史失败作业:删除 status='dead' 的行,不影响已重入队的记录)。 */
+export interface GraphCleanupDeadRequest { olderThanMs?: number }
+export interface GraphCleanupDeadResponse { removed: number }
+
 /** dsh-memory/scenes(两族拼接的混合视图)。 */
 export interface ScenesResponse {
   items: Array<{
@@ -1841,6 +1845,7 @@ export interface DshMemoryRequestMap {
   'dsh-memory/graph-search': GraphSearchRequest;
   'dsh-memory/graph-node-get': GraphNodeGetRequest;
   'dsh-memory/graph-preview': GraphPreviewRequest;
+  'dsh-memory/graph-cleanup-dead': GraphCleanupDeadRequest;
   'dsh-memory/scenes': Record<string, never>;
   'dsh-memory/persona': Record<string, never>;
   'dsh-memory/log-tail': LogTailRequest;
@@ -1908,6 +1913,7 @@ export interface DshMemoryResponseMap {
   'dsh-memory/graph-search': GraphSearchResponse;
   'dsh-memory/graph-node-get': GraphNodeGetResponse;
   'dsh-memory/graph-preview': GraphPreviewResponse;
+  'dsh-memory/graph-cleanup-dead': GraphCleanupDeadResponse;
   'dsh-memory/scenes': ScenesResponse;
   'dsh-memory/persona': PersonaResponse;
   'dsh-memory/log-tail': LogTailResponse;

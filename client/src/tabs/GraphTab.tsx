@@ -181,6 +181,18 @@ export function GraphTab(props: { rpc: RpcFn }) {
                   : '')
               : '—'}
         </span>
+        {/* 清理历史 dead 作业(仅当有失败时显示) */}
+        {stats && (stats.deadJobs ?? 0) > 0 ? (
+          <button
+            style={{ ...S.segBtn, fontSize: 11, padding: '1px 8px', cursor: 'pointer', marginLeft: 6 }}
+            title={`删除 ${stats.deadJobs} 行历史失败记录(它们覆盖的记录已在排队中，不影响投影)`}
+            onClick={() => {
+              rpc('dsh-memory/graph-cleanup-dead', {}).then(() => loadBoard()).catch(() => {});
+            }}
+          >
+            清理失败
+          </button>
+        ) : null}
         <div style={S.grow} />
         {/* 双态切换 */}
         <div style={S.seg}>

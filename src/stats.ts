@@ -146,6 +146,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/graph-search',
   'dsh-memory/graph-node-get',
   'dsh-memory/graph-preview',
+  'dsh-memory/graph-cleanup-dead',
   'dsh-memory/scenes',
   'dsh-memory/persona',
   'dsh-memory/log-tail',
@@ -2263,6 +2264,14 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         return mode === 'full' ? { ...zero, full: { nodes: [], edges: [], truncated: false } } : zero;
       }
       return graph.buildPreview(seedId, mode);
+    }
+
+    case 'dsh-memory/graph-cleanup-dead': {
+      const graph = stores.graph;
+      if (!graph) return { removed: 0 };
+      const p = (payload ?? {}) as { olderThanMs?: unknown };
+      const ms = typeof p.olderThanMs === 'number' && p.olderThanMs > 0 ? p.olderThanMs : undefined;
+      return { removed: graph.cleanupDead(ms) };
     }
 
     case 'dsh-memory/scenes': {

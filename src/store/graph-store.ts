@@ -612,6 +612,26 @@ export class GraphStore {
     return r;
   }
 
+  /**
+   * 清理历史 dead 作业行（纯审计痕迹删除，不影响已重入队的记录）。
+   * olderThanMs: 只删早于 now-olderThanMs 的；缺省删全部 dead。
+   */
+  cleanupDead(olderThanMs?: number): number {
+    if (!this.db) return 0;
+    try {
+      const cutoff = olderThanMs != null && olderThanMs > 0
+        ? new Date(Date.now() - olderThanMs).toISOString()
+        : undefined;
+      const result = cutoff
+        ? this.db.prepare("DELETE FROM graph_projection_jobs WHERE status = 'dead' AND updated_time < ?").run(cutoff)
+        : this.db.prepare("DELETE FROM graph_projection_jobs WHERE status = 'dead'").run();
+      return Number(result.changes ?? 0);
+    } catch (err) {
+      this.logger?.warn(`${TAG} cleanupDead 失败(忽略): ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
   // ============================
   // 投影 job 队列
   // ============================
