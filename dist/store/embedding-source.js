@@ -8,7 +8,7 @@
  *   embedding.allowLocalModels 上限约束;
  * - 活切换链(后台执行,RPC 立即返回 accepted,进度靠轮询):
  *   安装运行时(首次本地)→ 预热加载 → 换服务 + swapProvider(维度变化 drop 向量表)
- *   → 后台全量重嵌(L1/L0 计数进度,可取消)→ 持久化状态。
+ *   → 后台全量重嵌(L1 计数进度,可取消;l0 计数进度字段随契约保留恒 0)→ 持久化状态。
  *   失败语义:异常(安装失败/模型加载失败/db 拒绝)→ 状态不持久化,重启回到旧源;
  *   重嵌取消/部分失败 → 已切换(物理表即新维度,meta 已同步),缺失向量由周期
  *   backfill 补齐——不回滚(回滚需要再 drop 一次表,得不偿失)。
@@ -330,7 +330,7 @@ export class EmbeddingManager {
      * 门槛全部前置,且**宁可拒绝也不谎报**:以下四种情况直接抛错而非"成功受理":
      *
      * - 插件已卸载 / 重嵌已在跑 / 嵌入源切换占着锁:并发语义,重复触发无意义;
-     * - 嵌入服务未就绪:`L1Store.reindex` / `L0Store.reindex` 会**静默短路**成
+     * - 嵌入服务未就绪:`L1Store.reindex` 会**静默短路**成
      *   `0/0/0`,受理了就等于告诉用户"重建成功、零条待补"——而真相是它根本没开始。
      *
      * 用抛错而不是返回 `{accepted:false, error}`:与 `embedding-model-delete` 等既有
@@ -345,7 +345,7 @@ export class EmbeddingManager {
             throw new Error('嵌入源切换进行中，请稍后再试');
         if (!this.currentInfo)
             throw new Error('嵌入源已关闭，重建无意义（请先启用嵌入）');
-        if (!this.deps.l1.vectorsReady() || !this.deps.l0.vectorsReady()) {
+        if (!this.deps.l1.vectorsReady()) {
             throw new Error('嵌入服务未就绪（模型加载中或推理运行时未安装），请稍后再试');
         }
         void this.reindexNow()
@@ -435,7 +435,6 @@ export class EmbeddingManager {
             const oldLocal = this.localSvc;
             this.localSvc = next.source === 'local' ? svc : null;
             this.current = svc;
-            this.deps.l0.setEmbeddingService(svc);
             this.deps.l1.setEmbeddingService(svc);
             oldLocal?.close();
             let pendingNote = '';
@@ -510,15 +509,9 @@ export class EmbeddingManager {
                 shouldCancel: () => this.reindexCancel,
             });
             failedTotal += r1.failed;
-            const r0 = await this.deps.l0.reindex({
-                onProgress: (done, total) => {
-                    this.reindex.l0Done = done;
-                    this.reindex.l0Total = total;
-                },
-                shouldCancel: () => this.reindexCancel,
-            });
-            failedTotal += r0.failed;
-            const cancelled = !!(r1.cancelled || r0.cancelled);
+            // T8.4:l0 向量腿随写停退役(表清空后无缺失,无需重建);契约的
+            // l0Done/l0Total 字段保留恒 0,client 进度面零改动。
+            const cancelled = !!r1.cancelled;
             this.reindex.cancelled = cancelled;
             this.reindex.running = false;
             this.invalidateVecCache(); // 收尾:计数必须立刻反映重建结果(TTL 可能还压着 1s 旧值)

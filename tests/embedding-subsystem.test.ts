@@ -378,10 +378,9 @@ describe('embedding manager', () => {
       countL0: () => 0,
       countL0VecMissing: () => 0,
     } as never;
-    const l0 = { setEmbeddingService: vi.fn() } as never;
     const l1 = { setEmbeddingService: vi.fn() } as never;
     const manager = new EmbeddingManager({
-      dataDir, cfg: c, db, l0, l1, sourceStore: store, installer, downloader,
+      dataDir, cfg: c, db, l1, sourceStore: store, installer, downloader,
       initial: { svc: new NoopEmbeddingService(), dims: 0 },
       logger: noopLogger,
     });
@@ -419,7 +418,7 @@ describe('makeLocalServiceFactory', () => {
  * 手动重建(embedding-reindex)。
  *
  * 这组用例的重点**不是**"能不能跑起来",而是**该拒绝的时候有没有拒绝**:
- * `L1Store.reindex` / `L0Store.reindex` 在向量能力未就绪时静默返回 0/0/0,
+ * `L1Store.reindex` 在向量能力未就绪时静默返回 0/0/0(l0 腿随 T8.4 写停退役),
  * 若入口不设门槛,受理一个"根本不会跑"的请求就等于向用户谎报"重建成功、零条待补"。
  * 因此每条拒绝路径都要同时断言 **抛错** 且 **下游一次都没被调用**。
  */
@@ -432,10 +431,8 @@ describe('manual reindex (embedding-reindex)', () => {
     const downloader = new ModelDownloadQueue(dataDir, { mirror: 'https://hf-mirror.com' });
     const installer = new RuntimeInstaller(dataDir, PINNED_TRANSFORMERS_VERSION, { logger: noopLogger });
     const l1Reindex = vi.fn(async () => ({ written: 1, failed: 0, skipped: 0 }));
-    const l0Reindex = vi.fn(async () => ({ written: 1, failed: 0, skipped: 0 }));
     const ready = over.vectorsReady ?? true;
     const l1 = { setEmbeddingService: vi.fn(), vectorsReady: () => ready, reindex: l1Reindex } as never;
-    const l0 = { setEmbeddingService: vi.fn(), vectorsReady: () => ready, reindex: l0Reindex } as never;
     const db = {
       swapProvider: vi.fn(() => ({ ok: true, needsReindex: false })),
       markEmbeddingSynced: vi.fn(),
@@ -457,9 +454,9 @@ describe('manual reindex (embedding-reindex)', () => {
       ? { svc: new NoopEmbeddingService(), dims: 0 }
       : { svc, dims: 8, providerInfo: { provider: 'remote', model: 'm', dimensions: 8 } };
     const manager = new EmbeddingManager({
-      dataDir, cfg: cfg(), db, l0, l1, sourceStore: store, installer, downloader, initial, logger: noopLogger,
+      dataDir, cfg: cfg(), db, l1, sourceStore: store, installer, downloader, initial, logger: noopLogger,
     });
-    return { manager, l1Reindex, l0Reindex };
+    return { manager, l1Reindex };
   }
 
   it('嵌入源关闭（无 providerInfo）→ 拒绝，且下游一次都没跑', async () => {
@@ -478,8 +475,8 @@ describe('manual reindex (embedding-reindex)', () => {
     manager.dispose();
   });
 
-  it('受理后跑 L1+L0；running 是同步置位的，并发第二次触发立即被拒', async () => {
-    const { manager, l1Reindex, l0Reindex } = await mk();
+  it('受理后跑 L1；running 是同步置位的，并发第二次触发立即被拒', async () => {
+    const { manager, l1Reindex } = await mk();
     let release: () => void = () => {};
     l1Reindex.mockImplementation(
       () => new Promise((r) => { release = () => r({ written: 0, failed: 0, skipped: 0 }); }),
@@ -495,7 +492,6 @@ describe('manual reindex (embedding-reindex)', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     expect((await manager.snapshot()).reindex.running).toBe(false);
-    expect(l0Reindex).toHaveBeenCalledTimes(1);
     manager.dispose();
   });
   
@@ -522,14 +518,10 @@ describe('manual reindex (embedding-reindex)', () => {
   });
   
   it('失败条数与取消标志会落进 last（不能只报“跑完了”）', async () => {
-    const { manager, l1Reindex, l0Reindex } = await mk();
+    const { manager, l1Reindex } = await mk();
     l1Reindex.mockImplementation(async (opts?: { onProgress?: (d: number, t: number) => void }) => {
       opts?.onProgress?.(4, 4);
       return { written: 3, failed: 1, skipped: 0 };
-    });
-    l0Reindex.mockImplementation(async (opts?: { onProgress?: (d: number, t: number) => void }) => {
-      opts?.onProgress?.(2, 2);
-      return { written: 2, failed: 0, skipped: 0 };
     });
     manager.startReindex();
     for (let i = 0; i < 50; i++) {
@@ -537,7 +529,7 @@ describe('manual reindex (embedding-reindex)', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     const last = (await manager.snapshot()).reindex.last;
-    expect([last!.processed, last!.planned, last!.failed]).toEqual([6, 6, 1]);
+    expect([last!.processed, last!.planned, last!.failed]).toEqual([4, 4, 1]);
     manager.dispose();
   });
   

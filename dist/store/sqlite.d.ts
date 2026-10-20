@@ -12,6 +12,7 @@ export interface StoreCapabilities {
 }
 import { CostLedger } from './cost-ledger.js';
 import type { BucketRow, CostAggregate, CostByLayer } from './cost-ledger.js';
+import { L0WatermarkStore } from './l0-watermark.js';
 export type { BucketRow, CostAggregate, CostByLayer } from './cost-ledger.js';
 import type { CostByModel } from '../contract.js';
 import { GraphStore } from './graph-store.js';
@@ -57,6 +58,8 @@ export declare class MemoryDb {
     readonly costLedger: CostLedger;
     /** 图谱存储(graph_* 表族;init 独立 try/catch,失败仅图谱 no-op)。 */
     readonly graphStore: GraphStore;
+    /** L0 水位表(T8.4 写停;§A 恢复幂等判据的数据源,init 内建表+基线物化)。 */
+    readonly l0Watermark: L0WatermarkStore;
     private stmtUpsertL0;
     private stmtGetL0;
     private stmtL0Exists;

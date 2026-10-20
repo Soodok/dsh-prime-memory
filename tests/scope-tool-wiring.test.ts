@@ -68,9 +68,8 @@ afterAll(async () => {
 
 async function buildStores(): Promise<Parameters<typeof registerMemoryTools>[2]> {
   const l1 = new L1Store(dataDir, db, undefined, 'keyword', noopLogger, 0);
-  const l0 = new L0Store(dataDir, db);
+  const l0 = new L0Store(db);
   await l1.init();
-  await l0.init();
   const scenes = { chat: new SceneStore(dataDir, 'chat'), work: new SceneStore(dataDir, 'work') };
   await scenes.chat.init();
   await scenes.work.init();

@@ -1,6 +1,7 @@
 /**
  * L0 捕获 Hook:订阅 session/event,按轮次缓冲 user/assistant 消息,
- * turn/end 时清洗并交给 Runner 落盘 + 触发蒸馏。
+ * turn/end 时清洗并交给 Runner 蒸馏 + 登记水位(T8.4 写停:正文不落库,
+ * 历史读面由 DRSC 投影承接)。
  *
  * 冷启动保护:插件激活时间之前的事件不捕获(防止恢复会话时倾倒全部历史)。
  */
@@ -11,7 +12,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
 import type { MemoryConfig } from '../config.js';
 import type { MemoryRunner } from '../pipeline/runner.js';
 import type { SessionModeStore } from '../store/session-modes.js';
-import type { L0Store } from '../store/l0.js';
+import type { L0WatermarkStore } from '../store/l0-watermark.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { ConversationAnchor, ConversationMessage, MemoryLogger } from '../types.js';
 import { blocksToText } from '../util/text.js';
@@ -100,15 +101,25 @@ export class CaptureBuffers {
   }
 }
 
+/** 该批消息里已知的最大 step(水位 last_step 登记用;无 step 锚点返回 undefined)。 */
+function lastStepOf(messages: ConversationMessage[]): number | undefined {
+  let step: number | undefined;
+  for (const m of messages) {
+    const s = m.anchor?.step;
+    if (typeof s === 'number' && (step === undefined || s > step)) step = s;
+  }
+  return step;
+}
+
 /**
- * 注册 L0 捕获。返回 L0 串行链的冲刷函数(dispose 序在关库前 await,
- * 排队中的 turn 消息先落盘);capture 关闭时返回 undefined。
+ * 注册 L0 捕获。返回冲刷函数(dispose 序 await;写停后无排队写,恒立即完成)。
+ * capture 关闭时返回 undefined。
  */
 export function registerCapture(
   ctx: Context,
   cfg: MemoryConfig,
   runner: MemoryRunner,
-  l0: L0Store,
+  watermark: L0WatermarkStore,
   logger: MemoryLogger,
   live: LiveSettingsHandle,
   modes: SessionModeStore,
@@ -118,9 +129,13 @@ export function registerCapture(
   const buffers = new CaptureBuffers();
   // task_8 一次性提示标记:宿主读日志服务不可得时只提示一次(防每次 resume 刷屏)
   let warnedRecoveryUnavailable = false;
-  // L0 即时落盘链:turn/end 立刻写,不被蒸馏队列(慢 LLM 调用)阻塞;
-  // 串行化保证同轮次顺序与单次写入(进程退出时排队中的 L0 不再依赖蒸馏完成)
-  let l0Queue: Promise<void> = Promise.resolve();
+  // T8.4 写停(drsc-redact-memory-wiring R6):l0 正文三表(l0_conversations/l0_fts/
+  // l0_vec)与 JSONL 事实源一并退役——历史读面由 DRSC 投影供给,本地只剩水位表
+  // 做 §A 恢复幂等自检。蒸馏直传不经 DRSC(capture 单点脱敏照旧)。
+  // 水位登记是同步 SQLite 写,事件循环天然串行,无需再排队。
+  const settleTurn = (sid: string, turn: number, messages: ConversationMessage[]): void => {
+    watermark.record(sid, turn, lastStepOf(messages));
+  };
 
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     try {
@@ -169,14 +184,9 @@ export function registerCapture(
               .map(([k, v]) => `${k}=${v}`)
               .join('/')} ,session=${sid},mode=${mode})`,
           );
-          // L0 立刻落盘(不等蒸馏)
-          const n = messages.length;
-          l0Queue = l0Queue
-            .then(() => l0.append(sid, messages))
-            .then(() => logger.info(`[memory] L0 落盘 ${n} 条`))
-            .catch((err) =>
-              logger.warn(`[memory] L0 落盘失败: ${err instanceof Error ? err.message : String(err)}`),
-            );
+          // 写停:水位登记即"落盘"(正文由 DRSC 投影承接);蒸馏直传照旧
+          settleTurn(sid, turn, messages);
+          logger.info(`[memory] L0 写停登记 turn=${turn}(正文不落库,历史面经 DRSC)`);
           runner.enqueue(sid, messages, mode);
         }
       }
@@ -224,15 +234,15 @@ export function registerCapture(
           }
           events = degraded;
         }
-        const watermark = l0.maxCapturedTurn(sid);
-        const brackets = foldRecoverableTurns(events, watermark);
+        const watermarkTurn = watermark.maxTurn(sid);
+        const brackets = foldRecoverableTurns(events, watermarkTurn);
         if (brackets.length === 0) return;
         let recovered = 0;
         let skipped = 0;
         let total = 0;
         for (const bracket of brackets) {
-          if (l0.hasAnyL0Message(sid, bracket.turn)) {
-            // 部分写残行:水位线只判"整轮无",存在性检查兜底——整轮跳过,宁少收不重复
+          if (watermark.hasAny(sid, bracket.turn)) {
+            // 水位表判"该轮已捕获":整轮跳过,宁少收不重复(≡ 退役前行存在性检查)
             skipped += 1;
             continue;
           }
@@ -240,18 +250,12 @@ export function registerCapture(
           if (messages.length === 0) continue;
           recovered += 1;
           total += messages.length;
-          const n = messages.length;
-          l0Queue = l0Queue
-            .then(() => l0.append(sid, messages))
-            .then(() => logger.info(`[memory] L0 恢复落盘 ${n} 条`))
-            .catch((err) =>
-              logger.warn(`[memory] L0 恢复落盘失败: ${err instanceof Error ? err.message : String(err)}`),
-            );
+          settleTurn(sid, bracket.turn, messages);
           runner.enqueue(sid, messages, mode);
         }
         if (recovered > 0 || skipped > 0) {
           logger.info(
-            `[memory] resume 对账:水位线 ${watermark ?? '无'} → 恢复 ${recovered} 轮 ${total} 条,幂等跳过 ${skipped} 轮(session=${sid})`,
+            `[memory] resume 对账:水位线 ${watermarkTurn ?? '无'} → 恢复 ${recovered} 轮 ${total} 条,幂等跳过 ${skipped} 轮(session=${sid})`,
           );
         }
       } catch (err) {
@@ -260,10 +264,9 @@ export function registerCapture(
     },
   );
 
-  // 冲刷 = 等待串行链排空(链上每环自带 catch,永不 reject)。
-  // 注:极小概率在 await 期间又入队的新消息会落到链尾——其 JSONL 事实源照写、
-  // DB 写入由 upsert 内部兜底(关库后 warn),下次重建自愈。
-  return () => l0Queue;
+  // 冲刷:写停后无排队写(水位登记同步完成),恒立即完成。保留异步签名
+  // 供 dispose 序 await(index.ts 停机顺序不变)。
+  return async () => {};
 }
 
 /**

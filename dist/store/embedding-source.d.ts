@@ -1,7 +1,6 @@
 import type { MemoryConfig } from '../config.js';
 import type { MemoryLogger } from '../types.js';
 import type { EmbeddingProviderInfo, EmbeddingService } from './embedding.js';
-import type { L0Store } from './l0.js';
 import type { L1Store } from './l1.js';
 import { LocalEmbeddingService } from './local-embedding.js';
 import { ModelDownloadQueue } from './download-queue.js';
@@ -74,7 +73,6 @@ export interface EmbeddingManagerDeps {
      *  否则设置页里的编辑即时生效不到活切换。 */
     getEff?: () => MemoryConfig;
     db: MemoryDb;
-    l0: L0Store;
     l1: L1Store;
     sourceStore: EmbeddingSourceStore;
     installer: RuntimeInstaller;
@@ -155,7 +153,7 @@ export declare class EmbeddingManager {
      * 门槛全部前置,且**宁可拒绝也不谎报**:以下四种情况直接抛错而非"成功受理":
      *
      * - 插件已卸载 / 重嵌已在跑 / 嵌入源切换占着锁:并发语义,重复触发无意义;
-     * - 嵌入服务未就绪:`L1Store.reindex` / `L0Store.reindex` 会**静默短路**成
+     * - 嵌入服务未就绪:`L1Store.reindex` 会**静默短路**成
      *   `0/0/0`,受理了就等于告诉用户"重建成功、零条待补"——而真相是它根本没开始。
      *
      * 用抛错而不是返回 `{accepted:false, error}`:与 `embedding-model-delete` 等既有

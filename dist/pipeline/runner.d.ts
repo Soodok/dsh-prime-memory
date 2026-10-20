@@ -14,8 +14,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type MemoryConfig } from '../config.js';
 import type { LiveSettingsHandle } from '../settings.js';
+import type { DrscClient } from '../clients/drsc.js';
 import type { GraphStore } from '../store/graph-store.js';
-import type { L0Store } from '../store/l0.js';
 import type { L1Store } from '../store/l1.js';
 import type { PersonaStore } from '../store/persona.js';
 import type { SceneStore } from '../store/scenes.js';
@@ -23,7 +23,11 @@ import type { StateStore } from '../store/state.js';
 import type { ConversationMessage, ExtractMode, MemoryFamily, MemoryLogger } from '../types.js';
 import type { FamilyStates } from './l1.js';
 export interface MemoryStores {
-    l0: L0Store;
+    /**
+     * DRSC 客户端(T8.4 读切):蒸馏背景窗的历史供给面(op=session&tail&redact=1)。
+     * 缺席(测试缝/未装配)时背景窗为空数组;拉取失败空窗降级,不抛穿管线。
+     */
+    drsc?: DrscClient;
     l1: L1Store;
     scenes: Record<MemoryFamily, SceneStore>;
     persona: Record<MemoryFamily, PersonaStore>;
@@ -172,9 +176,18 @@ export declare class MemoryRunner {
     private persistPending;
     private runTurn;
     /**
+     * 蒸馏背景窗(T8.4 读切,task_19):DRSC 会话尾窗(redact 臂)→ ConversationMessage。
+     * - 形状映射:segment 行 → 消息(drscRowToConversationMessage;非 user/assistant 段跳过);
+     * - 坐标剔除:切片自身轮次整轮剔除(尾窗在 DRS 30s interval 同步后会含刚捕获
+     *   的 turn——旧 l0 读面按消息 id 剔除,跨系统 id 不同构,按坐标等价替身);
+     * - 报错口径:collector 缺席/超时 → warn 后空窗降级,**不抛穿蒸馏管线**
+     *   (工具面 conversation_search 的显式报错口径在 tools 层分清,spec R7)。
+     */
+    private drscBackground;
+    /**
      * 抽取并消费一个会话切片:成功才把切片移出桶并推进爬坡阈值;失败保留切片待重试。
-     * 调用方已保证切片达到生效阈值(或 force)。背景参考按会话从 L0 现查并剔除切片
-     * 自身(ADR-0003:会话间互不污染、重启不丢背景)。
+     * 调用方已保证切片达到生效阈值(或 force)。背景参考按会话从 DRSC 尾窗现查并
+     * 剔除切片自身轮次(ADR-0003:会话间互不污染、重启不丢背景)。
      */
     private extractSessionSlice;
 }

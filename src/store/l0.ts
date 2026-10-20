@@ -1,129 +1,18 @@
 /**
- * L0 原始对话存储(双写架构):
- * - conversations/YYYY-MM-DD.jsonl:追加式事实源;
- * - MemoryDb(SQLite):主检索引擎——检索不再按天扫文件、现建内存索引。
+ * L0 存量计数门面(T8.4 l0 写路径退役后)。
+ *
+ * capture 已停写 l0 正文三表与 JSONL 事实源(见 hooks/capture.ts 与
+ * store/l0-watermark.ts),历史读面(recentBySession / search)改经
+ * `clients/drsc.ts` 的 DrscClient(硬依赖,无本地回退)——本类只剩状态
+ * 面板的两个只读计数(今日捕获 / 按会话累计)。task_22 存量清退后表为
+ * 空壳,计数自然归零,读路径无需判空。
  */
-import { existsSync, promises as fs } from 'node:fs';
-import * as path from 'node:path';
-import type { ConversationMessage, L0MessageRecord, MemoryLogger } from '../types.js';
-import { EmbedHelper, NoopEmbeddingService, type EmbeddingService } from './embedding.js';
-import { appendJsonl, dayKey, ensureDir, nowIso, readJsonl } from '../util/io.js';
-import { rrfMerge } from './search-utils.js';
-import { isZeroVector, type MemoryDb } from './sqlite.js';
-
-/** 官方过度召回倍数(conversation-search:limit × 3)。 */
-const CANDIDATE_MULTIPLIER = 3;
+import type { MemoryDb } from './sqlite.js';
 
 export class L0Store {
-  private readonly dir: string;
-  private readonly legacyDir: string;
-  private readonly helper: EmbedHelper;
-  private embedSvc: EmbeddingService;
-  private readonly logger?: MemoryLogger;
+  constructor(private readonly db: MemoryDb) {}
 
-  constructor(
-    dataDir: string,
-    private readonly db: MemoryDb,
-    embed: EmbeddingService = new NoopEmbeddingService(),
-    logger?: MemoryLogger,
-  ) {
-    this.dir = path.join(dataDir, 'conversations');
-    this.legacyDir = path.join(dataDir, 'l0');
-    this.embedSvc = embed;
-    this.helper = new EmbedHelper(embed, logger);
-    this.logger = logger;
-  }
-
-  async init(): Promise<void> {
-    await ensureDir(this.dir);
-    await this.importLegacy();
-  }
-
-  /** 旧版 l0/*.jsonl 一次性导入检索库,成功后目录改名 l0.imported/。 */
-  private async importLegacy(): Promise<void> {
-    if (!existsSync(this.legacyDir)) return;
-    try {
-      const files = await fs.readdir(this.legacyDir).catch(() => [] as string[]);
-      let imported = 0;
-      let total = 0;
-      for (const f of files.sort()) {
-        if (!f.endsWith('.jsonl')) continue;
-        const records = await readJsonl<L0MessageRecord>(path.join(this.legacyDir, f));
-        // 最小有效性门(同 L1 的 importLegacy):坏行读取时丢弃,按 valid 数判迁移完成
-        const valid = records.filter((r) => r && typeof r.id === 'string' && r.content);
-        const badCount = records.length - valid.length;
-        if (badCount > 0) {
-          this.logger?.warn(`[memory] 旧版 L0 文件 ${f} 丢弃 ${badCount} 条坏行(缺 id/content)`);
-        }
-        if (valid.length > 0) {
-          total += valid.length;
-          if (this.db.upsertL0Batch(valid)) imported += valid.length;
-        }
-      }
-      // 只有全部批次入库成功(或目录为空)才改名,避免数据被改名带走
-      if (imported === total) {
-        const renamed = await fs
-          .rename(this.legacyDir, `${this.legacyDir}.imported`)
-          .then(
-            () => true,
-            () => false,
-          );
-        if (renamed) {
-          this.logger?.info(`[memory] 旧版 L0 数据已导入检索库 ${imported} 条(l0/ → l0.imported/)`);
-        } else {
-          this.logger?.warn('[memory] 旧版 L0 导入完成但改名失败(l0.imported/ 已存在?),下次启动会重复导入(幂等,无害)');
-        }
-      } else {
-        this.logger?.warn(`[memory] 旧版 L0 导入不完整(${imported}/${total}),保留原目录下次重试`);
-      }
-    } catch (err) {
-      this.logger?.warn(`[memory] 旧版 L0 数据导入失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  async append(sessionId: string, messages: ConversationMessage[]): Promise<void> {
-    if (messages.length === 0) return;
-    const records: L0MessageRecord[] = messages.map((m) => {
-      const rec: L0MessageRecord = {
-        sessionId,
-        recordedAt: nowIso(),
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp,
-      };
-      // R7:锚点摊平到事实源与 DB 两处(事实源可跨进程重建,DB 供按坐标查询)。
-      // 无锚点时**不写键**——旧行与新增的无坐标消息保持同形。
-      if (m.anchor !== undefined) {
-        rec.turn = m.anchor.turn;
-        if (m.anchor.step !== undefined) rec.step = m.anchor.step;
-      }
-      return rec;
-    });
-    // 事实源:按天追加
-    const byDay = new Map<string, L0MessageRecord[]>();
-    for (const r of records) {
-      const k = dayKey(r.timestamp);
-      const arr = byDay.get(k) ?? [];
-      arr.push(r);
-      byDay.set(k, arr);
-    }
-    for (const [day, list] of byDay) {
-      await appendJsonl(path.join(this.dir, `${day}.jsonl`), list);
-    }
-    // 检索引擎:DB + 向量(嵌入失败只跳过向量,不影响元数据/FTS,backfill 补齐)。
-    // 双写失败闭环:JSONL 事实源已先行追加,DB 缺行 = 这些消息检索不可见
-    // (conversation_search / 蒸馏背景参考都查不到)——升 error 并给自愈指引。
-    const vecs = await this.helper.batch(records.map((r) => r.content));
-    if (!this.db.upsertL0Batch(records, vecs)) {
-      this.logger?.error(
-        `[memory] L0 检索库批量写入失败(${records.length} 条,JSONL 事实源完好),` +
-          '这些消息暂不可检索;可在设置页运行「重建记忆」修复',
-      );
-    }
-  }
-
-  /** 今日已捕获消息数(SQL 计数,不再读整文件)。 */
+  /** 今日已捕获消息数(SQL 计数,不再读整文件;写停后归零,面板口径保留)。 */
   async countToday(): Promise<number> {
     const d = new Date();
     return this.db.countL0Since(new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString());
@@ -132,106 +21,5 @@ export class L0Store {
   /** 该会话累计已捕获消息数(session-stats 数据源;索引 COUNT)。 */
   async countBySession(sessionId: string): Promise<number> {
     return this.db.countL0BySession(sessionId);
-  }
-
-  /** 该会话最近 n 条消息(时间升序;蒸馏背景参考用,按会话现查——ADR-0003)。 */
-  async recentBySession(sessionId: string, limit: number): Promise<ConversationMessage[]> {
-    return this.db.recentL0BySession(sessionId, limit);
-  }
-
-  /** §A 水位线:该会话 L0 已落盘的最大 turn(空会话 undefined;委托 MemoryDb)。 */
-  maxCapturedTurn(sessionId: string): number | undefined {
-    return this.db.maxCapturedTurn(sessionId);
-  }
-
-  /** §A 幂等检查:该 (session, turn) 是否已有任意 L0 行(委托 MemoryDb)。 */
-  hasAnyL0Message(sessionId: string, turn: number): boolean {
-    return this.db.hasAnyL0Message(sessionId, turn);
-  }
-
-  /** 检索:FTS + 向量 hybrid(RRF 融合),返回按相关性排序的消息。 */
-  async search(query: string, limit: number): Promise<L0MessageRecord[]> {
-    const caps = this.db.getCapabilities();
-    if (!caps.ftsSearch && !caps.vectorSearch) return [];
-    const candidateK = limit * CANDIDATE_MULTIPLIER;
-
-    if (caps.vectorSearch && this.helper.vectorReady()) {
-      const [ftsRaw, vec] = await Promise.all([
-        Promise.resolve(this.db.searchL0Fts(query, candidateK)),
-        this.helper.query(query),
-      ]);
-      const vecList = vec ? this.db.searchL0Vector(vec, candidateK) : [];
-      const merged = rrfMerge([ftsRaw, vecList], (h) => h.id);
-      return merged.map(({ rrfScore: _rrf, ...r }) => r).slice(0, limit);
-    }
-    return this.db.searchL0Fts(query, limit).map(({ score: _score, ...r }) => r);
-  }
-
-  /** 活切换嵌入源:同步换底层服务(嵌入源三态切换用)。 */
-  setEmbeddingService(svc: EmbeddingService): void {
-    this.embedSvc = svc;
-    this.helper.setService(svc);
-  }
-
-  /** 向量写入能力是否就绪。`reindex` 在未就绪时**静默短路**成 0/0/0
-   *  (见本文件 `reindex` 首行),调用方必须自己问这里——否则"根本没跑"
-   *  会长得和"跑完了、零条待补"一模一样。 */
-  vectorsReady(): boolean {
-    return this.helper.vectorReady();
-  }
-
-  /**
-   * 增量重嵌入(同 L1Store.reindex:只补缺失向量,零向量记 skipped 并入 skip 集,
-   * 不算失败、不阻塞同步标记——保证补齐判据收敛)。onProgress/shouldCancel
-   * 供活切换的进度展示与取消。
-   */
-  async reindex(opts?: {
-    onProgress?: (done: number, total: number) => void;
-    shouldCancel?: () => boolean;
-  }): Promise<{ written: number; failed: number; skipped: number; cancelled?: boolean }> {
-    if (!this.helper.vectorReady()) return { written: 0, failed: 0, skipped: 0 };
-    const items = this.db.getL0ForReindex(this.db.getVecSkipSet('l0'));
-    const total = items.length;
-    let done = 0;
-    let written = 0;
-    let failed = 0;
-    let skipped = 0;
-    let cancelled = false;
-    const skippedNow: string[] = [];
-    const CHUNK = 32;
-    for (let i = 0; i < items.length; i += CHUNK) {
-      if (opts?.shouldCancel?.()) {
-        cancelled = true;
-        break;
-      }
-      const chunk = items.slice(i, i + CHUNK);
-      let vecs: Float32Array[];
-      try {
-        vecs = await this.embedSvc.embedBatch(chunk.map((c) => c.text));
-      } catch {
-        failed += chunk.length;
-        done += chunk.length;
-        opts?.onProgress?.(done, total);
-        continue;
-      }
-      const pending: Array<{ id: string; embedding: Float32Array }> = [];
-      chunk.forEach((c, j) => {
-        if (isZeroVector(vecs[j])) {
-          skipped++;
-          skippedNow.push(c.id);
-          return;
-        }
-        pending.push({ id: c.id, embedding: vecs[j] });
-      });
-      if (pending.length > 0) {
-        const ok = this.db.updateL0VecBatch(pending, '');
-        written += ok;
-        failed += pending.length - ok;
-      }
-      done += chunk.length;
-      opts?.onProgress?.(done, total);
-    }
-    if (skippedNow.length > 0) this.db.addVecSkippedIds('l0', skippedNow);
-    return { written, failed, skipped, cancelled };
   }
 }

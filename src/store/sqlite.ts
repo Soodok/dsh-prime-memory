@@ -64,6 +64,8 @@ export interface StoreCapabilities {
 // MemoryDb 的四个公开方法为一行委托。
 import { CostLedger } from './cost-ledger.js';
 import type { BucketRow, CostAggregate, CostByLayer } from './cost-ledger.js';
+// L0 水位表(T8.4 写停后 §A 恢复幂等的唯一数据源;正文三表退役,见 l0-watermark.ts)
+import { L0WatermarkStore } from './l0-watermark.js';
 export type { BucketRow, CostAggregate, CostByLayer } from './cost-ledger.js';
 import type { CostByModel } from '../contract.js';
 // 图谱存储(graph_* 表族)同为独立职责类;init 失败仅图谱 no-op,不传染主库降级
@@ -144,6 +146,8 @@ export class MemoryDb {
   readonly costLedger = new CostLedger();
   /** 图谱存储(graph_* 表族;init 独立 try/catch,失败仅图谱 no-op)。 */
   readonly graphStore = new GraphStore();
+  /** L0 水位表(T8.4 写停;§A 恢复幂等判据的数据源,init 内建表+基线物化)。 */
+  readonly l0Watermark = new L0WatermarkStore();
 
   private stmtUpsertL0!: StatementLike;
   private stmtGetL0!: StatementLike;
@@ -627,6 +631,8 @@ export class MemoryDb {
     this.prepareL0VecStatements();
     // ── token_cost:蒸馏成本明细表(成本账本自治) ──
     this.costLedger.init(this.db, this.logger);
+    // ── l0_watermark:写停后的 §A 恢复水位(建表 + 从存量 l0_conversations 基线物化) ──
+    this.l0Watermark.init(this.db, this.logger);
     // ── graph_*:知识图谱投影表族(GraphStore.init 自带 try/catch,失败仅图谱 no-op) ──
     // §F 节点向量列的维度**复用既有探测结果**（`vecLoaded` / `dimensions` 由
     // `prepareL1VecStatements` 之前的探测决定），不新增一套能力探测。探测未通过 →
@@ -2949,6 +2955,7 @@ export class MemoryDb {
   }
 
   close(): void {
+    this.l0Watermark.close();
     try {
       this.db.close();
     } catch {

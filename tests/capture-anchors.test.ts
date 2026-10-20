@@ -56,12 +56,13 @@ describe('capture 锚点 fold', () => {
   async function run(events: Omit<SessionEvent, 'time'>[]): Promise<Captured[]> {
     const captured: Captured[] = [];
     const { ctx, emit } = fakeCtx();
-    const l0 = {
-      append: async (sessionId: string, messages: ConversationMessage[]) => {
+    // T8.4 写停:正文不再走 L0 落盘,锚点断言改抓 runner.enqueue 的直传消息
+    const runner = {
+      enqueue: (sessionId: string, messages: ConversationMessage[]) => {
         captured.push({ sessionId, messages });
       },
     };
-    const runner = { enqueue: () => {} };
+    const watermark = { record: () => {} };
     const live = {
       supported: true,
       get: () => ({ enabled: true, capture: true }) as never,
@@ -74,13 +75,12 @@ describe('capture 锚点 fold', () => {
       ctx,
       makeCfg(),
       runner as never,
-      l0 as never,
+      watermark as never,
       okLogger,
       live as never,
       modes,
     );
     for (const e of events) emit({ ...e, time: floor + 1 } as SessionEvent);
-    // L0 落盘走 promise 链,等一个宏任务让链跑完
     await new Promise((r) => setTimeout(r, 0));
     return captured;
   }

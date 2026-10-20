@@ -14,6 +14,7 @@
 import { createHash } from 'node:crypto';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { DOWNGRADE_TARGET, familyOf, isKnownType, typeEnumSep } from '../memory-types.js';
+import { drscRoleOf } from '../clients/drsc.js';
 import { RECEIPTS_QUERY_LIMIT_MAX, dimensionOf, toReceiptView } from '../store/receipts.js';
 import { listConflictPairs, renderConflictResolution, renderConflicts, resolveConflictPair } from '../conflict-service.js';
 import { WING_CATALOG, WING_FALLBACK, normPersistence, normScope, resolveRecordScope } from '../types.js';
@@ -399,7 +400,7 @@ roomRegistry) {
     // ── conversation_search: L0 原始对话 ──
     ctx.tools.register(defineTool({
         name: 'conversation_search',
-        description: '搜索原始对话历史(L0)。返回带时间戳的原始消息,适用于查找具体消息原文、时间线、上下文细节。',
+        description: '搜索原始对话历史。返回带时间戳的原始消息节选(已脱敏),适用于查找具体消息原文、时间线、上下文细节。',
         parameters: {
             query: { type: 'string', required: true, description: '搜索查询文本' },
             limit: { type: 'number', description: '最大返回条数(默认 5)' },
@@ -433,15 +434,31 @@ roomRegistry) {
             if (familyOfCaller(exec) === null)
                 return { items: [], notice: blockNoticeOf(exec) };
             const limit = Math.min(Math.max(args.limit ?? 5, 1), 20);
-            const records = await stores.l0.search(args.query, limit);
-            return {
-                items: records.map((r) => ({
-                    session_id: r.sessionId,
-                    role: r.role,
-                    content: r.content,
-                    timestamp: r.timestamp,
-                })),
-            };
+            // T8.4 读切(spec R7):检索命中走 DRSC 原文 fts,返回文本取 redact=1 脱敏列。
+            // 硬依赖无本地回退(l0 本地检索已退役)——collector 缺席/故障显式报错给模型,
+            // 与「空结果」口径分清,不抛穿主流程。
+            const drsc = stores.drsc;
+            if (!drsc) {
+                return { items: [], notice: '历史对话检索不可用:DRSC collector 未装配(本地 L0 检索已退役,无回退)。' };
+            }
+            try {
+                const hits = await drsc.search(args.query, limit);
+                return {
+                    items: hits
+                        .map((h) => ({ h, role: drscRoleOf(h.kind) }))
+                        .filter((e) => e.role !== undefined)
+                        .map(({ h, role }) => ({
+                        session_id: h.session_id,
+                        role,
+                        content: h.snippet,
+                        timestamp: h.time,
+                    })),
+                };
+            }
+            catch (err) {
+                const detail = err instanceof Error ? err.message : String(err);
+                return { items: [], notice: `历史对话检索暂不可用(DRSC collector: ${detail})。` };
+            }
         },
     }));
     // ── memory_read_scene: 读取 L2 场景块 / L3 画像 ──

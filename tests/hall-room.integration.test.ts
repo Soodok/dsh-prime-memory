@@ -63,9 +63,8 @@ async function mkEnv(opts: { corruptRegistry?: boolean } = {}): Promise<Env> {
   db.init();
   dbs.push(db);
   const l1 = new L1Store(dataDir, db, undefined, 'hybrid', noopLogger, 0);
-  const l0 = new L0Store(dataDir, db);
+  const l0 = new L0Store(db);
   await l1.init();
-  await l0.init();
   const scenes = { chat: new SceneStore(dataDir, 'chat'), work: new SceneStore(dataDir, 'work') };
   await scenes.chat.init();
   await scenes.work.init();

@@ -147,9 +147,8 @@ async function setupStores() {
   db.init();
   openedDbs.push(db);
   const l1 = new L1Store(dataDir, db, undefined, 'hybrid', noopLogger, 0);
-  const l0 = new L0Store(dataDir, db);
+  const l0 = new L0Store(db);
   await l1.init();
-  await l0.init();
   const now = Date.now();
   await l1.appendNew([
     { id: 'r1', content: '用户喜欢手冲咖啡', type: 'preference', priority: 60, scene_name: '日常', timestamps: [now], createdAt: now, updatedAt: now },

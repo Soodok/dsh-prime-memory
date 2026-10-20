@@ -1,6 +1,6 @@
 /**
  * 存储层小件单元测试:pending 缓冲/state checkpoint/session-modes/recall-dedupe、
- * L0/L1 双写(legacy 迁移 + 双写失败闭环)与嵌入服务基座(重试退避/信号量/降级助手)。
+ * L1 双写(legacy 迁移 + 双写失败闭环)与嵌入服务基座(重试退避/信号量/降级助手)。
  */
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,7 +23,6 @@ import {
   RECALL_DEDUPE_SESSION_CAP,
   RecallDedupeStore,
 } from '../src/store/recall-dedupe.js';
-import { L0Store } from '../src/store/l0.js';
 import { L1Store } from '../src/store/l1.js';
 import { EmbedHelper, NoopEmbeddingService, RemoteEmbeddingService } from '../src/store/embedding.js';
 import { MemoryDb } from '../src/store/sqlite.js';
@@ -201,51 +200,6 @@ describe('L0/L1 dual-write stores', () => {
     db.init();
     return db;
   }
-
-  it('L0 append writes JSONL by day + DB; search degrades to FTS with Noop embed', async () => {
-    const dataDir = join(await tmp(), `l0-${Date.now()}`);
-    const db = await freshDb('l0db');
-    const store = new L0Store(dataDir, db);
-    await store.init();
-    const now = Date.now();
-    await store.append('s1', [
-      { id: 'm1', role: 'user', content: '我在练吉他', timestamp: now },
-      { id: 'm2', role: 'assistant', content: '坚持下去,每天半小时', timestamp: now + 1 },
-    ]);
-    // JSONL 事实源存在
-    const { readdir } = await import('node:fs/promises');
-    const files = await readdir(join(dataDir, 'conversations'));
-    expect(files.some((f) => f.endsWith('.jsonl'))).toBe(true);
-    // 计数与检索
-    expect(await store.countToday()).toBe(2);
-    expect(await store.countBySession('s1')).toBe(2);
-    const hits = await store.search('吉他', 5);
-    expect(hits.length).toBe(1);
-    expect(hits[0].id).toBe('m1');
-    db.close();
-  });
-
-  it('L0 legacy directory imports into db then renames to .imported', async () => {
-    const dataDir = join(await tmp(), `l0legacy-${Date.now()}`);
-    await mkdir(join(dataDir, 'l0'), { recursive: true });
-    await writeFile(
-      join(dataDir, 'l0', '2026-08-01.jsonl'),
-      [
-        JSON.stringify({ sessionId: 's', recordedAt: 't', id: 'a', role: 'user', content: '旧数据一', timestamp: 1 }),
-        'BROKEN',
-        JSON.stringify({ sessionId: 's', recordedAt: 't', id: 'b', role: 'user', content: '旧数据二', timestamp: 2 }),
-      ].join('\n'),
-    );
-    const db = await freshDb('l0legacy');
-    const store = new L0Store(dataDir, db);
-    await store.init();
-    const { readdir } = await import('node:fs/promises');
-    const names = await readdir(dataDir);
-    expect(names).toContain('l0.imported');
-    expect(names).not.toContain('l0');
-    expect(await store.countBySession('s')).toBe(2); // 坏行被过滤,好行入库
-    db.close();
-  });
 
   it('L1 appendNew fills family and dual-writes; search strategies and candidates', async () => {
     const dataDir = join(await tmp(), `l1-${Date.now()}`);

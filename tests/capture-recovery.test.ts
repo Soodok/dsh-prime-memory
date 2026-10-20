@@ -180,18 +180,20 @@ describe('registerCapture 恢复接线(agent/session-start resume)', () => {
   function makeDeps() {
     const handlers = new Map<string, (...args: never[]) => unknown>();
     const ctx = { on: (name: string, cb: (...args: never[]) => unknown) => handlers.set(name, cb) } as unknown as Context;
-    const appended: Array<{ sid: string; messages: Array<{ role: string; content: string }> }> = [];
-    const enqueued: Array<{ sid: string; messages: unknown[]; mode: string }> = [];
+    // T8.4 写停:capture 不再写正文,对水位表只做 record/maxTurn/hasAny——
+    // 恢复的消息内容改从 runner.enqueue 侧断言。
+    const recorded: Array<{ sid: string; turn: number; step?: number | null }> = [];
+    const enqueued: Array<{ sid: string; messages: Array<{ role: string; content: string }>; mode: string }> = [];
     const infos: string[] = [];
     const warns: string[] = [];
-    const l0 = {
-      append: async (sid: string, messages: Array<{ role: string; content: string }>) => {
-        appended.push({ sid, messages });
+    const watermark = {
+      record: (sid: string, turn: number, step?: number | null) => {
+        recorded.push({ sid, turn, ...(step === undefined ? {} : { step }) });
       },
-      maxCapturedTurn: (_sid: string) => undefined as number | undefined,
-      hasAnyL0Message: (_sid: string, _turn: number) => false,
+      maxTurn: (_sid: string) => undefined as number | undefined,
+      hasAny: (_sid: string, _turn: number) => false,
     };
-    const runner = { enqueue: (sid: string, messages: unknown[], mode: string) => enqueued.push({ sid, messages, mode }) };
+    const runner = { enqueue: (sid: string, messages: never[], mode: string) => enqueued.push({ sid, messages, mode }) };
     const logger: MemoryLogger = {
       info: (m: string) => infos.push(String(m)),
       warn: (m: string) => warns.push(String(m)),
@@ -203,14 +205,14 @@ describe('registerCapture 恢复接线(agent/session-start resume)', () => {
     const cfg = {
       capture: { enabled: true, maxMessageChars: 4000, stripCodeBlocks: true },
     } as unknown as MemoryConfig;
-    return { ctx, handlers, appended, enqueued, infos, warns, l0, runner, logger, live, modes, cfg };
+    return { ctx, handlers, recorded, enqueued, infos, warns, watermark, runner, logger, live, modes, cfg };
   }
 
-  it('resume + 日志含尾轮 + L0 无该轮 → 尾轮入 L0 且 enqueue 被调用', async () => {
+  it('resume + 日志含尾轮 + 水位无该轮 → 尾轮登记水位且 enqueue 被调用', async () => {
     const d = makeDeps();
-    const { appended, enqueued } = d;
-    d.l0.maxCapturedTurn = () => 1; // turn 1 崩溃前已正常落盘,只有尾轮(turn 2)缺失
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const { recorded, enqueued } = d;
+    d.watermark.maxTurn = () => 1; // turn 1 崩溃前已正常捕获,只有尾轮(turn 2)缺失
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     expect(onSessionStart).toBeDefined();
     const events = [
@@ -219,67 +221,67 @@ describe('registerCapture 恢复接线(agent/session-start resume)', () => {
     ];
     onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-rec', events, snapshotEvents: () => events, header: {} } }, source: 'resume' } as never);
     await flush?.();
-    expect(appended).toHaveLength(1);
-    expect(appended[0].sid).toBe('s-rec');
-    const contents = appended[0].messages.map((m) => m.content);
-    expect(contents).toContain('崩溃轮的宝贵输入');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].sid).toBe('s-rec');
+    expect(recorded[0].turn).toBe(2);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].mode).toBe('auto');
+    expect(enqueued[0].messages.map((m) => m.content)).toContain('崩溃轮的宝贵输入');
   });
 
-  it('幂等:该 (session, turn) 已有任意 L0 行 → 整轮跳过(不重复落盘)', async () => {
+  it('幂等:水位判该轮已捕获 → 整轮跳过(不重复登记不重复蒸馏)', async () => {
     const d = makeDeps();
-    const { appended, enqueued } = d;
-    d.l0.maxCapturedTurn = () => 1; // turn 1 已落盘
-    d.l0.hasAnyL0Message = (sid, turn) => sid === 's-rec' && turn <= 2; // turn 2 部分写残行
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const { recorded, enqueued } = d;
+    d.watermark.maxTurn = () => 1; // turn 1 已捕获
+    d.watermark.hasAny = (sid, turn) => sid === 's-rec' && turn <= 2;
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     const events = [...bracket(2, { user: '部分写过的轮', reason: 'interrupted' })];
     onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-rec', events, snapshotEvents: () => events, header: {} } }, source: 'resume' } as never);
     await flush?.();
-    expect(appended).toHaveLength(0);
+    expect(recorded).toHaveLength(0);
     expect(enqueued).toHaveLength(0);
   });
 
   it('off 档会话不恢复(完全隐身对齐现行为)', async () => {
     const d = makeDeps();
-    const { appended, enqueued } = d;
+    const { recorded, enqueued } = d;
     (d.modes as { get: () => string }).get = () => 'off';
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     const events = [...bracket(1, { user: 'a', reason: 'interrupted' })];
     onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-off', events, snapshotEvents: () => events, header: {} } }, source: 'resume' } as never);
     await flush?.();
-    expect(appended).toHaveLength(0);
+    expect(recorded).toHaveLength(0);
     expect(enqueued).toHaveLength(0);
   });
 
   it('非 resume 来源(startup/clear/compact)不触发恢复', async () => {
     const d = makeDeps();
-    const { appended } = d;
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const { recorded } = d;
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     const events = [...bracket(1, { user: 'a', reason: 'interrupted' })];
     onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-x', events, snapshotEvents: () => events, header: {} } }, source: 'startup' } as never);
     await flush?.();
-    expect(appended).toHaveLength(0);
+    expect(recorded).toHaveLength(0);
   });
 
   it('events 不可得(宿主版本偏差)→ 维持现状,不抛错不阻塞会话启动', async () => {
     const d = makeDeps();
-    const { appended } = d;
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const { recorded } = d;
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     expect(() =>
       onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-y' } }, source: 'resume' } as never),
     ).not.toThrow();
     await flush?.();
-    expect(appended).toHaveLength(0);
+    expect(recorded).toHaveLength(0);
   });
 
   it('task_8 降级①:events 缺失但 ctx.sessionQuery.readSession 可得 → 从降级路径恢复', async () => {
     const d = makeDeps();
-    const { appended } = d;
+    const { recorded, enqueued } = d;
     (d.ctx as unknown as { get: (name: string) => unknown }).get = (name: string) =>
       name === 'sessionQuery'
         ? {
@@ -289,17 +291,17 @@ describe('registerCapture 恢复接线(agent/session-start resume)', () => {
                 : undefined,
           }
         : undefined;
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-rec' } }, source: 'resume' } as never);
     await flush?.();
-    expect(appended).toHaveLength(1);
-    expect(appended[0].messages.map((m) => m.content)).toContain('降级路径恢复');
+    expect(recorded).toHaveLength(1);
+    expect(enqueued[0].messages.map((m) => m.content)).toContain('降级路径恢复');
   });
 
   it('task_8 降级②:readSession 抛错 → sessionPersistence.readFrom 兜底', async () => {
     const d = makeDeps();
-    const { appended } = d;
+    const { recorded, enqueued } = d;
     (d.ctx as unknown as { get: (name: string) => unknown }).get = (name: string) => {
       if (name === 'sessionQuery') {
         return { readSession: () => { throw new Error('host version skew'); } };
@@ -314,21 +316,21 @@ describe('registerCapture 恢复接线(agent/session-start resume)', () => {
       }
       return undefined;
     };
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     expect(() =>
       onSessionStart?.({ agent: { id: 'agent-1', session: { id: 's-rec' } }, source: 'resume' } as never),
     ).not.toThrow();
     await flush?.();
-    expect(appended).toHaveLength(1);
-    expect(appended[0].messages.map((m) => m.content)).toContain('readFrom 兜底恢复');
+    expect(recorded).toHaveLength(1);
+    expect(enqueued[0].messages.map((m) => m.content)).toContain('readFrom 兜底恢复');
   });
 
   it('task_8 降级③:两服务全不可用 → 不抛错、现状行为、一次性提示(两次 resume 只提示一次)', async () => {
     const d = makeDeps();
-    const { appended, infos } = d;
+    const { recorded, infos } = d;
     (d.ctx as unknown as { get: (name: string) => unknown }).get = () => undefined;
-    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.l0 as never, d.logger, d.live as never, d.modes as never);
+    const flush = registerCapture(d.ctx, d.cfg, d.runner as never, d.watermark as never, d.logger, d.live as never, d.modes as never);
     const onSessionStart = d.handlers.get('agent/created');
     for (let i = 0; i < 2; i++) {
       expect(() =>
@@ -336,7 +338,7 @@ describe('registerCapture 恢复接线(agent/session-start resume)', () => {
       ).not.toThrow();
     }
     await flush?.();
-    expect(appended).toHaveLength(0);
+    expect(recorded).toHaveLength(0);
     const notices = infos.filter((m) => m.includes('一次性'));
     expect(notices).toHaveLength(1);
   });

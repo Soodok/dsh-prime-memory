@@ -50,6 +50,7 @@ import { makeFileSyncHook } from './store/memory-md-sync.js';
 import { ObsoleteNoticeStore } from './store/obsolete-notices.js';
 import { registerSlotsProjection } from './projection/slots.js';
 import { registerRecallProjection } from './projection/recall.js';
+import { DrscClient } from './clients/drsc.js';
 import { errDetail, withFileLog } from './util/filelog.js';
 import { buildRouteChain, resolveModelRoute, invalidateEffortCache } from './llm.js';
 import { effectiveCfg } from './pipeline/runner.js';
@@ -57,6 +58,30 @@ import { pendingPathFor } from './store/pending.js';
 import { initTokenCost, resetTokenCost } from './token-cost.js';
 import { initTraceStore } from './store/trace.js';
 export const name = 'dsh-memory-plugin';
+/**
+ * webStartup(0.2.1-a.2 起更名自 webRuntime)的 best-effort 读取:trustedHosts
+ * 供 DrscClient 同源基址解析。宿主服务缺席/未声明 inject 时属性读会抛
+ * (cordis Proxy 面),双名回退链 + 两层 try,安全返回 undefined(→ 缺省 8080 口)。
+ */
+function readStartupTrustedHosts(ctx) {
+    for (const name of ['webStartup', 'webRuntime']) {
+        try {
+            const direct = ctx[name];
+            const svc = (direct !== undefined
+                ? direct
+                : typeof ctx.get === 'function'
+                    ? ctx.get(name)
+                    : undefined);
+            if (svc !== null && typeof svc === 'object' && Array.isArray(svc.trustedHosts)) {
+                return svc.trustedHosts;
+            }
+        }
+        catch {
+            /* 未声明服务的属性读抛:落下一名/缺省 */
+        }
+    }
+    return undefined;
+}
 /**
  * 硬依赖:蒸馏要用 llm,工具注册要用 tools,召回注入要用 systemPrompt。
  * 0.1.5 起 connection.rpc.handle() 把 /rpc 路由登记到 webServer 时按**调用方
@@ -172,7 +197,10 @@ export async function apply(ctx, config) {
     }
     const stores = {
         usage: undefined, // 装配于下方(依赖 dataDir 就绪)
-        l0: new L0Store(dataDir, db, embed, logger),
+        // DRSC 客户端(T8.4 读切):蒸馏背景窗 + conversation_search 工具面的历史供给。
+        // 硬依赖无本地回退(l0 表退役);trustedHosts 惰性读取(webStartup 可能晚到)。
+        drsc: new DrscClient({ trustedHosts: () => readStartupTrustedHosts(ctx) }),
+        l0: new L0Store(db),
         l1: new L1Store(dataDir, db, embed, config.recall.strategy, logger, config.recall.decayHalfLifeDays, 
         // §D 第 3 路:图谱回链。图谱不可用时 searchNodes 自带 no-op,不影响双路。
         (query, limit, family) => db.graphStore.searchNodes(query, limit, family ? [family] : undefined), 
@@ -210,7 +238,6 @@ export async function apply(ctx, config) {
     if (storageOk) {
         try {
             await Promise.all([
-                stores.l0.init(),
                 stores.l1.init(),
                 stores.scenes.chat.init(),
                 stores.scenes.work.init(),
@@ -255,18 +282,18 @@ export async function apply(ctx, config) {
                         // 增量:配置变化路径向量表已被 drop,全部记录均"缺失",等效全量;
                         // 活切换发起时让路(swap 会 drop 表,并发跑只是白烧嵌入调用)
                         const shouldCancel = () => disposed || !!embedManagerRef?.isBusy();
+                        // T8.4:l0 向量腿随写停退役(表清空后无缺失,无需重建)
                         const r1 = await stores.l1.reindex({ shouldCancel });
-                        const r0 = await stores.l0.reindex({ shouldCancel });
                         // missing 复查:嵌入服务未就绪时 reindex 短路 0/0/0——那是"没跑"不是"成功",
                         // 不得标记 meta(否则启动链不再补,补齐被无限推迟到 backfill)
-                        const missingAfter = db.countL1VecMissing(db.getVecSkipSet('l1')) + db.countL0VecMissing(db.getVecSkipSet('l0'));
-                        if (r1.failed === 0 && r0.failed === 0 && missingAfter === 0) {
+                        const missingAfter = db.countL1VecMissing(db.getVecSkipSet('l1'));
+                        if (r1.failed === 0 && missingAfter === 0) {
                             db.markEmbeddingSynced(currentProviderInfo() ?? info);
-                            const skipNote = r1.skipped + r0.skipped > 0 ? `,跳过不可嵌入 ${r1.skipped + r0.skipped} 条` : '';
-                            logger.info(`[memory] 向量重建完成:L1 ${r1.written} 条,L0 ${r0.written} 条${skipNote}(原因:${dbInit.reason ?? '配置变化'})`);
+                            const skipNote = r1.skipped > 0 ? `,跳过不可嵌入 ${r1.skipped} 条` : '';
+                            logger.info(`[memory] 向量重建完成:L1 ${r1.written} 条${skipNote}(原因:${dbInit.reason ?? '配置变化'})`);
                         }
                         else {
-                            logger.warn(`[memory] 向量重建未完成(L1 失败 ${r1.failed},L0 失败 ${r0.failed},剩缺 ${Math.max(missingAfter, 0)} 条),下次启动/补齐周期重试`);
+                            logger.warn(`[memory] 向量重建未完成(L1 失败 ${r1.failed},剩缺 ${Math.max(missingAfter, 0)} 条),下次启动/补齐周期重试`);
                         }
                     }
                     catch (err) {
@@ -302,19 +329,18 @@ export async function apply(ctx, config) {
                         if (embedManagerRef?.isBusy())
                             return;
                         const l1Missing = db.countL1VecMissing(db.getVecSkipSet('l1')) > 0;
-                        const l0Missing = db.countL0VecMissing(db.getVecSkipSet('l0')) > 0;
-                        if (!l1Missing && !l0Missing)
+                        if (!l1Missing)
                             return;
                         const shouldCancel = () => disposed || !!embedManagerRef?.isBusy();
+                        // T8.4:l0 向量腿随写停退役
                         const r1 = await stores.l1.reindex({ shouldCancel });
-                        const r0 = await stores.l0.reindex({ shouldCancel });
-                        const missingAfter = db.countL1VecMissing(db.getVecSkipSet('l1')) + db.countL0VecMissing(db.getVecSkipSet('l0'));
-                        if (r1.failed === 0 && r0.failed === 0 && missingAfter === 0) {
+                        const missingAfter = db.countL1VecMissing(db.getVecSkipSet('l1'));
+                        if (r1.failed === 0 && missingAfter === 0) {
                             db.markEmbeddingSynced(infoNow);
-                            logger.info(`[memory] 向量补齐完成:L1 ${r1.written} 条,L0 ${r0.written} 条(跳过不可嵌入 ${r1.skipped + r0.skipped} 条)`);
+                            logger.info(`[memory] 向量补齐完成:L1 ${r1.written} 条(跳过不可嵌入 ${r1.skipped} 条)`);
                         }
-                        else if (r1.failed > 0 || r0.failed > 0) {
-                            logger.warn(`[memory] 向量补齐未完成(L1 失败 ${r1.failed},L0 失败 ${r0.failed}),下个周期重试`);
+                        else if (r1.failed > 0) {
+                            logger.warn(`[memory] 向量补齐未完成(L1 失败 ${r1.failed}),下个周期重试`);
                         }
                     }
                     catch (err) {
@@ -342,7 +368,6 @@ export async function apply(ctx, config) {
             dataDir,
             cfg: config,
             db,
-            l0: stores.l0,
             l1: stores.l1,
             sourceStore,
             installer,
@@ -388,7 +413,7 @@ export async function apply(ctx, config) {
         : undefined;
     let flushL0;
     if (storageOk) {
-        flushL0 = registerCapture(ctx, config, runner, stores.l0, logger, live, modes);
+        flushL0 = registerCapture(ctx, config, runner, db.l0Watermark, logger, live, modes);
     }
     // 召回使用统计(进 topN 才算 used;热路径只碰内存,去抖落盘)
     const recallUsage = new RecallUsageStore(dataDir, logger);

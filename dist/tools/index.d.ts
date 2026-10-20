@@ -3,7 +3,7 @@ import type { MemoryConfig } from '../config.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { RuminateController } from '../pipeline/ruminate.js';
 import type { GraphStore } from '../store/graph-store.js';
-import type { L0Store } from '../store/l0.js';
+import type { DrscClient } from '../clients/drsc.js';
 import type { L1Store } from '../store/l1.js';
 import type { PersonaStore } from '../store/persona.js';
 import type { SceneStore } from '../store/scenes.js';
@@ -20,7 +20,8 @@ export interface ToolSealRegistry {
     reg(group: string, make: () => () => void): void;
 }
 export declare function registerMemoryTools(ctx: Context, cfg: MemoryConfig, stores: {
-    l0: L0Store;
+    /** DRSC 客户端(T8.4 读切):conversation_search 的历史供给面;缺席=显式报错。 */
+    drsc?: DrscClient;
     l1: L1Store;
     scenes: Record<MemoryFamily, SceneStore>;
     persona: Record<MemoryFamily, PersonaStore>;

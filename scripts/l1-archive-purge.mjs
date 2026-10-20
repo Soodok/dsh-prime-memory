@@ -19,7 +19,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync,
-  renameSync, readdirSync, statSync, rmSync,
+  renameSync, readdirSync, statSync,
 } from 'node:fs'
 import { join, basename } from 'node:path'
 
@@ -144,7 +144,8 @@ report.steps.disableFiles.moved = disableFiles.length
 report.steps.ledgerPruned = ledgerPruned
 
 // ④ 检索面前置：fts 普通删除；vec 试加载扩展，缺=跳过并记录
-let vecPurged = 'skipped(no-extension)'
+// try/catch 必赋其一——不预置初值（lint no-useless-assignment）
+let vecPurged
 const retiredIds = retiredRows.map(r => String(r.record_id))
 try {
   db.exec('DELETE FROM l1_fts WHERE record_id IN (SELECT record_id FROM l1_records WHERE ' + RETIRED + ')')

@@ -125,9 +125,8 @@ describe('memory tools', () => {
     db.init();
     openDbs.push(db);
     const l1 = new L1Store(dataDir, db, undefined, 'hybrid', noopLogger, 0);
-    const l0 = new L0Store(dataDir, db);
+    const l0 = new L0Store(db);
     await l1.init();
-    await l0.init();
     const now = Date.now();
     await l1.appendNew([
       { id: 'r1', content: '用户喜欢手冲咖啡', type: 'preference', priority: 60, scene_name: '日常', timestamps: [now], createdAt: now, updatedAt: now },
@@ -514,4 +513,73 @@ describe('memory tools', () => {
     // 释放 sqlite 句柄,否则 Windows 下 afterAll 的 rm 会 EBUSY
     stores.db.close();
   });
+
+
+// ── T8.4 读切(task_20):conversation_search → DrscClient search redact 臂 ──
+describe('conversation_search 读切(DRSC redact 臂)', () => {
+  function mockFetchFor(body: unknown, status = 200): { impl: typeof fetch; url: () => string } {
+    let lastUrl = '';
+    const impl = (async (input: string | URL | Request) => {
+      lastUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    return { impl, url: () => lastUrl };
+  }
+
+  it('命中映射:kind→role 过滤、snippet 为 content、请求带 redact=1', async () => {
+    const stores = await setupStores();
+    const h = harness();
+    const { impl, url } = mockFetchFor({
+      ok: true,
+      query: '咖啡',
+      hits: [
+        { session_id: 's-a', seq: 2, kind: 'user/message', rank: -1, snippet: '用户喜欢手冲咖啡…', time: 1234, on_surface: 1, turn: 3 },
+        { session_id: 's-b', seq: 5, kind: 'tool/result', rank: -2, snippet: '工具噪声', time: 1235, on_surface: 1, turn: 3 },
+        { session_id: 's-c', seq: 9, kind: 'assistant/message', rank: -3, snippet: '咖啡因代谢…', time: 1236, on_surface: 0, turn: 4 },
+      ],
+    });
+    const { DrscClient } = await import('../src/clients/drsc.js');
+    registerMemoryTools(h.ctx, h.cfg, { ...stores, drsc: new DrscClient({ fetchImpl: impl }) } as never, noopLogger, h.modes, h.liveHandle);
+    const search = h.registered.find((t) => t.name === 'conversation_search')!;
+    const res = (await search.execute({ query: '咖啡', limit: 5 }, {})) as {
+      items: Array<{ session_id: string; role: string; content: string; timestamp: number }>;
+    };
+    expect(url()).toContain('op=search');
+    expect(url()).toContain('redact=1');
+    expect(res.items).toHaveLength(2); // tool/result 不映射
+    expect(res.items[0]).toEqual({ session_id: 's-a', role: 'user', content: '用户喜欢手冲咖啡…', timestamp: 1234 });
+    expect(res.items[1]).toEqual({ session_id: 's-c', role: 'assistant', content: '咖啡因代谢…', timestamp: 1236 });
+    stores.db.close();
+  });
+
+  it('collector 故障 → 显式报错 notice(与空结果口径分清),不抛穿', async () => {
+    const stores = await setupStores();
+    const h = harness();
+    const impl = (async () => {
+      throw new TypeError('fetch failed');
+    }) as typeof fetch;
+    const { DrscClient } = await import('../src/clients/drsc.js');
+    registerMemoryTools(h.ctx, h.cfg, { ...stores, drsc: new DrscClient({ fetchImpl: impl }) } as never, noopLogger, h.modes, h.liveHandle);
+    const search = h.registered.find((t) => t.name === 'conversation_search')!;
+    const res = (await search.execute({ query: '咖啡' }, {})) as { items: unknown[]; notice?: string };
+    expect(res.items).toEqual([]);
+    expect(res.notice).toContain('历史对话检索暂不可用');
+    expect(res.notice).toContain('DRSC collector');
+    stores.db.close();
+  });
+
+  it('drsc 未装配 → 显式报错 notice(无本地回退)', async () => {
+    const stores = await setupStores();
+    const h = harness();
+    registerMemoryTools(h.ctx, h.cfg, stores as never, noopLogger, h.modes, h.liveHandle);
+    const search = h.registered.find((t) => t.name === 'conversation_search')!;
+    const res = (await search.execute({ query: '咖啡' }, {})) as { items: unknown[]; notice?: string };
+    expect(res.items).toEqual([]);
+    expect(res.notice).toContain('DRSC collector 未装配');
+    stores.db.close();
+  });
+});
 });

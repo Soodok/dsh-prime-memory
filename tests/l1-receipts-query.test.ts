@@ -193,9 +193,8 @@ async function toolHarness() {
   seed(db);
   const dataDir = join(dir, `tool-${Date.now()}`);
   const l1 = new L1Store(dataDir, db, undefined, 'hybrid', noopLogger, 0);
-  const l0 = new L0Store(dataDir, db);
+  const l0 = new L0Store(db);
   await l1.init();
-  await l0.init();
 
   const modes = new SessionModeStore('/nonexistent', 'auto');
   const registered: RegisteredTool[] = [];

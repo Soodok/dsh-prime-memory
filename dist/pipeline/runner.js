@@ -1,10 +1,11 @@
 import { resolveDataDir } from '../config.js';
 import { GRAPH_PRIORITY_NEW } from '../graph/types.js';
+import { drscRowToConversationMessage } from '../clients/drsc.js';
 import { trace } from '../store/trace.js';
 import { emptyPending, freshWarmup, groupPendingBySession, loadPending, PENDING_MODES, pendingPathFor, savePending, } from '../store/pending.js';
 import { errDetail } from '../util/filelog.js';
 import { sessionWorkspaceIdOf } from '../workspace.js';
-import { advanceWarmupThreshold, effectiveExtractThreshold, extractionBackoffMs, idleSessionsToFlush, modeSwitchAction, pickSessionBackground, } from './trigger.js';
+import { advanceWarmupThreshold, effectiveExtractThreshold, extractionBackoffMs, idleSessionsToFlush, modeSwitchAction, } from './trigger.js';
 import { runExtraction } from './l1.js';
 import { buildAnchorMap } from './anchors.js';
 import { runGraphProjection } from './graph.js';
@@ -667,9 +668,33 @@ export class MemoryRunner {
         return newRecords.length;
     }
     /**
+     * 蒸馏背景窗(T8.4 读切,task_19):DRSC 会话尾窗(redact 臂)→ ConversationMessage。
+     * - 形状映射:segment 行 → 消息(drscRowToConversationMessage;非 user/assistant 段跳过);
+     * - 坐标剔除:切片自身轮次整轮剔除(尾窗在 DRS 30s interval 同步后会含刚捕获
+     *   的 turn——旧 l0 读面按消息 id 剔除,跨系统 id 不同构,按坐标等价替身);
+     * - 报错口径:collector 缺席/超时 → warn 后空窗降级,**不抛穿蒸馏管线**
+     *   (工具面 conversation_search 的显式报错口径在 tools 层分清,spec R7)。
+     */
+    async drscBackground(sessionId, n, sliceTurns) {
+        if (n <= 0)
+            return [];
+        try {
+            const rows = await this.stores.drsc.sessionTail(sessionId, n);
+            return rows
+                .map((r) => drscRowToConversationMessage(r, sessionId))
+                .filter((m) => m !== undefined)
+                .filter((m) => m.anchor === undefined || !sliceTurns.has(m.anchor.turn))
+                .slice(-n);
+        }
+        catch (err) {
+            this.logger.warn(`[memory] 蒸馏背景窗拉取失败(DRSC),本轮空窗降级: ${errDetail(err)}`);
+            return [];
+        }
+    }
+    /**
      * 抽取并消费一个会话切片:成功才把切片移出桶并推进爬坡阈值;失败保留切片待重试。
-     * 调用方已保证切片达到生效阈值(或 force)。背景参考按会话从 L0 现查并剔除切片
-     * 自身(ADR-0003:会话间互不污染、重启不丢背景)。
+     * 调用方已保证切片达到生效阈值(或 force)。背景参考按会话从 DRSC 尾窗现查并
+     * 剔除切片自身轮次(ADR-0003:会话间互不污染、重启不丢背景)。
      */
     async extractSessionSlice(sessionId, mode, cfg, effectiveThreshold, opts) {
         const bucket = this.pending[mode];
@@ -678,9 +703,11 @@ export class MemoryRunner {
             return [];
         const rest = bucket.filter((m) => m.sessionId !== sessionId);
         try {
-            // 背景参考:该会话最近消息(多取切片条数补偿被剔除者),剔除切片自身
-            const background = this.stores.l0
-                ? pickSessionBackground(await this.stores.l0.recentBySession(sessionId, cfg.extract.backgroundMessages + slice.length), new Set(slice.map((m) => m.id)), cfg.extract.backgroundMessages)
+            // 背景参考(T8.4 读切):DRSC 会话尾窗(redact 臂)按会话现查(ADR-0003 等价),
+            // 剔除切片自身轮次(切片消息可能已进 DRS 尾窗——30s interval 同步后)。
+            // 多取切片条数补偿被剔除者,与旧 l0 读面同口径。
+            const background = this.stores.drsc
+                ? await this.drscBackground(sessionId, cfg.extract.backgroundMessages + slice.length, new Set(slice.map((m) => m.anchor?.turn).filter((t) => typeof t === 'number')))
                 : [];
             const t = Date.now();
             // R7:锚点映射同时收切片与背景——模型偶尔会引用背景消息的 id,收了它

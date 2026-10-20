@@ -3,7 +3,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session';
 import type { MemoryConfig } from '../config.js';
 import type { MemoryRunner } from '../pipeline/runner.js';
 import type { SessionModeStore } from '../store/session-modes.js';
-import type { L0Store } from '../store/l0.js';
+import type { L0WatermarkStore } from '../store/l0-watermark.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { MemoryLogger } from '../types.js';
 export declare function isCaptureRelevant(type: string): boolean;
@@ -20,10 +20,10 @@ export declare class CaptureBuffers {
     takeTurn(sid: string, turn: number): SessionEvent[];
 }
 /**
- * 注册 L0 捕获。返回 L0 串行链的冲刷函数(dispose 序在关库前 await,
- * 排队中的 turn 消息先落盘);capture 关闭时返回 undefined。
+ * 注册 L0 捕获。返回冲刷函数(dispose 序 await;写停后无排队写,恒立即完成)。
+ * capture 关闭时返回 undefined。
  */
-export declare function registerCapture(ctx: Context, cfg: MemoryConfig, runner: MemoryRunner, l0: L0Store, logger: MemoryLogger, live: LiveSettingsHandle, modes: SessionModeStore): (() => Promise<void>) | undefined;
+export declare function registerCapture(ctx: Context, cfg: MemoryConfig, runner: MemoryRunner, watermark: L0WatermarkStore, logger: MemoryLogger, live: LiveSettingsHandle, modes: SessionModeStore): (() => Promise<void>) | undefined;
 /**
  * 缓冲上限裁剪(防御性;RELEVANT_TYPES 过滤后基本不可达)。
  * 铁律:进行中轮次(turn/start 之后、turn/end 之前)的事件绝不裁——
