@@ -153,3 +153,9 @@ export const GRAPH_JOB_BACKOFF_BASE_MS = 60_000;
 
 /** 单次检索返回上限的硬钳制(工具与 RPC 两侧共用同一钳制值)。 */
 export const GRAPH_SEARCH_LIMIT_MAX = 20;
+
+/** §D 第 3 路路内向量种子的节点条数上限(种子只是联想起点,独立于词法路 limit)。 */
+export const GRAPH_VEC_SEED_CAP = 10;
+
+/** 1-hop 边扩展回链的新增记录数封顶(hop 段专用名额,直连段不占;防 hub 节点邻接爆量)。 */
+export const GRAPH_HOP_RECORD_CAP = 64;

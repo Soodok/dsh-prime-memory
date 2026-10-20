@@ -335,6 +335,14 @@ export interface SceneSummary {
   heat: number;
 }
 
+/**
+ * 召回路标识(§D hybrid 多路归因):hybrid 融合时记录每条命中**来自哪几路**，
+ * 供面板/回捞展示层渲染徽标。与路数语义同源:未接线的路不存在,不会出现在
+ * 本联合的取值里(如图谱路未注入 provider 时无 'graph')。
+ * 单路检索分支(纯 fts/纯 vec)不挂归因——无歧义可归,lanes 保持 undefined。
+ */
+export type RecallLane = 'fts' | 'vec' | 'graph' | 'recency';
+
 /** L1 检索命中。 */
 export interface L1Hit {
   id: string;
@@ -344,6 +352,8 @@ export interface L1Hit {
   score: number;
   priority?: number;
   family?: MemoryFamily;
+  /** hybrid 融合命中的来源路集合(可选;缺省=未归因,序列化面零漂移)。 */
+  lanes?: RecallLane[];
 }
 
 /**

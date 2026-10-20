@@ -20,13 +20,14 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { applyGraphProjection } from '../graph/apply.js';
-import { searchGraphNodes } from '../graph/search.js';
+import { expandHitRecordIds, searchGraphNodes } from '../graph/search.js';
 import {
   GRAPH_JOB_BACKOFF_BASE_MS,
   GRAPH_JOB_BATCH,
   GRAPH_JOB_MAX_ATTEMPTS,
   GRAPH_PRIORITY_BACKFILL,
   GRAPH_PROJECTOR_VERSION,
+  GRAPH_VEC_SEED_CAP,
 } from '../graph/types.js';
 import type {
   GraphEdge,
@@ -534,6 +535,50 @@ export class GraphStore {
         ? nodes.filter((n) => n.families.some((f) => families.includes(f)))
         : nodes;
     return searchGraphNodes(filtered, edges, query, limit);
+  }
+
+  /**
+   * §D 第 3 路存储缝(回链记录 id 序;graphLane 直接消费):词法命中 ∪ 路内向量种子
+   * → 1-hop 边扩展 → 保序去重的 L1 记录 id 序列。
+   *
+   * - **向量种子是路内并集、不是新路**:embedding 由调用方传入(装配层惰性查
+   *   l1.embedText;未就绪/失败传 undefined = 纯词法路,与旧 searchNodes+直连回链
+   *   逐位一致);并集不占 RRF 路数名额,"未接线 = 恰为 2 路"不变量不动;
+   * - **种子序**:词法命中在前、向量种子追加在后(RRF 用 rank,顺序即权重),
+   *   同节点去重;向量种子同样过 visible 族集与 active|disputed 状态闸(宁可漏不可串);
+   * - **1-hop 邻居不按族预筛**:来源记录的跨族由 graphLane 尾部记录级 family/scope
+   *   双闸兜底(与本路既有纪律同源);
+   * - 降级(db 未就绪/空图)返回空数组,不抛。
+   *
+   * 返回记录 id 而非 hits 是刻意的:回链/扩展属于读路径细节,路侧只需排名序列。
+   */
+  searchLaneRecords(
+    query: string,
+    embedding: Float32Array | undefined,
+    limit: number,
+    families?: readonly MemoryFamily[],
+  ): readonly string[] {
+    if (!this.db) return [];
+    const { nodes, edges } = this.loadGraph();
+    const visible =
+      families && families.length > 0
+        ? nodes.filter((n) => n.families.some((f) => families.includes(f)))
+        : nodes;
+    const lexical = searchGraphNodes(visible, edges, query, limit);
+    let hits = lexical;
+    if (embedding && embedding.length > 0) {
+      const visibleIds = new Set(visible.map((n) => n.id));
+      const seenNodes = new Set(lexical.map((h) => h.node.id));
+      const extra: GraphNodeSearchResult[] = [];
+      for (const v of this.searchNodesByVector(embedding, GRAPH_VEC_SEED_CAP)) {
+        if (seenNodes.has(v.node.id) || !visibleIds.has(v.node.id)) continue;
+        if (v.node.status !== 'active' && v.node.status !== 'disputed') continue;
+        seenNodes.add(v.node.id);
+        extra.push({ node: v.node, score: v.score, matchedFields: ['name'], matchReason: '向量种子命中' });
+      }
+      if (extra.length > 0) hits = [...lexical, ...extra];
+    }
+    return expandHitRecordIds(hits, nodes, edges);
   }
 
   // ============================

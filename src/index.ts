@@ -32,7 +32,7 @@ import { ModelDownloadQueue } from './store/download-queue.js';
 import { PINNED_TRANSFORMERS_VERSION, RuntimeInstaller } from './store/runtime-installer.js';
 import { cleanupOrphanTmp, ensureDir } from './util/io.js';
 import { L0Store } from './store/l0.js';
-import { L1Store } from './store/l1.js';
+import { L1Store, type GraphLaneProvider } from './store/l1.js';
 import { PersonaStore } from './store/persona.js';
 import { MemoryDb, type StoreInitResult } from './store/sqlite.js';
 import { InProcMemoryBackend, type MemoryBackend } from './store/memory-backend.js';
@@ -219,6 +219,17 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
     }
   }
 
+  // §D 第 3 路装配(回链 + 路内向量种子 + 1-hop,见 graph-store.searchLaneRecords):
+  // embed 查询惰性接 stores.l1.embedText(嵌入源运行时活切换不被钉死在启动 service 上,
+  // 且复用其超时/失败吞并语义——未就绪/失败 = undefined = 纯词法路,与旧 searchNodes
+  // 表达式逐位一致)。图谱不可用时 searchLaneRecords 自带空返回,不影响双路。
+  // eslint-disable-next-line prefer-const -- 声明早于创建,后续单点赋值(与 embedManagerRef 同款惰性缝;TS 不允许 const 无初值)
+  let laneEmbedQuery: ((q: string) => Promise<Float32Array | undefined>) | undefined;
+  const graphLaneProvider: GraphLaneProvider = async (query, limit, family) => {
+    const vec = laneEmbedQuery ? await laneEmbedQuery(query).catch(() => undefined) : undefined;
+    return db.graphStore.searchLaneRecords(query, vec, limit, family ? [family] : undefined);
+  };
+
   const stores = {
     usage: undefined as RecallUsageStore | undefined, // 装配于下方(依赖 dataDir 就绪)
     // DRSC 客户端(T8.4 读切):蒸馏背景窗 + conversation_search 工具面的历史供给。
@@ -232,8 +243,8 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
       config.recall.strategy,
       logger,
       config.recall.decayHalfLifeDays,
-      // §D 第 3 路:图谱回链。图谱不可用时 searchNodes 自带 no-op,不影响双路。
-      (query, limit, family) => db.graphStore.searchNodes(query, limit, family ? [family] : undefined),
+      // §D 第 3 路:图谱回链(声明于 stores 之前,embed 查询在下方接线)。
+      graphLaneProvider,
       // 投射开着才给没名字的新记录起名（“关时零动作”这条承诺不改）。
       // 传函数而不是布尔：读的是当前配置对象，不把启动那一刻的值钉进 store。
       () => config.memExport?.enabled === true,
@@ -270,6 +281,9 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
     // 后台记忆后端:初始化完成后填充(worker 隔离,失败则进程内)
     backend: undefined as MemoryBackend | undefined,
   };
+  // 惰性缝接线:provider 在检索时才解引用(l1 已就绪);声明序上的"先声明后赋值"
+  // 只影响装配期,而装配期不会有检索在飞(启动未完就没有 agent 回合)。
+  laneEmbedQuery = (q) => stores.l1.embedText(q);
   if (storageOk) {
     try {
       await Promise.all([

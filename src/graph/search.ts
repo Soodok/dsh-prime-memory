@@ -35,7 +35,7 @@
  */
 import { tokenize } from '../util/text.js';
 import type { GraphEdge, GraphNode, GraphNodeSearchResult } from './types.js';
-import { GRAPH_SEARCH_LIMIT_MAX } from './types.js';
+import { GRAPH_HOP_RECORD_CAP, GRAPH_SEARCH_LIMIT_MAX } from './types.js';
 
 /** 字段权重(检索命中计分;名称最高、关系词最低)。 */
 export const GRAPH_FIELD_WEIGHTS = {
@@ -68,21 +68,42 @@ function factValueText(value: string | string[]): string {
   return Array.isArray(value) ? value.join(' ') : value;
 }
 
+/** 节点新度序(updatedAt 新→旧,同值按 id 升序——与检索结果排序同式)。 */
+function byNodeRecency(a: GraphNode, b: GraphNode): number {
+  return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id < b.id ? -1 : 1;
+}
+
 /**
  * 图谱命中 → L1 记录 id 序列(§D 第 3 路 RRF 的输入;纯函数,无 I/O)。
  *
  * 图谱是**可重建派生投影**,节点/fact 的 `sourceRecordIds` 是它回链 L1 的唯一凭证
- * (types.ts:6-7)。此处把"节点排名"翻译成"L1 记录排名":
+ * (types.ts:6-7)。此处把"节点排名"翻译成"L1 记录排名",分两段:
  *
- * - **保序**:按命中的 score 降序依次展开来源,先出现的记录 = 更高排名;
- * - **去重**:同一 L1 记录可能被多个节点/fact 引用,只占首次出现的位置
- *   (重复占位会凭空抬高该记录在 RRF 里的权重);
+ * - **直连段**:命中节点自身 + 其 active facts 的来源(task_9 原语义、原顺序);
+ * - **1-hop 段**:命中节点沿 **active 边**的双向邻居(邻居需 active|disputed)的
+ *   节点自身来源,按邻居 updatedAt 新→旧追加,整段新增封顶
+ *   `GRAPH_HOP_RECORD_CAP`——这是图路"关系可达"增量价值的兑现面。
+ *   hop 段只取邻居节点自身来源,不取 fact 来源(hop 是联想不是证据,噪声从紧)。
+ *
+ * 两段共用纪律:
+ * - **保序**:先出现的记录 = 更高排名(直连段恒先于 hop 段);已被直连段占位的
+ *   id 不重复计入、也**不吃 hop 名额**(关联额度不被身份来源挤占);
+ * - **去重**:同一 L1 记录被多个节点/fact 引用,只占首次出现的位置;
  * - **节点自身来源优先于其 fact 来源**:节点的 sourceRecordIds 是它的身份来源,
  *   而单个 fact 的来源可能引向与该查询无关的旁支记录;
  * - **只取 active fact**:superseded 是历史状态,不该把旧记录拉进当前检索结果;
- * - **不查库**:返回的 id 可能已被删除(墓碑边界),由调用方按"取不到的跳过"处理。
+ * - **不查库**:返回的 id 可能已被删除(墓碑边界),由调用方按"取不到的跳过"处理,
+ *   不得补空占位(占位会在 RRF 里凭空加分)。
+ *
+ * edges/nodes 由调用方传入(loadGraph 结果,百~千量级全扫即可;>2k 再考虑预建索引,
+ * 见文件头演进阶梯)。族过滤不在本函数:邻居节点可跨族,兜底在 graphLane 尾部的
+ * 记录级 family/scope 双闸(宁可漏不可串落在记录上)。
  */
-export function graphHitRecordIds(hits: readonly GraphNodeSearchResult[]): string[] {
+export function expandHitRecordIds(
+  hits: readonly GraphNodeSearchResult[],
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   const take = (id: string): void => {
@@ -90,6 +111,7 @@ export function graphHitRecordIds(hits: readonly GraphNodeSearchResult[]): strin
     seen.add(id);
     out.push(id);
   };
+  // 直连段(节点身份来源在前,active facts 在后)
   for (const h of hits) {
     for (const id of h.node.sourceRecordIds) take(id);
     for (const f of h.node.facts) {
@@ -97,7 +119,46 @@ export function graphHitRecordIds(hits: readonly GraphNodeSearchResult[]): strin
       for (const id of f.sourceRecordIds ?? []) take(id);
     }
   }
+  if (edges.length === 0) return out;
+  // hop 段:active 边的双向邻居 ∉ 命中集,邻居去重,状态需 active|disputed
+  const hitNodeIds = new Set(hits.map((h) => h.node.id));
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const seenNeighbor = new Set<string>();
+  const neighbors: GraphNode[] = [];
+  for (const e of edges) {
+    if (e.status !== 'active') continue;
+    const dirs: Array<readonly [string, string]> = [
+      [e.fromNodeId, e.toNodeId],
+      [e.toNodeId, e.fromNodeId],
+    ];
+    for (const [self, other] of dirs) {
+      if (!hitNodeIds.has(self) || hitNodeIds.has(other) || seenNeighbor.has(other)) continue;
+      const n = nodeById.get(other);
+      if (!n || (n.status !== 'active' && n.status !== 'disputed')) continue;
+      seenNeighbor.add(other);
+      neighbors.push(n);
+    }
+  }
+  neighbors.sort(byNodeRecency);
+  let hopTaken = 0;
+  for (const n of neighbors) {
+    if (hopTaken >= GRAPH_HOP_RECORD_CAP) break;
+    for (const id of n.sourceRecordIds) {
+      if (seen.has(id)) continue; // 已被直连段占用:不计入、不吃名额
+      if (hopTaken >= GRAPH_HOP_RECORD_CAP) break;
+      take(id);
+      hopTaken++;
+    }
+  }
   return out;
+}
+
+/**
+ * 直连段回链(无 hop)——保留 task_9 的原语义形状(既有测试继续钉住);
+ * 生产链路一律走 expandHitRecordIds(向量种子并集 + 1-hop)。
+ */
+export function graphHitRecordIds(hits: readonly GraphNodeSearchResult[]): string[] {
+  return expandHitRecordIds(hits, [], []);
 }
 
 /**

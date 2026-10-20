@@ -1,8 +1,9 @@
 /**
  * §D 第 3 路（task_9）—— 图谱路径接入 hybrid RRF 融合。
  *
- * 链路：`searchGraphNodes` 命中 → 节点/fact 的 `sourceRecordIds` 回链 →
- * L1 记录 id 序列（保排名、去重）→ 作为第 3 条已排序列表参与 RRF。
+ * 链路：`searchGraphNodes` 命中 →（provider 内：向量种子并集 + 1-hop 边扩展）→
+ * 节点/fact 的 `sourceRecordIds` 回链 → L1 记录 id 序列（保排名、去重）→
+ * 作为第 3 条已排序列表参与 RRF。
  *
  * 前置：task_12（图谱可重建性冒烟）已通过 —— 本路让图谱成为检索承重部分，
  * 故必须先确认"图谱是可重建派生投影"这一前提成立。
@@ -127,7 +128,7 @@ describe('task_9 graphHitRecordIds —— 图谱命中回链 L1 记录 id(纯函
 describe('task_9 §D 第 3 路接入 L1Store.search()', () => {
   async function setup(
     records: ReturnType<typeof rec>[],
-    lane?: (q: string, n: number, f?: 'chat' | 'work') => GraphNodeSearchResult[],
+    lane?: (q: string, n: number, f?: 'chat' | 'work') => readonly string[] | Promise<readonly string[]>,
   ) {
     const dataDir = await freshDir('graphlane');
     const db = new MemoryDb(join(dataDir, 'g.db'), DIM);
@@ -153,7 +154,7 @@ describe('task_9 §D 第 3 路接入 L1Store.search()', () => {
       rec('r2', '完全无关的另一件事'),
     ];
     const query = 'Rust 感兴趣';
-    const laneHit = () => [hit(node('n1', ['r2']))];
+    const laneHit = () => ['r2'];
     const withLane = await setup(records, laneHit);
     const withoutLane = await setup(records);
     try {
@@ -177,7 +178,7 @@ describe('task_9 §D 第 3 路接入 L1Store.search()', () => {
   });
 
   it('档位隔离不被绕过:provider 确实被调用,但回链出的跨族记录被剔除', async () => {
-    const lane = vi.fn(() => [hit(node('n1', ['w1']))]); // 图谱把 work 记录带出来
+    const lane = vi.fn(() => ['w1']); // 图谱把 work 记录带出来
     const { db, store } = await setup([rec('c1', 'chat 族记忆', 'chat'), rec('w1', 'work 族记忆', 'work')], lane);
     try {
       const hits = await store.search('任意查询', 5, { family: 'chat' });
@@ -235,7 +236,7 @@ describe('task_9 §D 第 3 路接入 L1Store.search()', () => {
     const db = new MemoryDb(file, DIM);
     db.init();
     const store = new L1Store(dataDir, db, fakeEmbed(), 'hybrid', undefined, 0, (q, n, f) =>
-      db.graphStore.searchNodes(q, n, f ? [f] : undefined),
+      db.graphStore.searchLaneRecords(q, undefined, n, f ? [f] : undefined),
     );
     await store.init();
     const records = [
@@ -264,7 +265,7 @@ describe('task_9 §D 第 3 路接入 L1Store.search()', () => {
     const db2 = new MemoryDb(join(dataDir2, 'g.db'), DIM);
     db2.init();
     const store2 = new L1Store(dataDir2, db2, fakeEmbed(), 'hybrid', undefined, 0, (q, n, f) =>
-      db2.graphStore.searchNodes(q, n, f ? [f] : undefined),
+      db2.graphStore.searchLaneRecords(q, undefined, n, f ? [f] : undefined),
     );
     await store2.init();
     await store2.appendNew(records);

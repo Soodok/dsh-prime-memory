@@ -8,10 +8,8 @@
  */
 import { existsSync, mkdirSync, promises as fs, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
-import type { L1Hit, MemoryFamily, MemoryLogger, MemoryRecord, RoomCount } from '../types.js';
+import type { L1Hit, MemoryFamily, MemoryLogger, MemoryRecord, RecallLane, RoomCount } from '../types.js';
 import { familyForType, isScopeVisible } from '../types.js';
-import type { GraphNodeSearchResult } from '../graph/types.js';
-import { graphHitRecordIds } from '../graph/search.js';
 import type { L1Receipt, ReceiptQuery } from './receipts.js';
 import type { ConflictClaimGroup, ConflictPair, ConflictRejected, ConflictResolution, ConflictType } from './conflicts.js';
 import { isRetired, type SupersedeInfo } from './supersede.js';
@@ -29,15 +27,17 @@ export type RecallStrategy = 'keyword' | 'embedding' | 'hybrid';
 const ROOM_CACHE_TTL_MS = 30_000;
 
 /**
- * 图谱路提供者(§D 第 3 路):按查询返回图谱命中(已按 score 降序)。
+ * 图谱路提供者(§D 第 3 路):按查询返回图谱回链的 L1 记录 id 有序列
+ * (向量种子并集与 1-hop 边扩展在 provider 内完成,见 graph-store.searchLaneRecords)。
  * 抽成注入式而非直接读 `db.graphStore`,是为了给 hybrid 融合留一个可替换的测试缝,
- * 并让「未接线 = 恰为 2 路」成为默认行为(既有调用方零行为变化)。
+ * 并让「未接线 = 恰为 2 路」成为默认行为(既有调用方零行为变化)。允许返回 Promise
+ * 是给向量种子的 embed 查询(装配层惰性取嵌入源);异常由 graphLane 吞并降级。
  */
 export type GraphLaneProvider = (
   query: string,
   limit: number,
   family?: MemoryFamily,
-) => readonly GraphNodeSearchResult[];
+) => readonly string[] | Promise<readonly string[]>;
 
 export interface L1SearchOptions {
   /** 按记忆类型精确过滤(后置过滤,官方做法)。 */
@@ -853,13 +853,34 @@ export class L1Store {
     const vecList = vecRaw ? this.db.searchL1Vector(vecRaw, candidateK, opts?.family, opts?.workspaceId) : [];
     // 第 3 路(图谱)仅在接线时**结构性存在**:未接线不占路数名额,故既有调用方
     // 仍走 2 路、得分与改动前逐位一致(见 findings.md §12.1 的路数语义)
-    const lanes: L1Hit[][] = [ftsList, vecList];
-    if (this.graphLaneProvider) lanes.push(this.graphLane(query, candidateK, opts?.family, opts?.workspaceId));
+    const lanes: Array<[RecallLane, L1Hit[]]> = [['fts', ftsList], ['vec', vecList]];
+    if (this.graphLaneProvider) lanes.push(['graph', await this.graphLane(query, candidateK, opts?.family, opts?.workspaceId)]);
     // 第 4 路(时效)在衰减开启时**结构性存在**;关掉衰减 = 该路不存在
-    if (this.decayHalfLifeDays > 0) lanes.push(this.recencyLane([...ftsList, ...vecList]));
-    const merged = rrfMerge(lanes, (h) => h.id);
+    if (this.decayHalfLifeDays > 0) lanes.push(['recency', this.recencyLane([...ftsList, ...vecList])]);
+    const laneLists = lanes.map(([, list]) => list);
+    // 路归因(与融合并行,不改 rrfMerge 本体):id → 命中路集合,按路构造序
+    // 去重追加(fts→vec→graph→recency,确定性输出)。命中对象在下方 map 里
+    // 新建(不往变回路的列表元素上写),挂 lanes 后随 postProcess/applyDecay 透传。
+    const lanesById = new Map<string, RecallLane[]>();
+    for (const [name, list] of lanes) {
+      for (const h of list) {
+        const arr = lanesById.get(h.id);
+        if (arr) {
+          if (!arr.includes(name)) arr.push(name);
+        } else {
+          lanesById.set(h.id, [name]);
+        }
+      }
+    }
+    const merged = rrfMerge(laneLists, (h) => h.id);
     return this.postProcess(
-      this.applyDecay(merged.map(({ rrfScore, ...h }) => ({ ...h, score: normalizeRrf(rrfScore, lanes.length) }))),
+      this.applyDecay(
+        merged.map(({ rrfScore, ...h }) => ({
+          ...h,
+          lanes: lanesById.get(h.id),
+          score: normalizeRrf(rrfScore, laneLists.length),
+        })),
+      ),
       opts?.type,
       limit,
     );
@@ -890,35 +911,41 @@ export class L1Store {
   }
 
   /**
-   * §D 第 3 路(图谱路径,hybrid 专用):图谱命中 → `sourceRecordIds` 回链 →
-   * L1 记录,作为第 3 条**已排序**列表参与 RRF。
+   * §D 第 3 路(图谱路径,hybrid 专用):provider 给出回链记录 id 序(路内向量种子
+   * 并集 + 1-hop 边扩展在 provider 内完成),本缝只做点查回形 + family/scope 双闸,
+   * 作为第 3 条**已排序**列表参与 RRF。
    *
    * 为什么值得:图谱是按实体/关系组织的**可重建派生投影**,能召回词法与向量
    * 都命不中的记录(同义表述、关系可达)——这正是本路相对双路的增量。
    *
    * 三条边界:
    * - **异常降级**:图谱是派生投影,不得因它失败而拖垮主检索 → 记 warn、返回空路,
-   *   融合退回双路(路数随之降为 2,分数回到既有量纲);
-   * - **族隔离**:图谱节点已按族过滤,但其来源记录可能跨族 → 这里再按 `family`
-   *   过滤一次。宁可漏不可串(与档位隔离同源,§A 的 P0 关注点);
+   *   融合退回双路(路数随之降为 2,分数回到既有量纲);await 在 try 内——
+   *   provider 的 Promise reject 与同步 throw 同路径降级;
+   * - **族隔离**:图谱节点已按族过滤(含向量种子),但 1-hop 邻居与来源记录可能跨族
+   *   → 这里再按 `family` 过滤一次。宁可漏不可串(与档位隔离同源,§A 的 P0 关注点);
    * - **墓碑边界**:图谱行可能回链到已被删除的 L1 记录 → 取不到就跳过,
    *   不补空占位(占位会在 RRF 里凭空加分)。
    */
-  private graphLane(query: string, limit: number, family?: MemoryFamily, workspaceId?: string): L1Hit[] {
+  private async graphLane(
+    query: string,
+    limit: number,
+    family?: MemoryFamily,
+    workspaceId?: string,
+  ): Promise<L1Hit[]> {
     const provider = this.graphLaneProvider;
     if (!provider) return [];
-    let hits: readonly GraphNodeSearchResult[];
+    let ids: readonly string[];
     try {
-      hits = provider(query, limit, family);
+      ids = await provider(query, limit, family);
     } catch (err) {
       this.logger?.warn(
         `[memory] 图谱路检索失败,本轮退回双路: ${err instanceof Error ? err.message : String(err)}`,
       );
       return [];
     }
-    const ids = graphHitRecordIds(hits);
     if (ids.length === 0) return [];
-    const byId = new Map(this.db.getL1ByIds(ids).map((r) => [r.id, r]));
+    const byId = new Map(this.db.getL1ByIds([...ids]).map((r) => [r.id, r]));
     const out: L1Hit[] = [];
     for (const id of ids) {
       const r = byId.get(id);
