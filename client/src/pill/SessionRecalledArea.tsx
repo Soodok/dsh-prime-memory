@@ -29,6 +29,14 @@ const POLL_MS = 4000;
 
 const MATURITY_LABEL: Record<'low' | 'mid' | 'high', string> = { high: '成熟·高', mid: '成熟·中', low: '成熟·低' };
 
+/**
+ * 路归因徽标（单字短标，196px 浮层里吃不掉正文宽度）：词=FTS 词法、量=向量、
+ * 图=图谱回链、新=时效路。全名在 title 里。缺 lanes = 无从归因（单路检索策略/
+ * 旧数据），不渲染——徽标只在能说出事实时出现。
+ */
+const LANE_LABEL: Record<string, string> = { fts: '词', vec: '量', graph: '图', recency: '新' };
+const LANE_FULL: Record<string, string> = { fts: '词法检索', vec: '向量语义', graph: '图谱回链', recency: '时效路' };
+
 export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
   const rpc = props.rpc;
   const sessionId = props.sessionId;
@@ -116,6 +124,15 @@ export function SessionRecalledArea(props: { rpc: RpcFn; sessionId: string }) {
               {r.maturity ? (
                 <span style={{ fontSize: 10, color: 'var(--dsh-mem-text-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {MATURITY_LABEL[r.maturity]}
+                </span>
+              ) : null}
+              {/* 路归因：命中了哪几路就拼哪几个字（融合顺序已在串里，展示不重排）。 */}
+              {r.lanes && r.lanes.length > 0 ? (
+                <span
+                  style={{ fontSize: 10, color: 'var(--dsh-mem-text-3)', whiteSpace: 'nowrap', flexShrink: 0, letterSpacing: 1 }}
+                  title={'召回路：' + r.lanes.map((l) => LANE_FULL[l] ?? l).join('、')}
+                >
+                  {r.lanes.map((l) => LANE_LABEL[l] ?? l).join('')}
                 </span>
               ) : null}
             </div>

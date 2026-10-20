@@ -919,6 +919,13 @@ export interface UiRecord {
    */
   superseded?: boolean;
   /**
+   * 路归因：hybrid 融合时这条命中来自哪几路（`'fts'|'vec'|'graph'|'recency'`）。
+   * 只在 `dsh-memory/session-recalled` 路径上有意义；缺省 = 无从归因
+   * （单路检索策略/旧文件条目/旧服务端），展示层不渲染徽标。纯投影字段，
+   * 存储侧落 `session-recalled.json` 的 lanes 键（读时拆管道串）。
+   */
+  lanes?: string[];
+  /**
    * 成熟度(G3 读时派生):priority + 被用次数 + 老化权重合成。
    * 可选字段——旧 client 忽略=向后兼容；不参与存储/快照（纯投影）。
    */

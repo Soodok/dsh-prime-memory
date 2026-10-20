@@ -41,7 +41,7 @@ import {
 import type { SceneStore } from '../store/scenes.js';
 import type { SessionModeStore } from '../store/session-modes.js';
 import type { RecallUsageStore } from '../store/recall-usage.js';
-import type { MemoryLogger } from '../types.js';
+import type { MemoryLogger, RecallLane } from '../types.js';
 import { scopeFilterOf, workspaceIdOf } from '../workspace.js';
 import { applyGovernanceWeights } from '../store/governance.js';
 import { resolveRepoScope } from '../repo-scope.js';
@@ -702,7 +702,13 @@ export function registerRecall(
           usage?.recordAttempt(scoped.map((h) => h.id), fresh.slice(0, lines.length).map((h) => h.id));
           // G-live:按 **sessionKey**(=agent.session?.id ?? agent.id，与 pill 的 sessionId / 投影 header.id 同源，
           // 非 ownerId)记入本会话“活召回集”，供侧栏卡读取；压缩时同键 reset。
-          stores.recalled?.add(sessionKey, fresh.slice(0, lines.length).map((h) => h.id), injection.id);
+          // 路归因随注入透传(hybrid 融合才挂 lanes;单路策略下表空=不记,徽标无从渲染)。
+          const injectedHits = fresh.slice(0, lines.length);
+          const laneById = new Map<string, RecallLane[]>();
+          for (const h of injectedHits) {
+            if (h.lanes !== undefined && h.lanes.length > 0) laneById.set(h.id, h.lanes);
+          }
+          stores.recalled?.add(sessionKey, injectedHits.map((h) => h.id), injection.id, laneById);
           // 入账在成功构造注入消息之后、返回 enter 之前——任何前置抛错路径账目零扰动
           const led = ledgerFor(payload.agent.id);
           recordRecallInjection(led, text.length);

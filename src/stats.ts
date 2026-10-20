@@ -702,6 +702,8 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       if (ids.length === 0) return { sessionId, records: [], typeCatalog: typeCatalogEntries() };
       // 压缩水位之上的那批：正文已被摘要取代。与 retired 正交（真实实现见 session-recalled.ts）。
       const superseded = stores.recalled?.supersededOf(sessionId);
+      // 路归因表（record id → 管道串）：不在表里 = 无从归因，不挂 lanes 字段。
+      const laneTab = stores.recalled?.lanesOf(sessionId);
       const halfLife = effectiveCfg(cfg, live).recall?.decayHalfLifeDays ?? 0;
       const byId = new Map(stores.l1.getByIds(ids).map((r) => [r.id, r] as const));
       const records = ids
@@ -714,7 +716,10 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
             userRelevance: stores.feedback?.meanOf(r.id) ?? null,
             userMark: stores.feedback?.lastOf(r.id) ?? null,
           });
-          return superseded?.has(r.id) === true ? { ...ui, superseded: true } : ui;
+          let out = superseded?.has(r.id) === true ? { ...ui, superseded: true } : ui;
+          const laneStr = laneTab?.get(r.id);
+          if (laneStr !== undefined && laneStr.length > 0) out = { ...out, lanes: laneStr.split('|') };
+          return out;
         });
       return { sessionId, records, typeCatalog: typeCatalogEntries() };
     }
