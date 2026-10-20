@@ -221,7 +221,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
         <div style={{ marginBottom: 10 }}>
           <GraphCanvas full={fullBlock} onPick={openEgo} height={FULL_H} />
           <div style={{ ...S.muted, marginTop: 4 }}>
-            拖动空白平移 · 滚轮缩放 · 拖节点可钉住 · 悬停点亮邻域 · 单击星点即以它为中心展开邻域
+            拖动空白平移 · 滚轮缩放 · 拖节点可钉住 · 悬停点亮邻域并在浮层里看全名 · 单击星点即以它为中心展开邻域
             {fullBlock.truncated ? ` · 已达绘制上限,只画前 ${fullBlock.nodes.length} 个节点` : ''}
           </div>
         </div>
@@ -252,7 +252,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
               height={EGO_H}
             />
             <div style={{ ...S.muted, marginTop: 4, marginBottom: 8 }}>
-              单击星点 = 改起点继续展开 · 双击「{hops} 跳」可加深一层 · 拖拽钉位与全图一致
+              悬停星点 = 在浮层里看完整名称与类型 · 单击星点 = 改起点继续展开 · 拖拽钉位与全图一致
             </div>
             {/* 关系清单：把语义交给列表，画布只负责拓扑（重叠问题整类消失） */}
             {rows.length > 0 ? (

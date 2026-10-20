@@ -63,14 +63,28 @@ export function nodeKeyOf(full: GraphFull): string {
   return full.nodes.map((n) => n.id).join('|');
 }
 
+/** 喂给 G6 的边条目（用 type 别名而非 interface：G6 EdgeData 带索引签名，只有别名能隐式匹配）。 */
+export type CanvasEdge = {
+  id: string;
+  source: string;
+  target: string;
+  data: { relation: string; causal: boolean };
+  /** 同对节点多边时逐条改曲线并错开偏移（默认 line 会把它们画成完全重合的一条）。 */
+  type?: 'quadratic';
+  style?: { curveOffset?: number };
+};
+
 /**
- * full 块 → G6 数据:节点带 type 扇区初始坐标(同图同开局),边带 causal 标记。
- * 坐标原点 (0,0) = 世界中心,取景由渲染层 autoFit 负责;度数在此一次性算好塞进 data,
- * 渲染层样式回调只读不算(样式函数每帧都跑,别在里面做聚合)。
+ * full 块 → G6 数据：节点带 type 扇区初始坐标（同图同开局），边带 causal 标记。
+ * 坐标原点 (0,0) = 世界中心，取景由渲染层 autoFit 负责；度数在此一次性算好塞进 data，
+ * 渲染层样式回调只读不算（样式函数每帧都跑，别在里面做聚合）。
+ *
+ * 平行边处理：同一对节点可以有多条关系（服务端按边下发），直线会把它们叠成一条、
+ * 两个关系词也重在一个中点——按出现序给第 2 条起交替弯向两侧并逐条加大偏移。
  */
 export function toGraphData(full: GraphFull, width: number, height: number): {
   nodes: Array<{ id: string; data: { name: string; type: string; degree: number }; style: { x: number; y: number } }>;
-  edges: Array<{ id: string; source: string; target: string; data: { relation: string; causal: boolean } }>;
+  edges: CanvasEdge[];
 } {
   const deg = degreeMapOf(full);
   const seeds = seedPositions(
@@ -79,18 +93,31 @@ export function toGraphData(full: GraphFull, width: number, height: number): {
     height,
   );
   const pos = new Map(seeds.map((s) => [s.id, s]));
+  const seen = new Map<string, number>();
+  const edges: CanvasEdge[] = full.edges.map((e, i) => {
+    const key = e.from < e.to ? `${e.from}|${e.to}` : `${e.to}|${e.from}`;
+    const nth = seen.get(key) ?? 0;
+    seen.set(key, nth + 1);
+    const base: CanvasEdge = {
+      id: `e${i}-${e.from}-${e.to}`,
+      source: e.from,
+      target: e.to,
+      data: { relation: e.relation, causal: e.causal },
+    };
+    if (nth === 0) return base; // 首条保持直线
+    // 第 2 条起弯开：±30、±60……两侧交替，不互遮
+    const mag = 30 * Math.ceil(nth / 2);
+    base.type = 'quadratic';
+    base.style = { curveOffset: nth % 2 === 1 ? mag : -mag };
+    return base;
+  });
   return {
     nodes: full.nodes.map((n) => ({
       id: n.id,
       data: { name: n.name, type: n.type, degree: deg.get(n.id) ?? 0 },
       style: { x: pos.get(n.id)?.x ?? 0, y: pos.get(n.id)?.y ?? 0 },
     })),
-    edges: full.edges.map((e, i) => ({
-      id: `e${i}-${e.from}-${e.to}`,
-      source: e.from,
-      target: e.to,
-      data: { relation: e.relation, causal: e.causal },
-    })),
+    edges,
   };
 }
 

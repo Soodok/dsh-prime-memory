@@ -130,3 +130,31 @@ describe('常量口径', () => {
     expect(NAME_CLIP).toBe(8);
   });
 });
+
+describe('平行边错开（同对节点多条关系不得叠成一条）', () => {
+  it('首条保持直线，第 2、3 条改二次曲线并两侧交替偏移', () => {
+    const f = full([{ id: 'a' }, { id: 'b' }], [['a', 'b'], ['a', 'b', true], ['b', 'a']]);
+    const data = toGraphData(f, 600, 400);
+    expect(data.edges[0]!.type).toBeUndefined();
+    expect(data.edges[0]!.style).toBeUndefined();
+    expect(data.edges[1]!.type).toBe('quadratic');
+    expect(data.edges[2]!.type).toBe('quadratic');
+    const offs = [data.edges[1]!.style!.curveOffset, data.edges[2]!.style!.curveOffset];
+    expect(offs).toEqual([30, -30]); // 方向无关：b→a 也算同一对
+  });
+
+  it('不同节点对不受影响（单条关系还是直线）', () => {
+    const f = full([{ id: 'a' }, { id: 'b' }, { id: 'c' }], [['a', 'b'], ['b', 'c']]);
+    const data = toGraphData(f, 600, 400);
+    expect(data.edges.every((e) => e.type === undefined)).toBe(true);
+  });
+
+  it('关系词仍逐条下发（平行边不得合并丢词）', () => {
+    const f = full([{ id: 'a' }, { id: 'b' }], [['a', 'b', true], ['a', 'b']]);
+    const data = toGraphData(f, 600, 400);
+    expect(data.edges.map((e) => [e.data.relation, e.data.causal])).toEqual([
+      ['导致', true],
+      ['使用', false],
+    ]);
+  });
+});

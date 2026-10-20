@@ -11,7 +11,7 @@
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { Graph } from '@antv/g6';
-import type { EdgeData, NodeData } from '@antv/g6';
+import type { EdgeData, IElementEvent, NodeData } from '@antv/g6';
 import {
   NAME_CLIP,
   hash32,
@@ -83,16 +83,38 @@ export function GraphCanvas(props: {
     /** 起点强调与否看它（邻域子图里靠强调圈区分中心）。 */
     const isSeed = (d: { id?: string }): boolean => emphasisId !== undefined && d.id === emphasisId;
 
+    /**
+     * 悬浮补全：标签在 canvas 里被截断后没有 DOM title 可挂（SVG 那套 <title> 子元素
+     * 在画布上不存在），所以走官方 tooltip 插件。内容一律用 textContent 构造——
+     * 实体名来自记忆数据，不能当 HTML 注进宿主页。
+     */
+    const data = toGraphData(full, width, height);
+    const nameById = new Map(full.nodes.map((n) => [n.id, n.name]));
+    const tips = new Map<string, { title: string; sub: string }>();
+    for (const n of data.nodes) {
+      tips.set(n.id, {
+        title: String(n.data.name),
+        sub: `类型 ${n.data.type} · 关系数 ${n.data.degree}${n.id === emphasisId ? ' · 当前起点' : ''}`,
+      });
+    }
+    for (const e of data.edges) {
+      tips.set(e.id, {
+        title: String(e.data.relation),
+        sub: `${nameById.get(e.source) ?? e.source} → ${nameById.get(e.target) ?? e.target}${e.data.causal ? ' · 因果边' : ''}`,
+      });
+    }
+
     const graph = new Graph({
       container: host,
       width,
       height,
       autoFit: fit === 'view' ? { type: 'view' } : { type: 'center' },
       zoomRange: [0.3, 3],
-      data: toGraphData(full, width, height),
+      data,
       node: {
         style: {
-          size: (d: NodeData) => radiusForDegree(Number(d.data?.degree ?? 0)) + (isSeed(d) ? 3 : 0),
+          // G6 的 size 是直径不是半径（按半径给值会把节点缩成针尖、箭头反而盖过点）
+          size: (d: NodeData) => (radiusForDegree(Number(d.data?.degree ?? 0)) + (isSeed(d) ? 3 : 0)) * 2,
           fill: (d: NodeData) => color(String(d.data?.type ?? '')),
           fillOpacity: 0.9,
           stroke: (d: NodeData) => (isSeed(d) ? strongColor : 'transparent'),
@@ -126,11 +148,11 @@ export function GraphCanvas(props: {
           labelBackgroundFill: bgColor,
           labelBackgroundOpacity: 0.78,
           labelBackgroundRadius: 3,
-          // 全部边都有方向(from→to),所以全部带箭头;因果边用强调色+大箭头区分
-          // (v5 的 endArrow 不接受回调形态,按展平属性逐项给值)
+          // 全部边都有方向(from→to),所以全部带箭头;因果边用强调色+稍大箭头区分
+          // (v5 的 endArrow 不接受回调形态,按展平属性逐项给值;显式 size 不被线宽放大)
           endArrow: true,
           endArrowType: 'vee',
-          endArrowSize: (d: EdgeData) => (d.data?.causal ? 10 : 5),
+          endArrowSize: (d: EdgeData) => (d.data?.causal ? 7 : 4),
           endArrowFill: (d: EdgeData) => (d.data?.causal ? causalColor : edgeColor),
           endArrowStrokeOpacity: (d: EdgeData) => (d.data?.causal ? 1 : 0.55),
         },
@@ -159,6 +181,25 @@ export function GraphCanvas(props: {
         // 钉位:拖完保持固定不再被力拽走(仅 d3-force 布局下可用)
         { type: 'drag-element-force', fixed: true },
         { type: 'hover-activate', degree: 1, inactiveState: 'inactive' },
+      ],
+      plugins: [
+        {
+          type: 'tooltip',
+          trigger: 'hover',
+          getContent: async (event: IElementEvent) => {
+            const id = String((event.target as { id?: string } | undefined)?.id ?? '');
+            const tip = tips.get(id);
+            if (!tip) return '';
+            const box = document.createElement('div');
+            box.style.cssText = 'max-width:340px;white-space:normal;word-break:break-all;font-size:12px;line-height:1.5;';
+            const head = document.createElement('b');
+            head.textContent = tip.title;
+            const sub = document.createElement('div');
+            sub.textContent = tip.sub;
+            box.append(head, sub);
+            return box;
+          },
+        },
       ],
     });
 
