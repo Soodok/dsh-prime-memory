@@ -88,6 +88,7 @@ const ENDPOINTS = [
   'dsh-memory/conflicts-rejected',
   'dsh-memory/graph-search',
   'dsh-memory/graph-node-get',
+  'dsh-memory/graph-preview',
   'dsh-memory/scenes',
   'dsh-memory/persona',
   'dsh-memory/log-tail',
@@ -168,10 +169,10 @@ describe('wing catalog', () => {
 });
 
 describe('endpoint surface', () => {
-  it('exposes exactly the 63 contracted endpoints, records-delete and graph included', () => {
-    // 63 = 62 + `records-meta`（按 ID 批量查元数据，供 memory 查看器消费）。
-    expect(ENDPOINTS.length).toBe(63);
-    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(63);
+  it('exposes exactly the 64 contracted endpoints, records-delete and graph included', () => {
+    // 64 = 63 + `graph-preview`（面板图谱预览:种子推荐榜+邻域展开）。上一阶 63 = 62 + `records-meta`。
+    expect(ENDPOINTS.length).toBe(64);
+    expect(ENDPOINTS.filter((e) => e.startsWith('dsh-memory/')).length).toBe(64);
   });
 
   it('本地清单与 src/stats.ts 的 MEMORY_ENDPOINTS **逐项一致**', () => {

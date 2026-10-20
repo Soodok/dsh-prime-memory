@@ -159,3 +159,13 @@ export const GRAPH_VEC_SEED_CAP = 10;
 
 /** 1-hop 边扩展回链的新增记录数封顶(hop 段专用名额,直连段不占;防 hub 节点邻接爆量)。 */
 export const GRAPH_HOP_RECORD_CAP = 64;
+
+/** 面板图谱预览:种子榜上限(画布片数)。 */
+export const GRAPH_PREVIEW_SEEDS = 6;
+
+/** 面板图谱预览:单种子绘制的邻居上限(超出置 truncated)。 */
+export const GRAPH_PREVIEW_NEIGHBORS = 10;
+
+/** 面板图谱预览:种子评分中因果边的权重(score = degree + causal×此值)——
+ *  因果链比共现邻接更值得画,预览侧单源读 GRAPH_CAUSAL_RELATIONS。 */
+export const GRAPH_PREVIEW_CAUSAL_WEIGHT = 2;

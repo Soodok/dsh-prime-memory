@@ -1223,6 +1223,30 @@ export interface GraphNodeGetResponse {
   edges: GraphEdge[];
 }
 
+/** dsh-memory/graph-preview(面板图谱预览:缺省返回推荐种子榜,seedId 给定展开该节点邻域)。
+ *  候选只含 active|disputed 节点×active 边(与检索同判据);空图/未启用返全零结构不抛。 */
+export interface GraphPreviewRequest {
+  /** 给定即以该节点为唯一中心(悬挂 id 返空 seeds,不解析不抛——graph-node-get 同款宽容)。 */
+  seedId?: string;
+}
+export interface GraphPreviewResponse {
+  seeds: Array<{
+    node: { id: string; name: string; type: string; degree: number; causalDegree: number };
+    /** 因果边优先→邻居度数降序→updatedAt 新先;长度 ≤ GRAPH_PREVIEW_NEIGHBORS。 */
+    neighbors: Array<{ id: string; name: string; type: string; relation: string; causal: boolean }>;
+    truncated: boolean;
+  }>;
+  stats: {
+    nodes: number;
+    edges: number;
+    causalEdges: number;
+    /** 未定投影 job 数(pending/running/failed 退避中),>0 → UI 显"构建中 x/y"(x=jobsTotal-pendingJobs)。 */
+    pendingJobs: number;
+    /** 全量 job 数(含各状态),"构建中 x/y"的分母——名字即分母,不拿 done 冒充分子。 */
+    jobsTotal: number;
+  };
+}
+
 /** dsh-memory/scenes(两族拼接的混合视图)。 */
 export interface ScenesResponse {
   items: Array<{
@@ -1804,6 +1828,7 @@ export interface DshMemoryRequestMap {
   'dsh-memory/conflicts-rejected': ConflictRejectedRequest;
   'dsh-memory/graph-search': GraphSearchRequest;
   'dsh-memory/graph-node-get': GraphNodeGetRequest;
+  'dsh-memory/graph-preview': GraphPreviewRequest;
   'dsh-memory/scenes': Record<string, never>;
   'dsh-memory/persona': Record<string, never>;
   'dsh-memory/log-tail': LogTailRequest;
@@ -1870,6 +1895,7 @@ export interface DshMemoryResponseMap {
   'dsh-memory/conflicts-rejected': ConflictRejectedResponse;
   'dsh-memory/graph-search': GraphSearchResponse;
   'dsh-memory/graph-node-get': GraphNodeGetResponse;
+  'dsh-memory/graph-preview': GraphPreviewResponse;
   'dsh-memory/scenes': ScenesResponse;
   'dsh-memory/persona': PersonaResponse;
   'dsh-memory/log-tail': LogTailResponse;

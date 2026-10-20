@@ -21,6 +21,8 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { applyGraphProjection } from '../graph/apply.js';
 import { expandHitRecordIds, searchGraphNodes } from '../graph/search.js';
+import { buildGraphPreview } from '../graph/preview.js';
+import type { GraphPreviewResult } from '../graph/preview.js';
 import {
   GRAPH_JOB_BACKOFF_BASE_MS,
   GRAPH_JOB_BATCH,
@@ -579,6 +581,29 @@ export class GraphStore {
       if (extra.length > 0) hits = [...lexical, ...extra];
     }
     return expandHitRecordIds(hits, nodes, edges);
+  }
+
+  /**
+   * 面板图谱预览存储缝(契约 `dsh-memory/graph-preview` 的数据源):
+   * loadGraph 一次 + job 计数(pending/running/failed 未定项与全量分母)传入纯函数。
+   * 降级(db 未就绪)返**全零结构**不抛——预览是展示面,永不拖垮端点。
+   */
+  buildPreview(seedId?: string): GraphPreviewResult {
+    const zero = { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
+    if (!this.db) return zero;
+    const { nodes, edges } = this.loadGraph();
+    let pendingJobs = 0;
+    let jobsTotal = 0;
+    try {
+      pendingJobs = (this.db
+        .prepare("SELECT COUNT(1) AS c FROM graph_projection_jobs WHERE status IN ('pending','running','failed')")
+        .get() as { c: number }).c;
+      jobsTotal = (this.db.prepare('SELECT COUNT(1) AS c FROM graph_projection_jobs').get() as { c: number }).c;
+    } catch (err) {
+      this.logger?.warn(`${TAG} 预览 job 计数失败(计数回零): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const r = buildGraphPreview(nodes, edges, { seedId, pendingJobs, jobsTotal });
+    return r;
   }
 
   // ============================

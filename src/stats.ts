@@ -145,6 +145,7 @@ export const MEMORY_ENDPOINTS: readonly string[] = [
   'dsh-memory/conflicts-rejected',
   'dsh-memory/graph-search',
   'dsh-memory/graph-node-get',
+  'dsh-memory/graph-preview',
   'dsh-memory/scenes',
   'dsh-memory/persona',
   'dsh-memory/log-tail',
@@ -2248,6 +2249,15 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       const node = graph.getNode(id);
       if (!node) return { node: null, edges: [] };
       return { node, edges: graph.edgesOf(id) };
+    }
+
+    case 'dsh-memory/graph-preview': {
+      // 面板图谱预览:缺省种子推荐榜,seedId 给定展开该邻域(悬挂/不可见→空 seeds 不抛)。
+      const p = (payload ?? {}) as { seedId?: unknown };
+      const seedId = typeof p.seedId === 'string' && p.seedId.length > 0 ? p.seedId.slice(0, 200) : undefined;
+      const graph = stores.graph;
+      if (!graph) return { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
+      return graph.buildPreview(seedId);
     }
 
     case 'dsh-memory/scenes': {
