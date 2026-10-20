@@ -9,12 +9,19 @@
  * react 绝不打进 bundle:双 react 实例会炸 hooks(Symbol 身份不等)。
  */
 import { build } from 'esbuild';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PLUGIN_ID = 'dsh-prime-memory';
+
+// @antv/g6 取官方预压缩 UMD(体积实测地板 ~1.35MB;ESM 原样入包是 +3.3MB)。
+// vendor 代码不需要本仓的"不压缩保可读"纪律,自研码照旧 minify:false。
+// 装不到(未 npm install devDep)就不 alias,回落 ESM 解析——构建链不断。
+const g6Min = path.join(root, 'node_modules', '@antv', 'g6', 'dist', 'g6.min.js');
+const alias = existsSync(g6Min) ? { '@antv/g6': g6Min } : {};
 
 const result = await build({
   entryPoints: [path.join(root, 'client/src/entry.tsx')],
@@ -25,6 +32,7 @@ const result = await build({
   jsx: 'automatic',
   charset: 'utf8',
   external: ['react', 'react/jsx-runtime', '@deepseek-ai/*'],
+  alias,
   minify: false,
   legalComments: 'none',
   sourcemap: false,

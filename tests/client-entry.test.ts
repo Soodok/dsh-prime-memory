@@ -72,10 +72,25 @@ const DECLARED = new Set([...REACT_BASELINE, ...(pkg.dsh?.client?.inject ?? [])]
 const RETIRED = /@deepseek-ai\/dsh-client-(runtime|store)(\/|$)/;
 
 function documentStub(): unknown {
+  // canvas 2D 上下文桩:bundle 现在含 @antv/g6,它在装载期探测 canvas 能力
+  // (getContext('2d') 取不到就会在 require 阶段抛错——那不是本护栏要管的事)
+  const ctx2d = () => ({
+    canvas: {}, fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1, font: '', textAlign: '', textBaseline: '',
+    save() {}, restore() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {}, fill() {}, stroke() {},
+    fillRect() {}, clearRect() {}, strokeRect() {}, fillText() {}, strokeText() {}, translate() {}, rotate() {}, scale() {},
+    setTransform() {}, resetTransform() {}, drawImage() {}, putImageData() {}, clip() {}, setLineDash() {},
+    measureText: () => ({ width: 0 }),
+    getImageData: () => ({ data: [], width: 0, height: 0 }),
+    createLinearGradient: () => ({ addColorStop() {} }),
+    createRadialGradient: () => ({ addColorStop() {} }),
+    createPattern: () => null,
+  });
   const el = () => ({
     dataset: {}, style: {}, textContent: '', attributes: {}, className: '',
-    setAttribute() {}, removeAttribute() {}, remove() {}, appendChild() {},
+    clientWidth: 800, clientHeight: 600, offsetWidth: 800, offsetHeight: 600,
+    setAttribute() {}, removeAttribute() {}, remove() {}, appendChild() {}, insertBefore() {},
     addEventListener() {}, removeEventListener() {},
+    getContext: () => ctx2d(), toDataURL: () => 'data: ',
     querySelector: () => null, querySelectorAll: () => [], closest: () => null,
   });
   return {
@@ -83,6 +98,7 @@ function documentStub(): unknown {
     documentElement: { style: {}, setAttribute() {}, removeAttribute() {} },
     body: el(),
     createElement: () => el(),
+    createElementNS: () => el(),
     querySelector: () => null,
     querySelectorAll: () => [],
     addEventListener() {}, removeEventListener() {},
@@ -96,9 +112,17 @@ interface Loaded {
 
 function loadBundle(): Loaded {
   const captured: Array<{ id: string; factory: (req: (s: string) => unknown) => unknown }> = [];
+  const document = documentStub();
+  // location/navigator 同理:g6 装载期读 window.location.href / navigator.userAgent
+  const location = { href: 'http://localhost/', search: '', hash: '', hostname: 'localhost', protocol: 'http:' };
+  const navigator = { userAgent: 'node-test', maxTouchPoints: 0, language: 'zh-CN' };
   const sandbox: Record<string, unknown> = {
-    window: { __ModuleLoader__: { load: (reg: unknown) => captured.push(reg as never) } },
-    document: documentStub(),
+    // window.document 必须同时给:@antv/g6 装载期读的是 window.document,
+    // 只有顶层 document 会在 require 阶段就 TypeError(与本文件护栏无关)
+    window: { document, location, navigator, __ModuleLoader__: { load: (reg: unknown) => captured.push(reg as never) } },
+    document,
+    location,
+    navigator,
     MutationObserver: class { observe() {} disconnect() {} },
     queueMicrotask: (fn: () => void) => fn(),
     setTimeout, clearTimeout, console,

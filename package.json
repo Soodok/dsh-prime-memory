@@ -82,9 +82,9 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4",
     "@node-rs/jieba": "^2.0.2",
+    "dsh-reference-session-collector": ">=0.2.0-beta.0 <0.3.0",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "undici": "^7.29.0",
-    "dsh-reference-session-collector": ">=0.2.0-beta.0 <0.3.0"
+    "undici": "^7.29.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -128,6 +128,7 @@
     }
   },
   "devDependencies": {
+    "@antv/g6": "5.1.1",
     "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/cordis-plugin-loader": "^1.0.5",
     "@deepseek-ai/cosmokit": "1.8.5",

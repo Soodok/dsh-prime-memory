@@ -1,13 +1,13 @@
 /**
- * Tab:图谱预览 —— 推荐起点 + 径向邻域绘制(点击邻居换中心)。
+ * Tab:图谱 —— 全图星图(G6)与单点邻域(径向卡)双态。
  *
- * 定位:图谱是 L1 记录的可重建投影,本 Tab 消费它的"度数榜":
+ * 定位:图谱是 L1 记录的可重建投影,本 Tab 消费它的"度数榜"与全图轻量块:
  * 起点推荐 = active 度数 + 因果边×2 加权(实机审计因果边占比 ~24%,因果链比
- * 共现邻接更值得画)——排序/合并/截断语义全在服务端 preview.ts,
- * 这里只管画;客户端零依赖(SVG 手写径向,无 d3)。
+ * 共现邻接更值得画)——排序/合并/截断/可见性语义全在服务端 preview.ts,
+ * 这里只管画。全图态交给 G6(物理+交互),邻域态仍是手写 SVG(零依赖)。
  *
  * 数据契约(冻结于 src/contract.ts GraphPreviewResponse):
- * - 缺省请求返回种子榜(seeds 至多 6,相邻种子已合并)+ 全图 stats;
+ * - `mode:'full'` 请求一次拿到 种子榜 + 全图 full 块 + stats(同一 loadGraph);
  * - seedId 请求返回该节点唯一邻域(悬挂 id → seeds 空,不抛);
  * - pendingJobs>0 → 统计条"构建中 x/y"(x=jobsTotal-pendingJobs)。
  */
@@ -16,8 +16,11 @@ import type { GraphPreviewResponse } from '../../../src/contract.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NButton } from '../ui/primitives.js';
+import { GraphCanvas } from './GraphCanvas.js';
 
 type SeedView = GraphPreviewResponse['seeds'][number];
+/** 绘制态:全图星图(G6)/ 单点邻域(径向卡)。默认全图——进 Tab 先看全局。 */
+type GraphView = 'full' | 'ego';
 
 /** 画布尺寸与半径(viewBox 360;邻居环 120;节点圆 22——与 spec 模块 D 同值)。 */
 const VB = 360;
@@ -57,10 +60,14 @@ export function radialLayout(n: number): { cx: number; cy: number; pts: Array<{ 
 
 export function GraphTab(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
-  /** 种子榜响应(mount/回榜单时刷新;stats 唯一来源)。 */
+  /** 种子榜 + 全图块响应(mount/回榜单/刷新时重取;stats 与 full 的唯一来源)。 */
   const [board, setBoard] = useState<GraphPreviewResponse | null>(null);
-  /** 当前绘制中心(榜内首种子或点进去的邻居;null=无邻域可画)。 */
+  /** 当前绘制态(全图 / 邻域)。 */
+  const [view, setView] = useState<GraphView>('full');
+  /** 邻域态的中心(榜内首种子或点进去的邻居;null=无邻域可画)。 */
   const [focus, setFocus] = useState<SeedView | null>(null);
+  /** 全图态下单击星点选中的详情（null=未选：不在全图下预挂一张邻域卡）。 */
+  const [picked, setPicked] = useState<SeedView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,27 +80,38 @@ export function GraphTab(props: { rpc: RpcFn }) {
     [rpc],
   );
 
-  /** 拉种子榜并画首种子(进 Tab / 回榜单 / 错误重试共用)。 */
+  /** 拉种子榜与全图块(进 Tab / 回榜单 / 错误重试共用)。 */
   const loadBoard = useCallback(() => {
     setLoading(true);
     setError(null);
-    call({})
+    call({ mode: 'full' })
       .then((v) => {
         setBoard(v);
         setFocus(v.seeds[0] ?? null);
+        setPicked(null);
       })
       .catch((e: unknown) => setError(String((e as Error)?.message ?? e)))
       .finally(() => setLoading(false));
   }, [call]);
 
-  /** 以指定节点为中心重画(点邻居/点 chip;悬挂 id 回退榜单首种子)。 */
+  /**
+   * 以指定节点为中心重画邻域(点 chip / 点邻居 / 全图态点星点)。
+   * 全图态结果落 `picked`(下挂详情卡),邻域态结果落 `focus`(换中心);悬挂 id 不拆态。
+   */
   const drill = (nodeId: string) => {
+    const inFull = view === 'full';
     setLoading(true);
     setError(null);
     call({ seedId: nodeId })
       .then((v) => {
-        if (v.seeds.length > 0) setFocus(v.seeds[0]!);
-        else setFocus(board?.seeds[0] ?? null);
+        const next = v.seeds[0] ?? null;
+        if (inFull) {
+          if (next) setPicked(next);
+        } else if (next) {
+          setFocus(next);
+        } else {
+          setFocus(board?.seeds[0] ?? null);
+        }
       })
       .catch((e: unknown) => setError(String((e as Error)?.message ?? e)))
       .finally(() => setLoading(false));
@@ -104,8 +122,12 @@ export function GraphTab(props: { rpc: RpcFn }) {
   }, [loadBoard]);
 
   const stats = board?.stats ?? null;
-  const layout = focus ? radialLayout(focus.neighbors.length) : null;
-  const hidden = focus ? Math.max(0, focus.node.degree - focus.neighbors.length) : 0;
+  /** 当下要画邻域卡的中心:全图态=点选的星,邻域态=focus。 */
+  const center = view === 'full' ? picked : focus;
+  const layout = center ? radialLayout(center.neighbors.length) : null;
+  const hidden = center ? Math.max(0, center.node.degree - center.neighbors.length) : 0;
+  /** 全图块可用性:服务端未带 full(旧版降级)则静默留在邻域态,不显空 canvas。 */
+  const full = view === 'full' ? board?.full : undefined;
 
   return (
     <div>
@@ -120,18 +142,37 @@ export function GraphTab(props: { rpc: RpcFn }) {
               : '—'}
         </span>
         <div style={S.grow} />
-        {focus ? (
+        {/* 双态切换:全图一体展示 / 单点邻域展开 */}
+        <div style={S.seg}>
+          <button
+            style={view === 'full' ? { ...S.segBtn, ...S.segBtnOn } : S.segBtn}
+            title="全图星图：所有可见实体与关系一张图"
+            onClick={() => setView('full')}
+          >
+            全图
+          </button>
+          <button
+            style={view === 'ego' ? { ...S.segBtn, ...S.segBtnOn } : S.segBtn}
+            title="单点邻域：以一个节点为中心展开"
+            onClick={() => setView('ego')}
+          >
+            邻域
+          </button>
+        </div>
+        {center ? (
           <NButton
             onClick={() => {
-              if (board) {
+              if (view === 'full') {
+                setPicked(null);
+              } else if (board) {
                 setFocus(board.seeds[0] ?? null);
               } else {
                 loadBoard();
               }
             }}
-            title="回到推荐种子榜"
+            title={view === 'full' ? '收起下挂的邻域详情' : '回到推荐种子榜'}
           >
-            回榜单
+            {view === 'full' ? '清选择' : '回榜单'}
           </NButton>
         ) : null}
         <NButton onClick={loadBoard}>刷新</NButton>
@@ -158,7 +199,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
           {board.seeds.map((s) => (
             <button
               key={s.node.id}
-              className={focus?.node.id === s.node.id ? 'dsh-mem-tab dsh-mem-tab-on' : 'dsh-mem-tab'}
+              className={center?.node.id === s.node.id ? 'dsh-mem-tab dsh-mem-tab-on' : 'dsh-mem-tab'}
               title={`度 ${s.node.degree}(因果 ${s.node.causalDegree})`}
               onClick={() => drill(s.node.id)}
             >
@@ -168,16 +209,27 @@ export function GraphTab(props: { rpc: RpcFn }) {
         </div>
       ) : null}
 
-      {focus && layout ? (
+      {/* 全图星图(G6 d3-force 一体展示):物理与交互全在库里,本层只馈数据与选星回调 */}
+      {full && full.nodes.length > 0 ? (
+        <div style={{ marginBottom: 10 }}>
+          <GraphCanvas full={full} onPick={drill} />
+          <div style={{ ...S.muted, marginTop: 4 }}>
+            拖动空白平移 · 滚轮缩放 · 拖节点可钉住 · 悬停点亮邻域 · 单击星点看它的邻域
+            {full.truncated ? ` · 已达绘制上限,只画前 ${full.nodes.length} 个节点` : ''}
+          </div>
+        </div>
+      ) : null}
+
+      {center && layout ? (
         <div>
           <div style={{ ...S.muted, fontSize: 12, marginBottom: 4 }}>
-            中心:<b>{focus.node.name}</b>({focus.node.type} · 度 {focus.node.degree})
-            {focus.truncated ? ` · 另有 ${hidden} 条关系未画` : ''}
+            中心:<b>{center.node.name}</b>({center.node.type} · 度 {center.node.degree})
+            {center.truncated ? ` · 另有 ${hidden} 条关系未画` : ''}
             {loading ? ' · 加载中…' : ''}
           </div>
           <svg viewBox={`0 0 ${VB} ${VB}`} width="100%" style={{ maxWidth: 460, display: 'block' }}>
             {/* 边层(先画,垫在节点下):因果边加粗 + 强调色;关系词在边中点 */}
-            {focus.neighbors.map((nb, i) => {
+            {center.neighbors.map((nb, i) => {
               const p = layout.pts[i]!;
               const causal = nb.causal;
               return (
@@ -204,7 +256,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
               );
             })}
             {/* 邻居节点层:点击=换中心 */}
-            {focus.neighbors.map((nb, i) => {
+            {center.neighbors.map((nb, i) => {
               const p = layout.pts[i]!;
               return (
                 <g
@@ -222,16 +274,16 @@ export function GraphTab(props: { rpc: RpcFn }) {
               );
             })}
             {/* 中心节点 */}
-            <circle cx={layout.cx} cy={layout.cy} r={NODE_R} fill={TYPE_COLORS[focus.node.type] ?? FALLBACK_COLOR} stroke="var(--dsh-mem-border-strong)" />
+            <circle cx={layout.cx} cy={layout.cy} r={NODE_R} fill={TYPE_COLORS[center.node.type] ?? FALLBACK_COLOR} stroke="var(--dsh-mem-border-strong)" />
             <text x={layout.cx} y={layout.cy + 4} textAnchor="middle" fontSize={11} fontWeight={700} fill="var(--dsh-mem-text-1)">
-              {clip(focus.node.name)}
+              {clip(center.node.name)}
             </text>
           </svg>
         </div>
       ) : null}
 
-      {/* 有节点但无邻域(种子榜为空/全孤点):不是空图,是还没有边 */}
-      {stats && stats.nodes > 0 && !focus && !error ? (
+      {/* 有节点但无关系边:不是空图,是边还没投影出来(用 stats.edges 判,不拿“有没有选中心”当凭据) */}
+      {stats && stats.nodes > 0 && stats.edges === 0 && !error ? (
         <p style={S.intro}>已有 {stats.nodes} 个实体节点,但还没有可连出的关系边(或投影未完成)。</p>
       ) : null}
     </div>
