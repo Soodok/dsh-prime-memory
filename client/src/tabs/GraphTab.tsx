@@ -253,7 +253,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
       {/* ── 全图态：一张力导图装下全部可见节点 ── */}
       {view === 'full' && fullBlock && fullBlock.nodes.length > 0 ? (
         <div style={{ marginBottom: 10 }}>
-          <GraphCanvas full={fullBlock} onPick={openEgo} height={FULL_H} />
+          <GraphCanvas full={fullBlock} onPick={openEgo} rpc={rpc} height={FULL_H} />
           <div style={{ ...S.muted, marginTop: 4 }}>
             拖动空白平移 · 滚轮缩放 · 拖节点可钉住 · 悬停点亮邻域并在浮层里看全名 · 单击星点即以它为中心展开邻域
             {fullBlock.truncated ? ` · 已达绘制上限,只画前 ${fullBlock.nodes.length} 个节点` : ''}
@@ -283,6 +283,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
               emphasisId={seedId ?? undefined}
               fit="view"
               onPick={openEgo}
+              rpc={rpc}
               height={EGO_H}
             />
             <div style={{ ...S.muted, marginTop: 4, marginBottom: 8 }}>

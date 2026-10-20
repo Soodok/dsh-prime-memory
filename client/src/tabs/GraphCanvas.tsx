@@ -1,17 +1,23 @@
 /**
- * Tab 内「全图星图」渲染层(G6 v5 声明式装配):星点背层 + canvas 图 + 实例生命周期。
+ * Tab 内「全图星图」渲染层(G6 v5 声明式装配):星点背层 + canvas 图 + 两级气泡。
  *
  * 只装配不查数:数据由 GraphTab 传入(服务端 `mode:'full'` 已做可见性过滤与双上限截断),
- * 物理与交互全交给 G6(`d3-force` + behaviors)——自研引擎案已按 spike 结论作废。
- * 纯数据面(度数/坐标/伪随机)在 graph-canvas-data.ts,本文件只留 DOM 侧。
+ * 物理与交互全交给 G6(`d3-force` + behaviors)。
  *
- * ⚠️ canvas 渲染不吃 CSS 变量:@antv/g 把颜色交给 canvas 解析,`var(--dsh-mem-chart-1)`
- * 这种字符串在 SVG 里成立(GraphTab 径向卡就是 SVG),在 G6 里必须先用 getComputedStyle
- * 解析成实色,否则整片画不出来。皮肤切换后需重挂载才换色(刷新即可,未做热跟随)。
+ * 两级气泡设计(取代 G6 内置 tooltip)：
+ * - L1（悬浮触发）：实体名 + 类型 + 关系数 + 「详情」按钮
+ * - L2（点击详情）：展开实体元数据(facts/别名/状态) + 来源记录(type/name/date)
+ * 气泡是绝对定位的 React overlay div，不受 G6 canvas 内部事件影响，
+ * 鼠标移入气泡时取消隐藏计时器(桥接)。
+ *
+ * ⚙️ canvas 渲染不吃 CSS 变量：G6 里必须先 getComputedStyle 解成实色。
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Graph } from '@antv/g6';
-import type { EdgeData, IElementEvent, NodeData } from '@antv/g6';
+import type { EdgeData, NodeData } from '@antv/g6';
+import type { GraphNodeGetResponse, RecordsMetaResponse, RecordMeta } from '../../../src/contract.js';
+import type { GraphNode } from '../../../src/graph/types.js';
+import type { RpcFn } from '../rpc.js';
 import {
   clipByWidth,
   hash32,
@@ -49,6 +55,8 @@ function resolveColor(host: HTMLElement, token: string): string {
 export function GraphCanvas(props: {
   full: GraphFull;
   onPick: (id: string) => void;
+  /** RPC 函数，用于二级气泡拉取实体详情。 */
+  rpc: RpcFn;
   /** 起点强调（邻域态用：更大一圈 + 描边 + 粗体名，一眼看出从哪长出来）。 */
   emphasisId?: string;
   /** 取景：全图居中即可，子图小、需 fit 到画面内。 */
@@ -56,14 +64,54 @@ export function GraphCanvas(props: {
   /** 画布高度（全图给宽景，子图可以矮一点留出详情区）。 */
   height?: number;
 }) {
-  const { full, emphasisId, fit = 'center', height: canvasH = CANVAS_H } = props;
+  const { full, emphasisId, fit = 'center', height: canvasH = CANVAS_H, rpc } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
-  /** 回调存 ref:点击回调身份变化不该重建实例(重建 = 丢掉钉位与收敛态)。 */
   const pickRef = useRef(props.onPick);
   pickRef.current = props.onPick;
 
+  // ── 两级气泡状态 ──────────────────────────────────────────
+  /** L1: 悬浮信息(id + 容器内坐标)；null=不显示。 */
+  const [hovered, setHovered] = useState<{ id: string; x: number; y: number } | null>(null);
+  /** L2: 钉住展开(id + 坐标)；null=未展开。 */
+  const [pinned, setPinned] = useState<{ id: string; x: number; y: number } | null>(null);
+  /** 二级气泡元数据。 */
+  const [detail, setDetail] = useState<{ node: GraphNode; records: RecordMeta[] } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  /** 桥接计时器：鼠标从节点移向气泡时不立即隐藏。 */
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const nodeKey = useMemo(() => nodeKeyOf(full), [full]);
   const stars = useMemo(() => starField(nodeKey), [nodeKey]);
+
+  /** 气泡 L1 数据源(组件级,渲染层与 effect 内事件共用)。 */
+  const tips = useMemo(() => {
+    const m = new Map<string, { title: string; sub: string }>();
+    const nameById = new Map(full.nodes.map((n) => [n.id, n.name]));
+    for (const n of full.nodes) {
+      m.set(n.id, {
+        title: n.name,
+        sub: `类型 ${n.type} · 关系数 ${n.id === emphasisId ? '(起点)' : ''}`,
+      });
+    }
+    // 度数从 full.edges 算(与 toGraphData 同判据)
+    const degMap = new Map<string, number>();
+    for (const e of full.edges) {
+      degMap.set(e.from, (degMap.get(e.from) ?? 0) + 1);
+      degMap.set(e.to, (degMap.get(e.to) ?? 0) + 1);
+    }
+    for (const n of full.nodes) {
+      const t = m.get(n.id);
+      if (t) t.sub = `类型 ${n.type} · 关系数 ${degMap.get(n.id) ?? 0}${n.id === emphasisId ? ' · 当前起点' : ''}`;
+    }
+    for (const e of full.edges) {
+      const eid = `${e.from}\x00${e.to}\x00${e.relation}`;
+      m.set(eid, {
+        title: e.relation,
+        sub: `${nameById.get(e.from) ?? e.from} → ${nameById.get(e.to) ?? e.to}${e.causal ? ' · 因果边' : ''}`,
+      });
+    }
+    return m;
+  }, [full, emphasisId]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -83,26 +131,7 @@ export function GraphCanvas(props: {
     /** 起点强调与否看它（邻域子图里靠强调圈区分中心）。 */
     const isSeed = (d: { id?: string }): boolean => emphasisId !== undefined && d.id === emphasisId;
 
-    /**
-     * 悬浮补全：标签在 canvas 里被截断后没有 DOM title 可挂（SVG 那套 <title> 子元素
-     * 在画布上不存在），所以走官方 tooltip 插件。内容一律用 textContent 构造——
-     * 实体名来自记忆数据，不能当 HTML 注进宿主页。
-     */
     const data = toGraphData(full, width, height);
-    const nameById = new Map(full.nodes.map((n) => [n.id, n.name]));
-    const tips = new Map<string, { title: string; sub: string }>();
-    for (const n of data.nodes) {
-      tips.set(n.id, {
-        title: String(n.data.name),
-        sub: `类型 ${n.data.type} · 关系数 ${n.data.degree}${n.id === emphasisId ? ' · 当前起点' : ''}`,
-      });
-    }
-    for (const e of data.edges) {
-      tips.set(e.id, {
-        title: String(e.data.relation),
-        sub: `${nameById.get(e.source) ?? e.source} → ${nameById.get(e.target) ?? e.target}${e.data.causal ? ' · 因果边' : ''}`,
-      });
-    }
 
     const graph = new Graph({
       container: host,
@@ -179,42 +208,67 @@ export function GraphCanvas(props: {
         { type: 'drag-element-force', fixed: true },
         { type: 'hover-activate', degree: 1, inactiveState: 'inactive' },
       ],
-      plugins: [
-        {
-          type: 'tooltip',
-          trigger: 'hover',
-          getContent: async (event: IElementEvent) => {
-            const id = String((event.target as { id?: string } | undefined)?.id ?? '');
-            const tip = tips.get(id);
-            if (!tip) return '';
-            const box = document.createElement('div');
-            box.style.cssText = 'max-width:340px;white-space:normal;word-break:break-all;font-size:12px;line-height:1.5;';
-            const head = document.createElement('b');
-            head.textContent = tip.title;
-            const sub = document.createElement('div');
-            sub.textContent = tip.sub;
-            box.append(head, sub);
-            return box;
-          },
-        },
-      ],
+      plugins: [],
     });
-
-    // render 是异步方法;卸载竞态由 cleanup 的 destroyed 判据兜住
-    void graph.render().catch(() => {
-      /* 渲染失败不弹栈:展示面降级成空图即可,数据已由服务端过滤截断 */
+  
+    // render 是异步方法;卸载竞态由 cleanup 的 destroyed 判据兆住
+    void graph.render().catch(() => {});
+  
+    // ── 气泡事件绑定(取代 G6 tooltip) ────────────────────
+    graph.on('node:pointerenter', (evt) => {
+      const id = (evt as { target?: { id?: string } }).target?.id;
+      if (!id) return;
+      // 取消之前的隐藏计时
+      if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; }
+      // 计算容器内坐标
+      const rect = host.getBoundingClientRect();
+      const e = evt as { client?: { x: number; y: number }; viewport?: { x: number; y: number } };
+      const cx = e.client?.x ?? e.viewport?.x ?? 0;
+      const cy = e.client?.y ?? e.viewport?.y ?? 0;
+      setHovered({ id, x: cx - rect.left, y: cy - rect.top });
     });
-
+    graph.on('node:pointerleave', () => {
+      // 延迟隐藏(桥接窗口 250ms)——给鼠标从节点移向气泡的时间
+      hideTimerRef.current = setTimeout(() => setHovered(null), 250);
+    });
     graph.on('node:click', (evt) => {
       const id = (evt as { target?: { id?: string } }).target?.id;
       if (typeof id === 'string' && id.length > 0) pickRef.current(id);
     });
-
+    // 画布空白点击 = 收起 L2
+    graph.on('canvas:click', () => { setPinned(null); setDetail(null); });
+  
     return () => {
       // 红线:实例必销毁,否则切 Tab/刷新会累积 canvas 与力模拟循环
       if (!graph.destroyed) graph.destroy();
     };
   }, [full, nodeKey, emphasisId, fit, canvasH]);
+
+  /** 点击「详情」→ 钉住气泡并拉取元数据。 */
+  const openDetail = useCallback((id: string, x: number, y: number) => {
+    setPinned({ id, x, y });
+    setHovered(null);
+    setDetail(null);
+    setDetailLoading(true);
+    rpc('dsh-memory/graph-node-get', { id })
+      .then((r) => {
+        const resp = (r?.ok ? r.value : null) as GraphNodeGetResponse | null;
+        const node = resp?.node;
+        if (!node) { setDetail(null); return; }
+        const ids = node.sourceRecordIds?.slice(0, 50) ?? [];
+        if (ids.length === 0) { setDetail({ node, records: [] }); return; }
+        return rpc('dsh-memory/records-meta', { ids }).then((mr) => {
+          const metaResp = (mr?.ok ? mr.value : null) as RecordsMetaResponse | null;
+          setDetail({ node, records: metaResp?.items ?? [] });
+        });
+      })
+      .catch(() => setDetail(null))
+      .finally(() => setDetailLoading(false));
+  }, [rpc]);
+
+  /** 当前要显示的气泡数据(pinned 优先于 hovered)。 */
+  const activeBubble = pinned ?? hovered;
+  const bubbleTip = activeBubble ? tips.get(activeBubble.id) : null;
 
   return (
     <div style={{ position: 'relative', width: '100%', height: canvasH, overflow: 'hidden', borderRadius: 8 }}>
@@ -229,6 +283,89 @@ export function GraphCanvas(props: {
         ))}
       </svg>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
+
+      {/* 两级气泡 overlay */}
+      {activeBubble && bubbleTip && (
+        <div
+          style={{
+            position: 'absolute',
+            left: Math.min(activeBubble.x + 12, (hostRef.current?.clientWidth ?? 600) - 280),
+            top: Math.max(activeBubble.y - 8, 8),
+            maxWidth: 320,
+            padding: '8px 12px',
+            background: 'var(--dsh-mem-bg-card, #fff)',
+            border: '1px solid var(--dsh-mem-border, #ddd)',
+            borderRadius: 6,
+            boxShadow: '0 2px 12px rgba(0,0,0,.12)',
+            fontSize: 12,
+            lineHeight: 1.5,
+            zIndex: 20,
+            pointerEvents: 'auto',
+          }}
+          onMouseEnter={() => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } }}
+          onMouseLeave={() => { if (!pinned) setHovered(null); }}
+        >
+          {/* L1 基本信息 */}
+          <div style={{ fontWeight: 600 }}>{bubbleTip.title}</div>
+          <div style={{ color: 'var(--dsh-mem-text-3)' }}>{bubbleTip.sub}</div>
+
+          {/* 「详情」按钮 (L1 时显示) / 关闭按钮 (L2 时显示) */}
+          {!pinned ? (
+            <button
+              style={{ marginTop: 6, padding: '2px 10px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--dsh-mem-border, #ccc)', borderRadius: 4, background: 'var(--dsh-mem-bg-card, #f8f8f8)' }}
+              onClick={() => openDetail(activeBubble.id, activeBubble.x, activeBubble.y)}
+            >
+              详情
+            </button>
+          ) : (
+            <button
+              style={{ position: 'absolute', top: 4, right: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--dsh-mem-text-3)' }}
+              onClick={() => { setPinned(null); setDetail(null); }}
+              title="关闭"
+            >
+              ×
+            </button>
+          )}
+
+          {/* L2 展开内容 */}
+          {pinned && (
+            <div style={{ marginTop: 6, borderTop: '1px solid var(--dsh-mem-border, #eee)', paddingTop: 6 }}>
+              {detailLoading ? (
+                <span style={{ color: 'var(--dsh-mem-text-3)' }}>加载中…</span>
+              ) : detail ? (
+                <div>
+                  <div><b>{detail.node.name}</b> ({detail.node.type})
+                    {detail.node.aliases.length > 0 && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 4 }}>别名: {detail.node.aliases.join(', ')}</span>}
+                  </div>
+                  <div style={{ color: 'var(--dsh-mem-text-3)' }}>状态 {detail.node.status} · 置信 {(detail.node.confidence * 100).toFixed(0)}%</div>
+                  {detail.node.currentState && <div style={{ marginTop: 2 }}>{detail.node.currentState}</div>}
+                  {detail.node.facts.filter((f) => f.status === 'active').length > 0 && (
+                    <details style={{ marginTop: 3 }}>
+                      <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>Facts ({detail.node.facts.filter((f) => f.status === 'active').length})</summary>
+                      {detail.node.facts.filter((f) => f.status === 'active').map((f) => (
+                        <div key={f.id} style={{ paddingLeft: 8 }}>{f.key}: {Array.isArray(f.value) ? f.value.join(', ') : f.value}</div>
+                      ))}
+                    </details>
+                  )}
+                  {detail.records.length > 0 && (
+                    <details style={{ marginTop: 3 }}>
+                      <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>来源记录 ({detail.records.length})</summary>
+                      {detail.records.map((r) => (
+                        <div key={r.id} style={{ paddingLeft: 8, marginBottom: 1 }}>
+                          <span style={{ color: 'var(--dsh-mem-text-3)' }}>[{r.type}]</span> {r.name ?? r.content.slice(0, 50)}
+                          {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 4 }}>{r.updatedAt.slice(0, 10)}</span>}
+                        </div>
+                      ))}
+                    </details>
+                  )}
+                </div>
+              ) : (
+                <span style={{ color: 'var(--dsh-mem-text-3)' }}>无元数据</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
