@@ -11,23 +11,17 @@
  * - seedId 请求返回该节点唯一邻域(悬挂 id → seeds 空,不抛);
  * - pendingJobs>0 → 统计条"构建中 x/y"(x=jobsTotal-pendingJobs)。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { GraphPreviewResponse } from '../../../src/contract.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NButton } from '../ui/primitives.js';
+import { clipName, egoLayout, groupNeighbors, EGO_CENTER_R, EGO_LABEL_FS, EGO_NEIGHBOR_R } from './graph-ego-layout.js';
 import { GraphCanvas } from './GraphCanvas.js';
 
 type SeedView = GraphPreviewResponse['seeds'][number];
 /** 绘制态:全图星图(G6)/ 单点邻域(径向卡)。默认全图——进 Tab 先看全局。 */
 type GraphView = 'full' | 'ego';
-
-/** 画布尺寸与半径(viewBox 360;邻居环 120;节点圆 22——与 spec 模块 D 同值)。 */
-const VB = 360;
-const RING = 120;
-const NODE_R = 22;
-/** 名字截断字数(超出加 …;hover title 给全名)。 */
-const NAME_CLIP = 8;
 
 /** 五类实体色:直接映射既有图表调色板(CostTab 先例),不引入新色值。 */
 const TYPE_COLORS: Record<string, string> = {
@@ -38,25 +32,8 @@ const TYPE_COLORS: Record<string, string> = {
   place: 'var(--dsh-mem-chart-5)',
 };
 const FALLBACK_COLOR = 'var(--dsh-mem-chart-6)';
-
-function clip(name: string): string {
-  return name.length > NAME_CLIP ? `${name.slice(0, NAME_CLIP)}…` : name;
-}
-
-/**
- * 径向布局纯函数:中心画布正中,n 个邻居按输入序等角分布(首点 12 点方向)。
- * n=0 → pts 空(只画中心)。角度 i/n·2π − π/2:同输入同坐标,无随机源。
- */
-export function radialLayout(n: number): { cx: number; cy: number; pts: Array<{ x: number; y: number }> } {
-  const cx = VB / 2;
-  const cy = VB / 2;
-  const pts: Array<{ x: number; y: number }> = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
-    pts.push({ x: Math.round((cx + Math.cos(a) * RING) * 10) / 10, y: Math.round((cy + Math.sin(a) * RING) * 10) / 10 });
-  }
-  return { cx, cy, pts };
-}
+/** 径向卡最大渲染宽度(viewBox 自适应变大时靠缩放适配,不撑破面板)。 */
+const EGO_MAX_W = 560;
 
 export function GraphTab(props: { rpc: RpcFn }) {
   const rpc = props.rpc;
@@ -124,8 +101,20 @@ export function GraphTab(props: { rpc: RpcFn }) {
   const stats = board?.stats ?? null;
   /** 当下要画邻域卡的中心:全图态=点选的星,邻域态=focus。 */
   const center = view === 'full' ? picked : focus;
-  const layout = center ? radialLayout(center.neighbors.length) : null;
-  const hidden = center ? Math.max(0, center.node.degree - center.neighbors.length) : 0;
+  /**
+   * 服务端 neighbors 按边下发(同对节点可多条关系),先按 id 合并:
+   * key 不再重复(旧版叠字与“该展开不展开”的根因),关系词一条不丢。
+   */
+  const grouped = useMemo(() => (center ? groupNeighbors(center.neighbors) : []), [center]);
+  const layout = center
+    ? egoLayout(
+        grouped.length,
+        grouped.map((g) => g.name),
+        grouped.map((g) => g.causal),
+      )
+    : null;
+  /** 未画关系数 = 度数 − 已画关系条数(截断时才是真数,不拿“圆个数”冒充)。 */
+  const hidden = center ? Math.max(0, center.node.degree - grouped.reduce((s, g) => s + g.relations.length, 0)) : 0;
   /** 全图块可用性:服务端未带 full(旧版降级)则静默留在邻域态,不显空 canvas。 */
   const full = view === 'full' ? board?.full : undefined;
 
@@ -203,7 +192,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
               title={`度 ${s.node.degree}(因果 ${s.node.causalDegree})`}
               onClick={() => drill(s.node.id)}
             >
-              {clip(s.node.name)}
+              {clipName(s.node.name)}
             </button>
           ))}
         </div>
@@ -223,60 +212,84 @@ export function GraphTab(props: { rpc: RpcFn }) {
       {center && layout ? (
         <div>
           <div style={{ ...S.muted, fontSize: 12, marginBottom: 4 }}>
-            中心:<b>{center.node.name}</b>({center.node.type} · 度 {center.node.degree})
+            中心:<b>{center.node.name}</b>({center.node.type} · 度 {center.node.degree} · 邻居 {grouped.length})
             {center.truncated ? ` · 另有 ${hidden} 条关系未画` : ''}
             {loading ? ' · 加载中…' : ''}
           </div>
-          <svg viewBox={`0 0 ${VB} ${VB}`} width="100%" style={{ maxWidth: 460, display: 'block' }}>
-            {/* 边层(先画,垫在节点下):因果边加粗 + 强调色;关系词在边中点 */}
-            {center.neighbors.map((nb, i) => {
+          <svg viewBox={`0 0 ${layout.size} ${layout.size}`} width="100%" style={{ maxWidth: EGO_MAX_W, display: 'block' }}>
+            {/* 箭头定义:因果边有方向(from→to),画成无向线会把“谁导致谁”读丢 */}
+            <defs>
+              <marker id="pm-ego-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dsh-mem-accent)" />
+              </marker>
+            </defs>
+            {/* 边层(先画,垫在节点下):每条关系都带词,不再只标因果边;因果边加粗 + 箭头 */}
+            {grouped.map((g, i) => {
               const p = layout.pts[i]!;
-              const causal = nb.causal;
               return (
-                <g key={`e-${nb.id}-${i}`}>
+                <g key={`e-${g.id}`}>
                   <line
-                    x1={layout.cx}
-                    y1={layout.cy}
-                    x2={p.x}
-                    y2={p.y}
-                    stroke={causal ? 'var(--dsh-mem-accent)' : 'var(--dsh-mem-border)'}
-                    strokeWidth={causal ? 3 : 1.5}
+                    x1={p.x1}
+                    y1={p.y1}
+                    x2={p.x2}
+                    y2={p.y2}
+                    stroke={g.causal ? 'var(--dsh-mem-accent)' : 'var(--dsh-mem-border)'}
+                    strokeWidth={g.causal ? 2.6 : 1.4}
+                    markerEnd={g.causal ? 'url(#pm-ego-arrow)' : undefined}
                   />
                   <text
-                    x={(layout.cx + p.x) / 2}
-                    y={(layout.cy + p.y) / 2 - 4}
+                    x={p.midX}
+                    y={p.midY}
                     textAnchor="middle"
-                    fontSize={causal ? 12 : 10}
-                    fontWeight={causal ? 700 : 400}
-                    fill={causal ? 'var(--dsh-mem-accent)' : 'var(--dsh-mem-text-3)'}
+                    fontSize={g.causal ? 12 : 10}
+                    fontWeight={g.causal ? 700 : 400}
+                    fill={g.causal ? 'var(--dsh-mem-accent)' : 'var(--dsh-mem-text-3)'}
+                    stroke="var(--dsh-mem-bg-card)"
+                    strokeWidth={3}
+                    paintOrder="stroke"
                   >
-                    {nb.relation}
+                    {g.relations.join('·')}
                   </text>
                 </g>
               );
             })}
-            {/* 邻居节点层:点击=换中心 */}
-            {center.neighbors.map((nb, i) => {
+            {/* 邻居节点层:一个邻居一个圆(多条关系并进关系词),点击=换中心 */}
+            {grouped.map((g, i) => {
               const p = layout.pts[i]!;
               return (
-                <g
-                  key={`n-${nb.id}`}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => drill(nb.id)}
-                >
+                <g key={`n-${g.id}`} style={{ cursor: 'pointer' }} onClick={() => drill(g.id)}>
                   {/* SVG hover 提示的正确形状:<title> 子元素(g 不吃 title 属性,tsc 钉过) */}
-                  <title>{`${nb.name}(${nb.type})——点击以此为中心`}</title>
-                  <circle cx={p.x} cy={p.y} r={NODE_R - 6} fill={TYPE_COLORS[nb.type] ?? FALLBACK_COLOR} opacity={0.9} />
-                  <text x={p.x} y={p.y + NODE_R + 2} textAnchor="middle" fontSize={11} fill="var(--dsh-mem-text-2)">
-                    {clip(nb.name)}
+                  <title>{`${g.name}(${g.type} · ${g.relations.join('·')})——点击以此为中心`}</title>
+                  <circle cx={p.x} cy={p.y} r={EGO_NEIGHBOR_R} fill={TYPE_COLORS[g.type] ?? FALLBACK_COLOR} opacity={0.9} />
+                  <text
+                    x={p.labelX}
+                    y={p.labelY}
+                    textAnchor={p.anchor}
+                    fontSize={EGO_LABEL_FS}
+                    fill="var(--dsh-mem-text-2)"
+                    stroke="var(--dsh-mem-bg-card)"
+                    strokeWidth={3}
+                    paintOrder="stroke"
+                  >
+                    {clipName(g.name)}
                   </text>
                 </g>
               );
             })}
-            {/* 中心节点 */}
-            <circle cx={layout.cx} cy={layout.cy} r={NODE_R} fill={TYPE_COLORS[center.node.type] ?? FALLBACK_COLOR} stroke="var(--dsh-mem-border-strong)" />
-            <text x={layout.cx} y={layout.cy + 4} textAnchor="middle" fontSize={11} fontWeight={700} fill="var(--dsh-mem-text-1)">
-              {clip(center.node.name)}
+            {/* 中心节点:标签移到圆下方(8 字 CJK 宽≈88 > 圆直径 44,压在圆上会糊) */}
+            <circle cx={layout.cx} cy={layout.cy} r={EGO_CENTER_R} fill={TYPE_COLORS[center.node.type] ?? FALLBACK_COLOR} stroke="var(--dsh-mem-border-strong)" />
+            <text
+              x={layout.cx}
+              y={layout.cy + EGO_CENTER_R + EGO_LABEL_FS + 3}
+              textAnchor="middle"
+              fontSize={EGO_LABEL_FS}
+              fontWeight={700}
+              fill="var(--dsh-mem-text-1)"
+              stroke="var(--dsh-mem-bg-card)"
+              strokeWidth={3}
+              paintOrder="stroke"
+            >
+              {clipName(center.node.name)}
             </text>
           </svg>
         </div>

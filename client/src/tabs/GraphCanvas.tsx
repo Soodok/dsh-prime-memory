@@ -37,6 +37,8 @@ const FALLBACK_TOKEN = '--dsh-mem-chart-6';
 const FALLBACK_COLOR = '#8a8f98';
 /** 画布高度:面板宽度不固定,高度钉死避免 Tab 切换时布局跳动。 */
 const CANVAS_H = 460;
+/** 关系词全量下发的边数上限(再密就只标因果,否则字墙盖过图)。 */
+const LABEL_ALL_EDGES_MAX = 220;
 
 /** CSS 变量 → 实色(插件自注入的 theme 样式在容器上生效,读计算值即可)。 */
 function resolveColor(host: HTMLElement, token: string): string {
@@ -64,6 +66,10 @@ export function GraphCanvas(props: { full: GraphFull; onPick: (id: string) => vo
     const edgeColor = resolveColor(host, '--dsh-mem-border-strong');
     const causalColor = resolveColor(host, '--dsh-mem-accent');
     const textColor = resolveColor(host, '--dsh-mem-text-2');
+    const dimColor = resolveColor(host, '--dsh-mem-text-3');
+    const bgColor = resolveColor(host, '--dsh-mem-bg-card');
+    /** 小图每条边都写关系词;大图只写因果边(两者都是"线看不出语义"的修法,按密度分级)。 */
+    const labelAll = full.edges.length <= LABEL_ALL_EDGES_MAX;
 
     const graph = new Graph({
       container: host,
@@ -98,13 +104,24 @@ export function GraphCanvas(props: { full: GraphFull; onPick: (id: string) => vo
           stroke: (d: EdgeData) => (d.data?.causal ? causalColor : edgeColor),
           lineWidth: (d: EdgeData) => (d.data?.causal ? 1.8 : 1),
           strokeOpacity: 0.5,
-          // 只在因果边上标关系词:全标会糊成一片(千级边时更甚)
-          labelText: (d: EdgeData) => (d.data?.causal ? String(d.data?.relation ?? '') : ''),
-          labelFill: causalColor,
-          labelFontSize: 10,
+          labelText: (d: EdgeData) => (labelAll || d.data?.causal ? String(d.data?.relation ?? '') : ''),
+          labelFill: (d: EdgeData) => (d.data?.causal ? causalColor : dimColor),
+          labelFontSize: 9,
+          // 字底垫一块半透背景:否则字压在弹簧线上、星点上一律读不出
+          labelBackground: true,
+          labelBackgroundFill: bgColor,
+          labelBackgroundOpacity: 0.78,
+          labelBackgroundRadius: 3,
+          // 全部边都有方向(from→to),所以全部带箭头;因果边用强调色+大箭头区分
+          // (v5 的 endArrow 不接受回调形态,按展平属性逐项给值)
+          endArrow: true,
+          endArrowType: 'vee',
+          endArrowSize: (d: EdgeData) => (d.data?.causal ? 10 : 5),
+          endArrowFill: (d: EdgeData) => (d.data?.causal ? causalColor : edgeColor),
+          endArrowStrokeOpacity: (d: EdgeData) => (d.data?.causal ? 1 : 0.55),
         },
         state: {
-          active: { strokeOpacity: 1, lineWidth: 2.4 },
+          active: { strokeOpacity: 1, lineWidth: 2.4, labelFill: causalColor, labelFontSize: 11 },
           inactive: { strokeOpacity: 0.06, labelOpacity: 0 },
         },
       },
