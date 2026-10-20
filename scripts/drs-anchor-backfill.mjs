@@ -6,7 +6,7 @@
  *   [--memory <memory.db>] [--drs <projection.db>] [--session <id>] \
  *   [--limit N] [--window-ms N] [--sample N] [--apply]
  *   缺省 memory = $DSH_HOME/memory/memory.db(dshHomePath('memory') 同口径)
- *   缺省 drs   = $DSH_REFERENCE_SESSION_DIR/projection.db(再退 ~/.dsh-reference-session/)
+ *   缺省 drs   = $DSH_REFERENCE_SESSION_COLLECTOR_DIR/projection.db(再退 ~/.dsh-reference-session-collector/)
  *   缺省 dry-run:两库只读,只出报告;--apply 才写 l0 的 turn/step 两列
  *   (恒带 `AND turn IS NULL`,已锚定行永不覆盖)。
  * 退出码:0 = 报告正常;1 = 库缺失/不可读等硬错误。
@@ -41,7 +41,7 @@ if (!memoryPath) {
 }
 let drsPath = argOf('--drs');
 if (!drsPath) {
-  const dir = process.env.DSH_REFERENCE_SESSION_DIR || join(homedir(), '.dsh-reference-session');
+  const dir = process.env.DSH_REFERENCE_SESSION_COLLECTOR_DIR || join(homedir(), '.dsh-reference-session-collector');
   drsPath = join(dir, 'projection.db');
 }
 for (const [label, path] of [['memory', memoryPath], ['drs', drsPath]]) {
