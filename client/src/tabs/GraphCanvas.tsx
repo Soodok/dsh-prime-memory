@@ -46,8 +46,17 @@ function resolveColor(host: HTMLElement, token: string): string {
   return v.length > 0 ? v : FALLBACK_COLOR;
 }
 
-export function GraphCanvas(props: { full: GraphFull; onPick: (id: string) => void }) {
-  const { full } = props;
+export function GraphCanvas(props: {
+  full: GraphFull;
+  onPick: (id: string) => void;
+  /** 起点强调（邻域态用：更大一圈 + 描边 + 粗体名，一眼看出从哪长出来）。 */
+  emphasisId?: string;
+  /** 取景：全图居中即可，子图小、需 fit 到画面内。 */
+  fit?: 'center' | 'view';
+  /** 画布高度（全图给宽景，子图可以矮一点留出详情区）。 */
+  height?: number;
+}) {
+  const { full, emphasisId, fit = 'center', height: canvasH = CANVAS_H } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   /** 回调存 ref:点击回调身份变化不该重建实例(重建 = 丢掉钉位与收敛态)。 */
   const pickRef = useRef(props.onPick);
@@ -60,7 +69,7 @@ export function GraphCanvas(props: { full: GraphFull; onPick: (id: string) => vo
     const host = hostRef.current;
     if (!host) return;
     const width = host.clientWidth || 640;
-    const height = host.clientHeight || CANVAS_H;
+    const height = host.clientHeight || canvasH;
 
     const color = (type: string) => resolveColor(host, TYPE_TOKENS[type] ?? FALLBACK_TOKEN);
     const edgeColor = resolveColor(host, '--dsh-mem-border-strong');
@@ -68,28 +77,33 @@ export function GraphCanvas(props: { full: GraphFull; onPick: (id: string) => vo
     const textColor = resolveColor(host, '--dsh-mem-text-2');
     const dimColor = resolveColor(host, '--dsh-mem-text-3');
     const bgColor = resolveColor(host, '--dsh-mem-bg-card');
+    const strongColor = resolveColor(host, '--dsh-mem-text-1');
     /** 小图每条边都写关系词;大图只写因果边(两者都是"线看不出语义"的修法,按密度分级)。 */
     const labelAll = full.edges.length <= LABEL_ALL_EDGES_MAX;
+    /** 起点强调与否看它（邻域子图里靠强调圈区分中心）。 */
+    const isSeed = (d: { id?: string }): boolean => emphasisId !== undefined && d.id === emphasisId;
 
     const graph = new Graph({
       container: host,
       width,
       height,
-      autoFit: { type: 'center' },
+      autoFit: fit === 'view' ? { type: 'view' } : { type: 'center' },
       zoomRange: [0.3, 3],
       data: toGraphData(full, width, height),
       node: {
         style: {
-          size: (d: NodeData) => radiusForDegree(Number(d.data?.degree ?? 0)),
+          size: (d: NodeData) => radiusForDegree(Number(d.data?.degree ?? 0)) + (isSeed(d) ? 3 : 0),
           fill: (d: NodeData) => color(String(d.data?.type ?? '')),
           fillOpacity: 0.9,
-          lineWidth: 0,
+          stroke: (d: NodeData) => (isSeed(d) ? strongColor : 'transparent'),
+          lineWidth: (d: NodeData) => (isSeed(d) ? 2.5 : 0),
           labelText: (d: NodeData) => {
             const name = String(d.data?.name ?? '');
             return name.length > NAME_CLIP ? `${name.slice(0, NAME_CLIP)}…` : name;
           },
           labelFill: textColor,
           labelFontSize: 10,
+          labelFontWeight: (d: NodeData) => (isSeed(d) ? 'bold' : 'normal'),
           labelPlacement: 'bottom',
           labelOffsetY: 2,
         },
@@ -162,10 +176,10 @@ export function GraphCanvas(props: { full: GraphFull; onPick: (id: string) => vo
       // 红线:实例必销毁,否则切 Tab/刷新会累积 canvas 与力模拟循环
       if (!graph.destroyed) graph.destroy();
     };
-  }, [full, nodeKey]);
+  }, [full, nodeKey, emphasisId, fit, canvasH]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: CANVAS_H, overflow: 'hidden', borderRadius: 8 }}>
+    <div style={{ position: 'relative', width: '100%', height: canvasH, overflow: 'hidden', borderRadius: 8 }}>
       <svg
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
