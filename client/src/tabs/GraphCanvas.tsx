@@ -12,12 +12,9 @@
  *
  * ⚙️ canvas 渲染不吃 CSS 变量：G6 里必须先 getComputedStyle 解成实色。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Graph } from '@antv/g6';
 import type { EdgeData, NodeData } from '@antv/g6';
-import type { GraphNodeGetResponse, RecordsMetaResponse, RecordMeta } from '../../../src/contract.js';
-import type { GraphNode } from '../../../src/graph/types.js';
-import type { RpcFn } from '../rpc.js';
 import {
   clipByWidth,
   hash32,
@@ -55,8 +52,6 @@ function resolveColor(host: HTMLElement, token: string): string {
 export function GraphCanvas(props: {
   full: GraphFull;
   onPick: (id: string) => void;
-  /** RPC 函数，用于二级气泡拉取实体详情。 */
-  rpc: RpcFn;
   /** 起点强调（邻域态用：更大一圈 + 描边 + 粗体名，一眼看出从哪长出来）。 */
   emphasisId?: string;
   /** 取景：全图居中即可，子图小、需 fit 到画面内。 */
@@ -64,19 +59,14 @@ export function GraphCanvas(props: {
   /** 画布高度（全图给宽景，子图可以矮一点留出详情区）。 */
   height?: number;
 }) {
-  const { full, emphasisId, fit = 'center', height: canvasH = CANVAS_H, rpc } = props;
+  const { full, emphasisId, fit = 'center', height: canvasH = CANVAS_H } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const pickRef = useRef(props.onPick);
   pickRef.current = props.onPick;
 
-  // ── 两级气泡状态 ──────────────────────────────────────────
-  /** L1: 悬浮信息(id + 容器内坐标)；null=不显示。 */
+  // ── 悬浮气泡状态 ──────────────────────────────────────────
+  /** 悬浮信息(id + 容器内坐标)；null=不显示。 */
   const [hovered, setHovered] = useState<{ id: string; x: number; y: number } | null>(null);
-  /** L2: 钉住展开(id + 坐标)；null=未展开。 */
-  const [pinned, setPinned] = useState<{ id: string; x: number; y: number } | null>(null);
-  /** 二级气泡元数据。 */
-  const [detail, setDetail] = useState<{ node: GraphNode; records: RecordMeta[] } | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
   /** 桥接计时器：鼠标从节点移向气泡时不立即隐藏。 */
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -235,8 +225,8 @@ export function GraphCanvas(props: {
       const id = (evt as { target?: { id?: string } }).target?.id;
       if (typeof id === 'string' && id.length > 0) pickRef.current(id);
     });
-    // 画布空白点击 = 收起 L2
-    graph.on('canvas:click', () => { setPinned(null); setDetail(null); });
+    // 画布空白点击 = 收起气泡
+    graph.on('canvas:click', () => { setHovered(null); });
   
     return () => {
       // 红线:实例必销毁,否则切 Tab/刷新会累积 canvas 与力模拟循环
@@ -244,31 +234,8 @@ export function GraphCanvas(props: {
     };
   }, [full, nodeKey, emphasisId, fit, canvasH]);
 
-  /** 点击「详情」→ 钉住气泡并拉取元数据。 */
-  const openDetail = useCallback((id: string, x: number, y: number) => {
-    setPinned({ id, x, y });
-    setHovered(null);
-    setDetail(null);
-    setDetailLoading(true);
-    rpc('dsh-memory/graph-node-get', { id })
-      .then((r) => {
-        const resp = (r?.ok ? r.value : null) as GraphNodeGetResponse | null;
-        const node = resp?.node;
-        if (!node) { setDetail(null); return; }
-        const ids = node.sourceRecordIds?.slice(0, 50) ?? [];
-        if (ids.length === 0) { setDetail({ node, records: [] }); return; }
-        return rpc('dsh-memory/records-meta', { ids }).then((mr) => {
-          const metaResp = (mr?.ok ? mr.value : null) as RecordsMetaResponse | null;
-          setDetail({ node, records: metaResp?.items ?? [] });
-        });
-      })
-      .catch(() => setDetail(null))
-      .finally(() => setDetailLoading(false));
-  }, [rpc]);
-
-  /** 当前要显示的气泡数据(pinned 优先于 hovered)。 */
-  const activeBubble = pinned ?? hovered;
-  const bubbleTip = activeBubble ? tips.get(activeBubble.id) : null;
+  /** 当前要显示的气泡数据(只有 hovered)。 */
+  const bubbleTip = hovered ? tips.get(hovered.id) : null;
 
   return (
     <div style={{ position: 'relative', width: '100%', height: canvasH, overflow: 'hidden', borderRadius: 8 }}>
@@ -284,86 +251,26 @@ export function GraphCanvas(props: {
       </svg>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
 
-      {/* 两级气泡 overlay */}
-      {activeBubble && bubbleTip && (
+      {/* 悬浮气泡：只显全名（标签被截断时的补全视图） */}
+      {hovered && bubbleTip && (
         <div
           style={{
             position: 'absolute',
-            left: Math.min(activeBubble.x + 12, (hostRef.current?.clientWidth ?? 600) - 280),
-            top: Math.max(activeBubble.y - 8, 8),
-            maxWidth: 320,
-            padding: '8px 12px',
+            left: Math.min(hovered.x + 12, (hostRef.current?.clientWidth ?? 600) - 240),
+            top: Math.max(hovered.y - 8, 8),
+            maxWidth: 300,
+            padding: '4px 10px',
             background: 'var(--dsh-mem-bg-card, #fff)',
             border: '1px solid var(--dsh-mem-border, #ddd)',
-            borderRadius: 6,
-            boxShadow: '0 2px 12px rgba(0,0,0,.12)',
-            fontSize: 12,
-            lineHeight: 1.5,
+            borderRadius: 5,
+            boxShadow: '0 1px 6px rgba(0,0,0,.1)',
+            fontSize: 12.5,
+            fontWeight: 600,
             zIndex: 20,
-            pointerEvents: 'auto',
+            pointerEvents: 'none',
           }}
-          onMouseEnter={() => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } }}
-          onMouseLeave={() => { if (!pinned) setHovered(null); }}
         >
-          {/* L1 基本信息 */}
-          <div style={{ fontWeight: 600 }}>{bubbleTip.title}</div>
-          <div style={{ color: 'var(--dsh-mem-text-3)' }}>{bubbleTip.sub}</div>
-
-          {/* 「详情」按钮 (L1 时显示) / 关闭按钮 (L2 时显示) */}
-          {!pinned ? (
-            <button
-              style={{ marginTop: 6, padding: '2px 10px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--dsh-mem-border, #ccc)', borderRadius: 4, background: 'var(--dsh-mem-bg-card, #f8f8f8)' }}
-              onClick={() => openDetail(activeBubble.id, activeBubble.x, activeBubble.y)}
-            >
-              详情
-            </button>
-          ) : (
-            <button
-              style={{ position: 'absolute', top: 4, right: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--dsh-mem-text-3)' }}
-              onClick={() => { setPinned(null); setDetail(null); }}
-              title="关闭"
-            >
-              ×
-            </button>
-          )}
-
-          {/* L2 展开内容 */}
-          {pinned && (
-            <div style={{ marginTop: 6, borderTop: '1px solid var(--dsh-mem-border, #eee)', paddingTop: 6 }}>
-              {detailLoading ? (
-                <span style={{ color: 'var(--dsh-mem-text-3)' }}>加载中…</span>
-              ) : detail ? (
-                <div>
-                  <div><b>{detail.node.name}</b> ({detail.node.type})
-                    {detail.node.aliases.length > 0 && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 4 }}>别名: {detail.node.aliases.join(', ')}</span>}
-                  </div>
-                  <div style={{ color: 'var(--dsh-mem-text-3)' }}>状态 {detail.node.status} · 置信 {(detail.node.confidence * 100).toFixed(0)}%</div>
-                  {detail.node.currentState && <div style={{ marginTop: 2 }}>{detail.node.currentState}</div>}
-                  {detail.node.facts.filter((f) => f.status === 'active').length > 0 && (
-                    <details style={{ marginTop: 3 }}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>Facts ({detail.node.facts.filter((f) => f.status === 'active').length})</summary>
-                      {detail.node.facts.filter((f) => f.status === 'active').map((f) => (
-                        <div key={f.id} style={{ paddingLeft: 8 }}>{f.key}: {Array.isArray(f.value) ? f.value.join(', ') : f.value}</div>
-                      ))}
-                    </details>
-                  )}
-                  {detail.records.length > 0 && (
-                    <details style={{ marginTop: 3 }}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>来源记录 ({detail.records.length})</summary>
-                      {detail.records.map((r) => (
-                        <div key={r.id} style={{ paddingLeft: 8, marginBottom: 1 }}>
-                          <span style={{ color: 'var(--dsh-mem-text-3)' }}>[{r.type}]</span> {r.name ?? r.content.slice(0, 50)}
-                          {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 4 }}>{r.updatedAt.slice(0, 10)}</span>}
-                        </div>
-                      ))}
-                    </details>
-                  )}
-                </div>
-              ) : (
-                <span style={{ color: 'var(--dsh-mem-text-3)' }}>无元数据</span>
-              )}
-            </div>
-          )}
+          {bubbleTip.title}
         </div>
       )}
     </div>

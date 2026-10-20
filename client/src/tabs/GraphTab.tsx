@@ -265,7 +265,7 @@ export function GraphTab(props: { rpc: RpcFn }) {
       {/* ── 全图态：一张力导图装下全部可见节点 ── */}
       {view === 'full' && fullBlock && fullBlock.nodes.length > 0 ? (
         <div style={{ marginBottom: 10 }}>
-          <GraphCanvas full={fullBlock} onPick={openEgo} rpc={rpc} height={FULL_H} />
+          <GraphCanvas full={fullBlock} onPick={openEgo} height={FULL_H} />
           <div style={{ ...S.muted, marginTop: 4 }}>
             拖动空白平移 · 滚轮缩放 · 拖节点可钉住 · 悬停点亮邻域并在浮层里看全名 · 单击星点即以它为中心展开邻域
             {fullBlock.truncated ? ` · 已达绘制上限,只画前 ${fullBlock.nodes.length} 个节点` : ''}
@@ -295,7 +295,6 @@ export function GraphTab(props: { rpc: RpcFn }) {
               emphasisId={seedId ?? undefined}
               fit="view"
               onPick={openEgo}
-              rpc={rpc}
               height={EGO_H}
             />
             <div style={{ ...S.muted, marginTop: 4, marginBottom: 8 }}>
@@ -353,13 +352,22 @@ export function GraphTab(props: { rpc: RpcFn }) {
                   </details>
                 )}
                 {sourceRecords.length > 0 && (
-                  <details style={{ marginTop: 4 }}>
+                  <details style={{ marginTop: 4 }} open>
                     <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>来源记录 ({sourceRecords.length})</summary>
                     {sourceRecords.map((r) => (
-                      <div key={r.id} style={{ paddingLeft: 8, marginBottom: 2 }}>
-                        <span style={{ color: 'var(--dsh-mem-text-3)' }}>[{r.type}]</span>{' '}
-                        {r.name ?? r.content.slice(0, 60)}
-                        {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 4 }}>{r.updatedAt.slice(0, 10)}</span>}
+                      <div key={r.id} style={{ paddingLeft: 8, marginBottom: 6, borderBottom: '1px solid var(--dsh-mem-border, #eee)', paddingBottom: 4 }}>
+                        <div>
+                          <span style={{ color: 'var(--dsh-mem-text-3)' }}>[{r.type}]</span>{' '}
+                          <b>{r.name ?? '(无标题)'}</b>
+                          {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 6 }}>{r.updatedAt.slice(0, 10)}</span>}
+                        </div>
+                        {r.scene && <div style={{ color: 'var(--dsh-mem-text-3)', fontSize: 11.5 }}>场景: {r.scene}</div>}
+                        {r.keywords && r.keywords.length > 0 && (
+                          <div style={{ fontSize: 11.5 }}>关键词: {r.keywords.join(', ')}</div>
+                        )}
+                        <div style={{ fontSize: 11.5, marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 120, overflow: 'auto' }}>
+                          {r.content}
+                        </div>
                       </div>
                     ))}
                   </details>
