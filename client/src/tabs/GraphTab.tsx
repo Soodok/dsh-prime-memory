@@ -21,6 +21,7 @@ import type { GraphNode } from '../../../src/graph/types.js';
 import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NButton } from '../ui/primitives.js';
+import { MarkdownBody } from '../ui/MarkdownBody.js';
 import { EGO_HOPS_MAX, canGrow, clipName, egoSubgraph, groupNeighbors, type RawNeighbor } from './graph-ego-subgraph.js';
 import { GraphCanvas } from './GraphCanvas.js';
 import type { GraphFull } from './graph-canvas-data.js';
@@ -361,12 +362,12 @@ export function GraphTab(props: { rpc: RpcFn }) {
                           <b>{r.name ?? '(无标题)'}</b>
                           {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 6 }}>{r.updatedAt.slice(0, 10)}</span>}
                         </div>
-                        {r.scene && <div style={{ color: 'var(--dsh-mem-text-3)', fontSize: 11.5 }}>场景: {r.scene}</div>}
+                        {r.scene && <div style={{ fontSize: 12, marginTop: 2 }}><b>场景：</b>{r.scene}</div>}
                         {r.keywords && r.keywords.length > 0 && (
-                          <div style={{ fontSize: 11.5 }}>关键词: {r.keywords.join(', ')}</div>
+                          <div style={{ fontSize: 12, marginTop: 1 }}><b>关键词：</b>{r.keywords.join(', ')}</div>
                         )}
-                        <div style={{ fontSize: 11.5, marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 120, overflow: 'auto' }}>
-                          {r.content}
+                        <div style={{ fontSize: 12, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
+                          <MarkdownBody text={r.content} />
                         </div>
                       </div>
                     ))}
