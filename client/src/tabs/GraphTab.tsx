@@ -22,6 +22,7 @@ import type { RpcFn } from '../rpc.js';
 import { S } from '../styles.js';
 import { NButton } from '../ui/primitives.js';
 import { MarkdownBody } from '../ui/MarkdownBody.js';
+import { fmtTime, tagClass, typeLabel } from '../format.js';
 import { EGO_HOPS_MAX, canGrow, clipName, egoSubgraph, groupNeighbors, type RawNeighbor } from './graph-ego-subgraph.js';
 import { GraphCanvas } from './GraphCanvas.js';
 import type { GraphFull } from './graph-canvas-data.js';
@@ -356,17 +357,43 @@ export function GraphTab(props: { rpc: RpcFn }) {
                   <details style={{ marginTop: 4 }} open>
                     <summary style={{ cursor: 'pointer', color: 'var(--dsh-mem-text-3)' }}>来源记录 ({sourceRecords.length})</summary>
                     {sourceRecords.map((r) => (
-                      <div key={r.id} style={{ paddingLeft: 8, marginBottom: 6, borderBottom: '1px solid var(--dsh-mem-border, #eee)', paddingBottom: 4 }}>
-                        <div>
-                          <span style={{ color: 'var(--dsh-mem-text-3)' }}>[{r.type}]</span>{' '}
-                          <b>{r.name ?? '(无标题)'}</b>
-                          {r.updatedAt && <span style={{ color: 'var(--dsh-mem-text-3)', marginLeft: 6 }}>{r.updatedAt.slice(0, 10)}</span>}
+                      <div key={r.id} style={{ paddingLeft: 8, marginBottom: 10, borderBottom: '1px solid var(--dsh-mem-border, #eee)', paddingBottom: 8 }}>
+                        {/* 标题 */}
+                        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{r.name ?? '(无标题)'}</div>
+                        {/* 标签行: type / scope / maturity / priority */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', marginBottom: 4 }}>
+                          <span className={tagClass(r.type)}>{typeLabel(r.type)}</span>
+                          <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--dsh-mem-border)', color: 'var(--dsh-mem-text-2)', whiteSpace: 'nowrap' }}>
+                            {r.scope === 'workspace' ? '工作区' : '全局'}
+                          </span>
+                          {r.maturity && (
+                            <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--dsh-mem-border)', color: 'var(--dsh-mem-text-2)', whiteSpace: 'nowrap' }}>
+                              {r.maturity === 'high' ? '成熟·高' : r.maturity === 'mid' ? '成熟·中' : '成熟·低'}
+                            </span>
+                          )}
+                          <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--dsh-mem-border)', color: 'var(--dsh-mem-text-2)', whiteSpace: 'nowrap' }}>
+                            P{r.priority}
+                          </span>
                         </div>
-                        {r.scene && <div style={{ fontSize: 12, marginTop: 2 }}><b>场景：</b>{r.scene}</div>}
+                        {/* 创建时间 */}
+                        {r.createdAt && <div style={{ fontSize: 11.5, color: 'var(--dsh-mem-text-3)', marginBottom: 2 }}>创建: {fmtTime(r.createdAt)}</div>}
+                        {/* 情境 */}
+                        {r.scene && <div style={{ fontSize: 12, marginBottom: 2 }}><b>情境：</b>{r.scene}</div>}
+                        {/* 范围 */}
+                        <div style={{ fontSize: 12, marginBottom: 4 }}><b>范围：</b>{r.scope === 'workspace' ? '指定工作区' + (r.workspaceId ? ` (${r.workspaceId})` : '') : '用户默认 (global)'}</div>
+                        {/* 关键词 pill 徽章 */}
                         {r.keywords && r.keywords.length > 0 && (
-                          <div style={{ fontSize: 12, marginTop: 1 }}><b>关键词：</b>{r.keywords.join(', ')}</div>
+                          <div style={{ marginBottom: 4 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 2 }}>关键词</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                              {r.keywords.map((kw, i) => (
+                                <span key={i} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--dsh-mem-border)', color: 'var(--dsh-mem-text-2)', whiteSpace: 'nowrap' }}>{kw}</span>
+                              ))}
+                            </div>
+                          </div>
                         )}
-                        <div style={{ fontSize: 12, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
+                        {/* 正文 markdown 渲染 */}
+                        <div style={{ fontSize: 12.5, marginTop: 4, maxHeight: 240, overflow: 'auto' }}>
                           <MarkdownBody text={r.content} />
                         </div>
                       </div>
