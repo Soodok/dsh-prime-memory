@@ -166,7 +166,7 @@ describe('task_24 安全阀:队列上限', () => {
       // ③ 自动裁决真的执行了:LLM 的 loser 已**退场(软删)**——主表保留但退出检索面
       const [autoGone] = s.store.getByIds([s.oldId]);
       expect(autoGone, '软删:主表行保留').toBeDefined();
-      expect(autoGone.validTo).toBeDefined();
+      expect(autoGone.metadata?.dsh_superseded).toBeDefined(); // 门1:退场凭 marker，不闭 valid_to
       expect(readSupersedeMarker(autoGone.metadata)).toMatchObject({ reason: 'conflict', verdict: 'auto' });
       expect(s.store.listRetired({ limit: 10, offset: 0 }).items.map((r) => r.id)).toContain(s.oldId);
       // ④ winner(新记忆)在库
@@ -220,7 +220,7 @@ describe('task_24 安全阀:超时降级', () => {
       // loser 已**退场(软删)**,winner 仍在
       const [timeoutGone] = s.store.getByIds([after[0].loser_id]);
       expect(timeoutGone, '软删:主表行保留').toBeDefined();
-      expect(timeoutGone.validTo).toBeDefined();
+      expect(timeoutGone.metadata?.dsh_superseded).toBeDefined(); // 门1:marker 单源
       expect(s.store.getByIds([after[0].winner_id])).toHaveLength(1);
     } finally {
       s.close();

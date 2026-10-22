@@ -129,6 +129,8 @@ export interface MemoryLiveSettings {
   mdSyncEnabled: boolean;
   /** 外部记忆来源 Connect 启用开关（概览区可拨）:true = 放行 memport-* 端点。与部署 cfg.memport.enabled 取或。 */
   memportEnabled: boolean;
+  /** 时效分级门2 启用开关（概览区可拨）:true = 被动注入剔除 expired。与部署 cfg.validity.tieringEnabled 取或；关=注入与改前逐字一致。 */
+  validityTiering: boolean;
   /** md 投射/后缀收敛的单次动作护栏运行时覆盖:0 = 跟随部署 `cfg.memExport.maxRecords`（默认 2000）。
    *  存在的理由：一次点完多少条属于“回填历史时才改一下”的旋钮，不该要求改 YAML + 重启。 */
   mdExportMaxRecords: number;

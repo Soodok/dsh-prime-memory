@@ -62,7 +62,7 @@ describe('dsh-memory/records-meta', () => {
   });
 
   it('global 记录不带 workspaceId，退场标记如实透出', async () => {
-    const g = { ...named, scope: 'global', workspaceId: undefined, validTo: 1760500000000 };
+    const g = { ...named, scope: 'global', workspaceId: undefined, validTo: 1760500000000, metadata: { ...(named as unknown as { metadata?: Record<string, unknown> }).metadata, dsh_superseded: { at: '2025-10-15T00:00:00.000Z', reason: 'manual' } } };
     const res = (await handleEndpoint('dsh-memory/records-meta', { ids: [named.id] }, deps(() => [g]))) as {
       items: Array<Record<string, unknown>>;
     };

@@ -474,7 +474,9 @@ adds 12 agent-facing memory tools (high-privilege writes `memory_add` / `memory_
 `memory_import`, ruminate controls `memory_ruminate`, the memory graph
 `memory_search_graph` / `memory_expand_graph_node`, decision-receipt backtracking
 `memory_receipts`, and conflict adjudication `memory_resolve_conflict`), the `skills/memport`
-cross-tool memory transfer, and storefront screenshot declarations.
+cross-tool memory transfer, and storefront screenshot declarations; the deterministic
+write-plane adds three more (`memory_update` / `memory_reproject` / `memory_migrate_relation`,
+see the "Deterministic graph write plane" section).
 
 Two of those tools exist for **traceability**:
 
@@ -517,6 +519,65 @@ Physical deletion must be preceded by a snapshot that passes verification (see t
 The restore entry point accepts **directory names only, never paths**: otherwise this RPC would incidentally gain the ability to read any directory and write its contents into the retrieval database. Restore itself is an idempotent upsert and can be re-run safely.
 
 > **One semantic you need to know**: `cleanup-retired` only removes **already-retired** records, and the snapshot is taken **before** deletion — so every record a cleanup snapshot can bring back carries a retirement marker. By default `snapshot-restore` only writes the row back to the main table (and reports it honestly in `stillRetired`); **"back in the main table" ≠ "back in recall"**. For a genuine one-call rollback add `unretire: true`, or call `records-restore` on that batch of ids afterwards.
+
+## Memory expiry tiers and supersede-chain lookup
+
+A memory's "temporality" splits into **four non-substitutable axes** ([ADR-0022](./docs/adr/0022-expiry-tiering-and-validity.md)):
+retirement mode (supersede marker), validity state (derived at query time), objective persistence, and the
+real-world validity window (`valid_to`). The old model crammed all four into one `valid_to` column — the cost
+was that perfectly legal historical memories ("a trip that ended in 2020") were **silently shadowed from the
+retrieval surface** although they never retired.
+
+| Tier | Meaning | Indexed | Auto-injected (default) | Explicit tool query |
+| --- | --- | --- | --- | --- |
+| `current` | open-ended, not past its window | ✅ | ✅ | ✅ |
+| `historical` | point/closed-span/timeless, not retired | ✅ | ✅ | ✅ |
+| `expired` | window closed **with trustworthy evidence** | ✅ | ❌ (gated, gate 2) | ✅ `include_expired` |
+| `expired_suspect` | same but the window source is untrustworthy (flag, never hide) | ✅ | ✅ annotated | ✅ |
+| `superseded` / `retired` | soft-deleted (restorable) | ❌ | ❌ | via supersede chain only |
+
+Three gates:
+
+- **Gate 1 (bugfix, ungated)**: retirement is judged by the marker alone, everywhere; the first boot after
+  upgrade runs one full FTS back-fill that returns wrongly-shadowed history to the retrieval surface
+  (log reports back-filled/skipped counts; vectors catch up incrementally or via the manual re-index button).
+- **Gate 2 (grey flag `validity.tieringEnabled`, off by default)**: when on, passive injection drops
+  `expired` and keeps `expired_suspect` with a "suspected expired" annotation; recall bubbles show
+  "expired since X". A same-named runtime toggle (OR-ed with the deploy config) lives on the settings overview.
+- **Gate 3 (`memory_search` parameters, all off by default = byte-identical to before)**: `include_expired`
+  admits trustworthy-expired rows with `state`/`valid_from`/`valid_to`/`valid_to_source`; `as_of` replays the
+  validity axis at a past moment (never reviving retired rows); `follow_supersede` walks the supersede chain
+  to answer "what did this entry replace".
+
+Legacy rows get their `dsh_validity` annotation from a low-frequency local back-fill (zero LLM; touched
+records are re-projected into the graph to keep it fresh). The classifier is a single source: the six tiers
+are query-time predicates, never wall-clock-driven stored state.
+
+## Deterministic graph write plane and the correction channel
+
+The graph is a **derived projection** of L1: nodes/edges are always recomputed from current
+facts, so the single source of truth for every write is L1 itself —
+**correction = edit the source + reproject, never hand-written SQL**. This plugin does not
+offer, and will never offer, an entry that bypasses projection to write `graph_*` tables
+directly ("zero source-less facts" invariant: every edge traces back to live L1 records via
+`sourceRecordIds`).
+
+| Action | Tool | Preconditions | Notes |
+| --- | --- | --- | --- |
+| Revise one memory | `memory_update` | high-privilege mode | Read old → create new (`version+1`, new id) → old row retires via the shared soft-delete confluence with a `superseded` marker (restorable) → new version enters retrieval; then both [old, new] ids are force-reprojected so graph edges follow (edges supported only by the old source get tombstoned). Not a physical delete; the JSONL fact source is append-only and never rewritten |
+| Force reprojection | `memory_reproject` | `graph.enabled` | Erases the "already projected at current version" receipts and re-enqueues at top priority, bypassing the permanent `projector_version` skip. Idempotent: in-flight jobs never pile up. **Manually added/imported memories that never showed up in the graph: this is the back-fill projection channel** (non-distilled writes now auto-enqueue; the tool remains the correction path for legacy rows and post-edit freshness) |
+| Migrate one relation | `memory_migrate_relation` | high-privilege mode | Source-derived semantics: hard-validate that every `source_record_ids` is live and un-retired → the new relation lands through the deterministic projection branch (same (from, relation) with a new target closes the old edge) → a new L1 carrier record is written as the traceable basis (tagged `proposal_source=tool` plus a decision receipt). Old edges are not flipped back by later rejections: the reprojection batch pulls only the carrier, not sources whose text still describes the old relation |
+| Non-distilled writes auto-enqueue | `memory_add` / `memory_import` | `graph.enabled` | After a successful write, records join the projection queue at the same priority as distillation output (`GRAPH_PRIORITY_NEW`) — the "only distillation projects" bypass is closed |
+
+Two boundaries worth knowing:
+
+- **Frequent updates accumulate version rows**: retired old rows stay in the main table (the
+  price of restorability); volume is governed by the existing `cleanup-retired` (dry-run +
+  snapshot gate).
+- **The graph vector path activates with the embedding source**: `graph_node_vec` is
+  *structurally absent* when embeddings are off (not an empty table); once embeddings are on,
+  projection wrap-up writes vectors for freshly landed active nodes (legacy nodes catch up
+  via reprojection/rebuild).
 
 ## Roadmap
 

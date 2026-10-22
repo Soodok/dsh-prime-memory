@@ -195,6 +195,16 @@ export async function apply(ctx, config) {
             logger.error(`[memory] 检索库打开失败,记忆功能停用: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
+    // §D 第 3 路装配(回链 + 路内向量种子 + 1-hop,见 graph-store.searchLaneRecords):
+    // embed 查询惰性接 stores.l1.embedText(嵌入源运行时活切换不被钉死在启动 service 上,
+    // 且复用其超时/失败吞并语义——未就绪/失败 = undefined = 纯词法路,与旧 searchNodes
+    // 表达式逐位一致)。图谱不可用时 searchLaneRecords 自带空返回,不影响双路。
+    // eslint-disable-next-line prefer-const -- 声明早于创建,后续单点赋值(与 embedManagerRef 同款惰性缝;TS 不允许 const 无初值)
+    let laneEmbedQuery;
+    const graphLaneProvider = async (query, limit, family) => {
+        const vec = laneEmbedQuery ? await laneEmbedQuery(query).catch(() => undefined) : undefined;
+        return db.graphStore.searchLaneRecords(query, vec, limit, family ? [family] : undefined);
+    };
     const stores = {
         usage: undefined, // 装配于下方(依赖 dataDir 就绪)
         // DRSC 客户端(T8.4 读切):蒸馏背景窗 + conversation_search 工具面的历史供给。
@@ -202,8 +212,8 @@ export async function apply(ctx, config) {
         drsc: new DrscClient({ trustedHosts: () => readStartupTrustedHosts(ctx) }),
         l0: new L0Store(db),
         l1: new L1Store(dataDir, db, embed, config.recall.strategy, logger, config.recall.decayHalfLifeDays, 
-        // §D 第 3 路:图谱回链。图谱不可用时 searchNodes 自带 no-op,不影响双路。
-        (query, limit, family) => db.graphStore.searchNodes(query, limit, family ? [family] : undefined), 
+        // §D 第 3 路:图谱回链(声明于 stores 之前,embed 查询在下方接线)。
+        graphLaneProvider, 
         // 投射开着才给没名字的新记录起名（“关时零动作”这条承诺不改）。
         // 传函数而不是布尔：读的是当前配置对象，不把启动那一刻的值钉进 store。
         () => config.memExport?.enabled === true),
@@ -235,6 +245,9 @@ export async function apply(ctx, config) {
         // 后台记忆后端:初始化完成后填充(worker 隔离,失败则进程内)
         backend: undefined,
     };
+    // 惰性缝接线:provider 在检索时才解引用(l1 已就绪);声明序上的"先声明后赋值"
+    // 只影响装配期,而装配期不会有检索在飞(启动未完就没有 agent 回合)。
+    laneEmbedQuery = (q) => stores.l1.embedText(q);
     if (storageOk) {
         try {
             await Promise.all([
@@ -386,6 +399,8 @@ export async function apply(ctx, config) {
     runner.startIdleTimer();
     // 图谱周期补投影(cfg.graph.enabled 门控;30 分钟一次低速收敛)
     runner.startGraphBackfillTimer();
+    // 时效标注存量回填(expiry-tiering task_6.3:tieringEnabled 门控,低频、让位蒸馏)
+    runner.startValidityBackfillTimer();
     // 重建控制器(存储降级时不建——RPC 端点走 supported=false 分支)
     const rebuild = storageOk && !db.isDegraded()
         ? new RebuildController(ctx, config, stores, db, runner, logger, live)
@@ -455,7 +470,12 @@ export async function apply(ctx, config) {
     stores.l1.setFileSyncHook(fileSync);
     const recall = registerRecall(ctx, config, stores, logger, live, modes, dataDir, recallUsage);
     runner.setAfterRun(recall.invalidateProfile);
-    const toolSeals = registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);
+    const toolSeals = registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined, {
+        // 确定性写面钩子(graph-write-plane R2/R3):runner 公开方法直连,工具三路径与
+        // distill 分支共用同一个入队实现,不存在第二套优先级/去重逻辑。
+        enqueueGraph: (ids) => runner.enqueueGraphFor(ids),
+        reprojectGraph: (ids) => runner.reprojectGraph(ids),
+    });
     // 激活槽位(active slot):工具面 + 常驻注入 + 服务端投影(均走 ctx.effect,可撤销)
     registerSlotTools(ctx, config, stores.slots, logger, modes, live, stores.l1);
     const slotRecall = registerSlotRecall(ctx, config, stores.slots, logger, live);

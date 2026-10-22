@@ -161,7 +161,7 @@ describe('task_26 §C 冻结 → 裁决 闭环(端到端)', () => {
       expect(verdict.removed_record_id).toBe(oldId);
       const [retired] = store.getByIds([oldId]);
       expect(retired, '软删:主表行必须保留').toBeDefined();
-      expect(retired.validTo).toBeDefined();
+      expect(retired.metadata?.dsh_superseded).toBeDefined(); // 门1 解耦:退场凭 marker，不再闭 valid_to
       expect(store.listRetired({ limit: 10, offset: 0 }).items.map((r) => r.id)).toContain(oldId);
       expect(store.getByIds([newId])).toHaveLength(1);
       expect(store.listConflictPending()).toHaveLength(0);

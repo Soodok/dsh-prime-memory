@@ -18,6 +18,7 @@
 import type { Slot } from '../store/slots.js';
 import type { MemoryLogger } from '../types.js';
 import { errDetail } from '../util/filelog.js';
+import { readSupersedeMarker } from '../store/supersede.js';
 
 /** 迁移需要的槽位面。 */
 export interface SlotMigrateStoreFace {
@@ -25,9 +26,10 @@ export interface SlotMigrateStoreFace {
   close(id: string, status: 'done' | 'dropped'): Promise<boolean>;
 }
 
-/** 迁移需要的 L1 只读面（validTo 非空 = 已退场（epoch ms），不作为信息载体）。 */
+/** 迁移需要的 L1 只读面（门1 解耦：退场判据是 marker 单源——metadata 带 `dsh_superseded`
+ *  即已退场；valid_to 只是现实有效期，带着它不算退场）。 */
 export interface SlotMigrateL1Face {
-  getByIds(ids: string[]): Array<{ id: string; validTo?: number | null }>;
+  getByIds(ids: string[]): Array<{ id: string; metadata?: unknown }>;
 }
 
 /** 一条可迁移槽位（预览用，执行前即可展示）。 */
@@ -43,9 +45,9 @@ export function pickMigratableSlots(slots: readonly Slot[], l1: SlotMigrateL1Fac
   if (l1 === undefined) return [];
   const open = slots.filter((s) => s.status === 'open' && s.pinned === true && s.kind === 'rule');
   if (open.length === 0) return [];
-  // 一次批量取全部 refs，避免 N 次查询。
+  // 一次批量取全部 refs，避免 N 次查询。存活 = 无退场 marker（门1 解耦同口径）。
   const allRefs = [...new Set(open.flatMap((s) => s.refs ?? []))];
-  const alive = new Set(l1.getByIds(allRefs).filter((r) => r.validTo === undefined || r.validTo === null).map((r) => r.id));
+  const alive = new Set(l1.getByIds(allRefs).filter((r) => readSupersedeMarker(r.metadata) === undefined).map((r) => r.id));
   const out: MigrateCandidate[] = [];
   for (const s of open) {
     const carrier = (s.refs ?? []).find((r) => alive.has(r));

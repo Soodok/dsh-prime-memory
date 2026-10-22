@@ -23,9 +23,12 @@ import { SESSION_RECALLED_FILE_VERSION } from './file-versions.js';
 import { RECALL_DEDUPE_IDS_CAP, RECALL_DEDUPE_SESSION_CAP } from './recall-dedupe.js';
 /** 共享空集（未出现过取代的会话重复取用，不必每次新建）。 */
 const EMPTY_SET = new Set();
+/** 共享空归因表（同 EMPTY_SET 口径）。 */
+const EMPTY_LANES = new Map();
 /**
- * 读 `injectedBy` 的宽容解析：非对象/值非字符串一律丢弃。
- * 宁可让那条记录“无从判”（对账不动它），也不把脏值喂给可见性判定——
+ * 读 `Record<string, string>` 型字段的宽容解析（injectedBy/lanes 共用）：
+ * 非对象/值非字符串一律丢弃。
+ * 宁可让那条记录“无从判”（对账不动它/徽标不渲染），也不把脏值喂给下游判定——
  * 一个错的 message id 会把仍在本上下文里的正文误标成“已被摘要取代”。
  */
 function toIdMap(raw) {
@@ -93,17 +96,19 @@ export class SessionRecalledStore {
                 protectedIds: new Set(Array.isArray(entry.protectedIds) ? entry.protectedIds : []),
                 supersededIds: new Set(Array.isArray(entry.supersededIds) ? entry.supersededIds : []),
                 injectedBy: toIdMap(entry.injectedBy),
+                laneOf: toIdMap(entry.lanes),
                 updatedAt: entry.updatedAt ?? now,
             });
         }
     }
-    /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。 */
-    add(sessionKey, recordIds, injectionId) {
+    /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。
+     *  laneById 只带真正有归因的条目（hybrid 融合才挂 lanes；单路/旧路不传）。 */
+    add(sessionKey, recordIds, injectionId, laneById) {
         if (!sessionKey || recordIds.length === 0)
             return;
         let entry = this.entries.get(sessionKey);
         if (!entry) {
-            entry = { ids: new Set(), protectedIds: new Set(), supersededIds: new Set(), injectedBy: new Map(), updatedAt: 0 };
+            entry = { ids: new Set(), protectedIds: new Set(), supersededIds: new Set(), injectedBy: new Map(), laneOf: new Map(), updatedAt: 0 };
             this.entries.set(sessionKey, entry);
         }
         const stamp = typeof injectionId === 'string' && injectionId.length > 0 ? injectionId : undefined;
@@ -114,6 +119,11 @@ export class SessionRecalledStore {
             // 记下这次注入落在哪条消息上：没有它，对账就无从判“这条正文还在不在”。
             if (stamp !== undefined)
                 entry.injectedBy.set(id, stamp);
+            // 路归因：最后一次注入赢；本轮无归因时**不清旧值**（徽标宁可残留一轮
+            // 也不要闪无——真实路集在下一次带归因注入时自然覆盖）。
+            const laneArr = laneById?.get(id);
+            if (laneArr !== undefined && laneArr.length > 0)
+                entry.laneOf.set(id, laneArr.join('|'));
             // 淘汰只能淘汰**没被判过时的**：受保护条目数本身超顶时宁可超顶，也不能把人的裁决
             // 凭证挤掉（那等于“因为后面又召回了几条，所以之前那条的判定历史丢了”）。
             while (entry.ids.size > RECALL_DEDUPE_IDS_CAP) {
@@ -124,6 +134,7 @@ export class SessionRecalledStore {
                 entry.protectedIds.delete(oldest);
                 entry.supersededIds.delete(oldest);
                 entry.injectedBy.delete(oldest);
+                entry.laneOf.delete(oldest);
             }
         }
         entry.updatedAt = Date.now();
@@ -196,6 +207,13 @@ export class SessionRecalledStore {
      */
     supersededOf(sessionKey) {
         return this.entries.get(sessionKey)?.supersededIds ?? EMPTY_SET;
+    }
+    /**
+     * 本会话的路归因表（record id → 管道串；只读共享，投影/端点用）。
+     * 不在表里 = 无从归因（单路检索/旧文件条目），展示层不渲染徽标。
+     */
+    lanesOf(sessionKey) {
+        return this.entries.get(sessionKey)?.laneOf ?? EMPTY_LANES;
     }
     /**
      * 用会话日志的可见性事实**对账**取代标记（Phase 0B）。
@@ -302,6 +320,7 @@ export class SessionRecalledStore {
                 ...(e.protectedIds.size > 0 ? { protectedIds: [...e.protectedIds] } : {}),
                 ...(e.supersededIds.size > 0 ? { supersededIds: [...e.supersededIds] } : {}),
                 ...(e.injectedBy.size > 0 ? { injectedBy: Object.fromEntries(e.injectedBy) } : {}),
+                ...(e.laneOf.size > 0 ? { lanes: Object.fromEntries(e.laneOf) } : {}),
                 updatedAt: e.updatedAt,
             };
         }

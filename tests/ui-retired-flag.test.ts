@@ -76,7 +76,9 @@ describe('hitToUiRecord: 退场态透传到 UiRecord', () => {
     await store.appendNew([rec('a1', '要退场的记忆')]);
     expect(store.retire(['a1'], { at: AT, reason: 'manual' })).toBe(1);
     const [a] = store.getByIds(['a1']);
-    expect(a.validTo).toBeDefined();
+    // 门1 解耦:retire 不再闭合 valid_to(它回归现实有效期)，UiRecord 的 retired 改判 marker。
+    expect(a.validTo).toBeUndefined();
+    expect(a.metadata && (a.metadata as Record<string, unknown>).dsh_superseded).toBeDefined();
     const ui = hitToUiRecord({ ...a, metadata: a.metadata });
     expect(ui.retired).toBe(true);
     expect(ui.retiredReason).toBe('manual');

@@ -32,7 +32,7 @@
  */
 import { opendir, readFile, realpath, stat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
-import { DISABLE_SUFFIX, digest, recordDigest, targetFor } from '../store/memory-md.js';
+import { DISABLE_SUFFIX, digest, isRetiredRecord, recordDigest, targetFor } from '../store/memory-md.js';
 import { exportRecords } from '../store/memory-md-export.js';
 import { parseMdFile } from '../store/memory-md-parse.js';
 import { normalizeContentMd } from '../util/md-normalize.js';
@@ -360,7 +360,9 @@ export async function syncFromFiles(deps) {
             // 自校验（N13）：`.disable` 也带 `hash`。**只留痕、不改裁决**——后缀即“人已判过时”，
             // 若因凭证正文被手改一字节就把退场锁死，等于让人改坏凭证就丢掉处置意图。
             noteHash(parseMdFile(text), abs);
-            if (rec.validTo !== undefined) {
+            // 门1 解耦:退场判据是 marker 单源(`isRetiredRecord` 与库侧同口径)——
+            // retire 不再闭 valid_to,拿 validTo 判"已退场"会让第二轮重复计数、永不收敛到 same。
+            if (isRetiredRecord(rec)) {
                 report.same += 1;
                 if (entry === undefined)
                     await stampDisabled(ledger, rec, abs, text);

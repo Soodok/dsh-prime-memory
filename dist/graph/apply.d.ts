@@ -31,7 +31,16 @@ export declare function normalizeEntityName(name: string): string;
  * validTo → validFrom(时间增强列,新写入路径)→ metadata.activity_end_time →
  * metadata.activity_start_time(列迁移前的存量数据)→ timestamps 最新 → createdAt。
  * 全部无证据才用 fallback(now),绝不猜测。
+ *
+ * task_2.6(expiry-tiering):兜底 now 分支回传 `'fallback_now'` 证据等级——供图谱侧
+ * 同口径读时派生使用(落到 now 的 validFrom **不是**时间证据,与 activity_* 链的
+ * 'evidence' 必须可区分;否则假过期与真过期同形)。
  */
+export declare function anchorTimeFromRecordsDetailed(records: readonly MemoryRecord[], fallbackIso: string): {
+    iso: string;
+    source: 'evidence' | 'fallback_now';
+};
+/** {@link anchorTimeFromRecordsDetailed} 的旧签名封装(调用方只要时刻时的零改动通道)。 */
 export declare function anchorTimeFromRecords(records: readonly MemoryRecord[], fallbackIso: string): string;
 /** 应用一次投影提案(硬校验 + 消歧 + supersede + 状态重建)。 */
 export declare function applyGraphProjection(options: ApplyGraphProjectionOptions): ApplyGraphProjectionOutcome;

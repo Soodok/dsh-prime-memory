@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { L1Store } from '../src/store/l1.js';
 import { MemoryDb } from '../src/store/sqlite.js';
+import { readSupersedeMarker } from '../src/store/supersede.js';
 import type { EmbeddingService } from '../src/store/embedding.js';
 import type { MemoryRecord } from '../src/types.js';
 
@@ -108,10 +109,12 @@ describe('FTS 重建不得把已退场记录放回检索面', () => {
     expect(ids(await store.search(Q, 5)), '② 对外检索面同样看不到').not.toContain(GONE);
     expect(ids(await store.search('咖啡豆', 5)), '③ 活跃邻居必须照样回灌(防假修复)').toContain(KEEP);
 
-    // 主表行仍在(可恢复的载体没被破坏)，只是不进检索面
+    // 主表行仍在(可恢复的载体没被破坏)，只是不进检索面。
+    // 门1 解耦:退场凭 marker，valid_to 不再被 retire 闭合。
     const [row] = store.getByIds([GONE]);
     expect(row, '主表行必须保留').toBeDefined();
-    expect(row.validTo).toBe(Date.parse(AT));
+    expect(row.validTo).toBeUndefined();
+    expect(readSupersedeMarker(row.metadata)?.reason).toBe('obsolete');
 
     db.close();
   });

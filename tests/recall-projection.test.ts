@@ -356,7 +356,8 @@ describe('正文全文（body）与退场标注（retired）进 view', () => {
   it('退场记录仍在 items 里且 retired === true（删除线的根）', async () => {
     const { def, store } = await captured(fakeL1({
       a: { content: '活跃', validTo: undefined },
-      b: { content: '已判过时', validTo: Date.parse('2026-10-12T00:00:00Z') },
+      // 门1 解耦:retired 判据改 marker 单源(valid_to 只是现实有效期)。
+      b: { content: '已判过时', validTo: Date.parse('2026-10-12T00:00:00Z'), metadata: { dsh_superseded: { at: '2026-10-12T00:00:00.000Z', reason: 'manual' } } },
     }));
     store.add('s', ['a', 'b']);
     const v = def.wire.view(def.init(header('s')));

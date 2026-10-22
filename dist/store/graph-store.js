@@ -19,9 +19,12 @@
  */
 import { randomBytes } from 'node:crypto';
 import { applyGraphProjection } from '../graph/apply.js';
-import { searchGraphNodes } from '../graph/search.js';
-import { GRAPH_JOB_BACKOFF_BASE_MS, GRAPH_JOB_BATCH, GRAPH_JOB_MAX_ATTEMPTS, GRAPH_PRIORITY_BACKFILL, GRAPH_PROJECTOR_VERSION, } from '../graph/types.js';
+import { expandHitRecordIds, searchGraphNodes } from '../graph/search.js';
+import { buildFullView, buildGraphPreview } from '../graph/preview.js';
+import { GRAPH_JOB_BACKOFF_BASE_MS, GRAPH_JOB_BATCH, GRAPH_JOB_MAX_ATTEMPTS, GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS, GRAPH_PRIORITY_BACKFILL, GRAPH_PRIORITY_NEW, GRAPH_PROJECTOR_VERSION, GRAPH_VEC_SEED_CAP, } from '../graph/types.js';
 import { normPersistence } from '../types.js';
+import { classifyValidity, isExitedState, validToSourceOf } from './validity.js';
+import { readSupersedeMarker } from './supersede.js';
 import { isZeroVector, vecToBuffer } from './vec-utils.js';
 const TAG = '[memory][graph]';
 /** 坏 JSON 容忍解析:图谱表列损坏只损失该行派生信息,不抛。 */
@@ -460,6 +463,98 @@ export class GraphStore {
             : nodes;
         return searchGraphNodes(filtered, edges, query, limit);
     }
+    /**
+     * §D 第 3 路存储缝(回链记录 id 序;graphLane 直接消费):词法命中 ∪ 路内向量种子
+     * → 1-hop 边扩展 → 保序去重的 L1 记录 id 序列。
+     *
+     * - **向量种子是路内并集、不是新路**:embedding 由调用方传入(装配层惰性查
+     *   l1.embedText;未就绪/失败传 undefined = 纯词法路,与旧 searchNodes+直连回链
+     *   逐位一致);并集不占 RRF 路数名额,"未接线 = 恰为 2 路"不变量不动;
+     * - **种子序**:词法命中在前、向量种子追加在后(RRF 用 rank,顺序即权重),
+     *   同节点去重;向量种子同样过 visible 族集与 active|disputed 状态闸(宁可漏不可串);
+     * - **1-hop 邻居不按族预筛**:来源记录的跨族由 graphLane 尾部记录级 family/scope
+     *   双闸兜底(与本路既有纪律同源);
+     * - 降级(db 未就绪/空图)返回空数组,不抛。
+     *
+     * 返回记录 id 而非 hits 是刻意的:回链/扩展属于读路径细节,路侧只需排名序列。
+     */
+    searchLaneRecords(query, embedding, limit, families) {
+        if (!this.db)
+            return [];
+        const { nodes, edges } = this.loadGraph();
+        const visible = families && families.length > 0
+            ? nodes.filter((n) => n.families.some((f) => families.includes(f)))
+            : nodes;
+        const lexical = searchGraphNodes(visible, edges, query, limit);
+        let hits = lexical;
+        if (embedding && embedding.length > 0) {
+            const visibleIds = new Set(visible.map((n) => n.id));
+            const seenNodes = new Set(lexical.map((h) => h.node.id));
+            const extra = [];
+            for (const v of this.searchNodesByVector(embedding, GRAPH_VEC_SEED_CAP)) {
+                if (seenNodes.has(v.node.id) || !visibleIds.has(v.node.id))
+                    continue;
+                if (v.node.status !== 'active' && v.node.status !== 'disputed')
+                    continue;
+                seenNodes.add(v.node.id);
+                extra.push({ node: v.node, score: v.score, matchedFields: ['name'], matchReason: '向量种子命中' });
+            }
+            if (extra.length > 0)
+                hits = [...lexical, ...extra];
+        }
+        return expandHitRecordIds(hits, nodes, edges);
+    }
+    /**
+     * 面板图谱预览存储缝(契约 `dsh-memory/graph-preview` 的数据源):
+     * loadGraph 一次 + job 计数(pending/running/failed 未定项与全量分母)传入纯函数。
+     * 降级(db 未就绪)返**全零结构**不抛——预览是展示面,永不拖垮端点。
+     * mode==='full' 时响应附 `full` 轻量块;**缺省时该键缺席**(可选键零漂移纪律,
+     * 不是 undefined 占位——消费方 `'full' in res` 与 JSON 形状双判据都干净)。
+     */
+    buildPreview(seedId, mode) {
+        const zero = { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
+        if (!this.db)
+            return mode === 'full' ? { ...zero, full: { nodes: [], edges: [], truncated: false } } : zero;
+        const { nodes, edges } = this.loadGraph();
+        let pendingJobs = 0;
+        let jobsTotal = 0;
+        let deadJobs = 0;
+        try {
+            pendingJobs = this.db
+                .prepare("SELECT COUNT(1) AS c FROM graph_projection_jobs WHERE status IN ('pending','running','failed')")
+                .get().c;
+            jobsTotal = this.db.prepare('SELECT COUNT(1) AS c FROM graph_projection_jobs').get().c;
+            deadJobs = this.db.prepare("SELECT COUNT(1) AS c FROM graph_projection_jobs WHERE status = 'dead'").get().c;
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} 预览 job 计数失败(计数回零): ${err instanceof Error ? err.message : String(err)}`);
+        }
+        const r = buildGraphPreview(nodes, edges, { seedId, pendingJobs, jobsTotal, deadJobs });
+        if (mode === 'full')
+            return { ...r, full: buildFullView(nodes, edges) };
+        return r;
+    }
+    /**
+     * 清理历史 dead 作业行（纯审计痕迹删除，不影响已重入队的记录）。
+     * olderThanMs: 只删早于 now-olderThanMs 的；缺省删全部 dead。
+     */
+    cleanupDead(olderThanMs) {
+        if (!this.db)
+            return 0;
+        try {
+            const cutoff = olderThanMs != null && olderThanMs > 0
+                ? new Date(Date.now() - olderThanMs).toISOString()
+                : undefined;
+            const result = cutoff
+                ? this.db.prepare("DELETE FROM graph_projection_jobs WHERE status = 'dead' AND updated_time < ?").run(cutoff)
+                : this.db.prepare("DELETE FROM graph_projection_jobs WHERE status = 'dead'").run();
+            return Number(result.changes ?? 0);
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} cleanupDead 失败(忽略): ${err instanceof Error ? err.message : String(err)}`);
+            return 0;
+        }
+    }
     // ============================
     // 投影 job 队列
     // ============================
@@ -472,8 +567,16 @@ export class GraphStore {
      * 记录跳过。返回实际新建的 job 数。
      */
     queueGraphProjection(recordIds, priority) {
+        return this.queueGraphProjectionDetailed(recordIds, priority).created;
+    }
+    /**
+     * 入队的详细形态(与 `queueGraphProjection` 同一实现,只是把新建 job id 也交出来):
+     * `memory_reproject` 工具面需要 `{queued, jobIds}` 回报,而既有调用方只数 created——
+     * 两个返回形状共享一份去重/分片逻辑,不漂移。
+     */
+    queueGraphProjectionDetailed(recordIds, priority) {
         if (!this.db || recordIds.length === 0)
-            return 0;
+            return { created: 0, jobIds: [] };
         try {
             const db = this.db;
             const ids = [...new Set(recordIds)];
@@ -492,10 +595,10 @@ export class GraphStore {
             }
             const fresh = ids.filter((id) => !blocked.has(id));
             if (fresh.length === 0)
-                return 0;
+                return { created: 0, jobIds: [] };
             const now = new Date().toISOString();
             return this.tx(() => {
-                let created = 0;
+                const jobIds = [];
                 for (let i = 0; i < fresh.length; i += GRAPH_JOB_BATCH) {
                     const batch = fresh.slice(i, i + GRAPH_JOB_BATCH);
                     const jobId = this.newJobId();
@@ -504,14 +607,121 @@ export class GraphStore {
                     for (const id of batch) {
                         db.prepare('INSERT OR REPLACE INTO graph_job_records (record_id, job_id) VALUES (?, ?)').run(id, jobId);
                     }
-                    created++;
+                    jobIds.push(jobId);
                 }
-                return created;
+                return { created: jobIds.length, jobIds };
             });
         }
         catch (err) {
             this.logger?.warn(`${TAG} 投影入队失败(忽略): ${err instanceof Error ? err.message : String(err)}`);
-            return 0;
+            return { created: 0, jobIds: [] };
+        }
+    }
+    /**
+     * 强制重投(计划 expiry-tiering R10 冻结契约 · 先行刀):
+     * 抹掉 `graph_projected_records` 里这些记录的"已按当前版本投过"凭证,再按
+     * 新蒸馏优先级入队——绕开 `projector_version` 的永久跳过,让"改了 L1 → 图谱跟随"
+     * 有一条不依赖重启/周期 sweep 的纠正通道。
+     *
+     * **不动在途 `graph_job_records` 映射**(与上游 task_7.5 字面的一处刻意偏差,
+     * 理由记入写面计划 findings):claim 在认领时才现读 L1 记录,在途 job 天然投的是
+     * **改后**内容;若把映射一并删掉,同一次调用稍后再来一次就会绕过 PK 去重,
+     * 堆出内容重叠的双 job——保留映射才是"重复调用不堆重 job"的构造性保证。
+     *
+     * 幂等:在途有 job → blocked 集吸收,`created=0`;job 已完成 → 凭证刚被
+     * `complete` 写回,本方法再删再投,是合法的新重投而非堆积。
+     */
+    forceReprojectRecord(recordIds) {
+        if (!this.db || recordIds.length === 0)
+            return { queued: 0, jobIds: [] };
+        const ids = [...new Set(recordIds)];
+        try {
+            this.tx(() => {
+                for (const chunk of chunkOf(ids)) {
+                    const ph = chunk.map(() => '?').join(',');
+                    this.db.prepare(`DELETE FROM graph_projected_records WHERE record_id IN (${ph})`).run(...chunk);
+                }
+            });
+            const r = this.queueGraphProjectionDetailed(ids, GRAPH_PRIORITY_NEW);
+            return { queued: r.created, jobIds: r.jobIds };
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} 强制重投入队失败(忽略): ${err instanceof Error ? err.message : String(err)}`);
+            return { queued: 0, jobIds: [] };
+        }
+    }
+    /**
+     * 确定性边提案落库面(graph-write-plane R4 兜底支路):把"工具传入的显式边提案"
+     * 当作一次确定性投影输入,经 `applyGraphProjection` **纯函数**校验后在同一事务内
+     * 写回——不是裸 UPDATE graph_edges:validSources 硬校验、同 (from,relation) 换目标
+     * 闭旧边的确定性支路、来源并集封顶,全部复用既有守门代码(R5 不变量由它保证)。
+     *
+     * 提案形态:两端节点按现有 name/type 重提(消歧合并会命中现有节点,不新铸实体),
+     * 边 (from → to, relation) 携调用方给的 sourceRecordIds。claim 同款现读 L1:
+     * allowedRecordIds = 命中的来源记录集,未命中的 id 会被纯函数整条拒掉(返回
+     * ok:false, reason='dropped')——工具面传的"非现存 L1"在这里撞上硬校验,而非静默落库。
+     */
+    applyRelationProposal(opts) {
+        const fail = (reason) => ({ ok: false, reason, closedEdgeIds: [], edgeIds: [], touchedNodeIds: [] });
+        if (!this.db)
+            return fail('graph-not-ready');
+        const relation = String(opts.relation ?? '').trim();
+        const sourceIds = [...new Set((opts.sourceRecordIds ?? []).map((s) => String(s).trim()).filter((s) => s.length > 0))];
+        if (!opts.fromNodeId || !opts.toNodeId || opts.fromNodeId === opts.toNodeId)
+            return fail('bad-nodes');
+        if (!relation || sourceIds.length === 0)
+            return fail('empty-relation-or-sources');
+        try {
+            return this.tx(() => {
+                const { nodes, edges } = this.loadGraphInTx();
+                const from = nodes.find((n) => n.id === opts.fromNodeId);
+                const to = nodes.find((n) => n.id === opts.toNodeId);
+                if (!from || !to)
+                    return fail('nodes-not-found');
+                const records = this.loadRecordsInTx(sourceIds);
+                if (records.length === 0)
+                    return fail('sources-not-in-l1');
+                const now = opts.now ?? new Date().toISOString();
+                const idFactory = (prefix) => `${prefix}_${Date.now()}_${randomBytes(3).toString('hex')}`;
+                const result = {
+                    reason: 'tool-explicit-proposal',
+                    nodes: [
+                        { ref: 'from', name: from.name, type: from.type, sourceRecordIds: sourceIds, status: 'active' },
+                        { ref: 'to', name: to.name, type: to.type, sourceRecordIds: sourceIds, status: 'active' },
+                    ],
+                    edges: [{ fromRef: 'from', toRef: 'to', relation, sourceRecordIds: sourceIds, status: 'active' }],
+                };
+                const statusBefore = new Map(edges.map((e) => [e.id, e.status]));
+                const outcome = applyGraphProjection({
+                    nodes,
+                    edges,
+                    records,
+                    result,
+                    allowedRecordIds: new Set(records.map((r) => r.id)),
+                    now,
+                    idFactory,
+                });
+                if (outcome.edgeIds.length === 0)
+                    return fail('proposal-dropped-by-validator');
+                const touchedNodes = nodes.filter((n) => outcome.nodeIds.includes(n.id));
+                const touchedEdges = edges.filter((e) => outcome.edgeIds.includes(e.id));
+                this.upsertTouchedInTx(touchedNodes, touchedEdges);
+                const closedEdgeIds = touchedEdges
+                    .filter((e) => e.status === 'superseded' && statusBefore.get(e.id) !== 'superseded')
+                    .map((e) => e.id);
+                const newEdgeIds = touchedEdges.filter((e) => e.status === 'active' && e.relation === relation).map((e) => e.id);
+                this.logger?.info(`${TAG} 确定性边提案落库:${newEdgeIds.length} 边 active,${closedEdgeIds.length} 旧边 superseded(来源 ${sourceIds.length} 条,校验丢弃 ${outcome.dropped} 项)`);
+                return {
+                    ok: true,
+                    closedEdgeIds,
+                    edgeIds: newEdgeIds,
+                    touchedNodeIds: touchedNodes.map((n) => n.id),
+                };
+            }, true);
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} 确定性边提案失败(整体回滚): ${err instanceof Error ? err.message : String(err)}`);
+            return fail('tx-error');
         }
     }
     /**
@@ -568,7 +778,7 @@ export class GraphStore {
                AND status IN ('pending', 'failed')
                AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
              ORDER BY priority DESC, created_time ASC LIMIT 1`)
-                    .get(GRAPH_PROJECTOR_VERSION, GRAPH_JOB_MAX_ATTEMPTS, nowMs);
+                    .get(GRAPH_PROJECTOR_VERSION, GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS, nowMs);
                 if (!row)
                     return null;
                 db.prepare(`UPDATE graph_projection_jobs SET status = 'running', attempts = attempts + 1, error = NULL, updated_time = ? WHERE job_id = ?`).run(nowIso, row.job_id);
@@ -599,10 +809,14 @@ export class GraphStore {
      * 校验)→ 写回 touched 行 → job 置 completed + 登记已投影记录 + 放掉 mapping。
      * job 非 running 态(已完成/已 dead/已回收)一律幂等 no-op;任何一步抛错整体
      * 回滚,不留半写。
+     *
+     * 返回 touched 节点中 active/disputed 的那批(写面向量收尾的输入,G-vec 缺陷修):
+     * 调用方只关心"哪些节点刚被写活",向量补算失败不回滚投影——返回值不参与控制流。
      */
     complete(jobId, result, opts) {
         if (!this.db)
-            return;
+            return [];
+        let touchedVecNodes = [];
         try {
             const db = this.db;
             const now = opts?.now ?? new Date().toISOString();
@@ -628,6 +842,9 @@ export class GraphStore {
                 const touchedNodes = nodes.filter((n) => outcome.nodeIds.includes(n.id));
                 const touchedEdges = edges.filter((e) => outcome.edgeIds.includes(e.id));
                 this.upsertTouchedInTx(touchedNodes, touchedEdges);
+                // 写面收尾的输入(只递交落库后的 active/disputed 节点):墓碑不需要向量,
+                // 读侧 searchNodesByVector 本就按状态闸过滤陈旧向量行。
+                touchedVecNodes = touchedNodes.filter((n) => n.status === 'active' || n.status === 'disputed');
                 db.prepare(`UPDATE graph_projection_jobs SET status = 'completed', error = NULL, updated_time = ? WHERE job_id = ?`).run(now, jobId);
                 for (const id of wanted) {
                     db.prepare('INSERT OR REPLACE INTO graph_projected_records (record_id, projector_version) VALUES (?, ?)').run(id, GRAPH_PROJECTOR_VERSION);
@@ -643,26 +860,30 @@ export class GraphStore {
             // 提交失败:job 仍在 running 态,下次启动 recoverRunning 回收重投
             this.logger?.warn(`${TAG} 投影提交失败(待启动回收重投): ${err instanceof Error ? err.message : String(err)}`);
         }
+        return touchedVecNodes;
     }
     /**
-     * 投影失败收尾:attempts 已在 claim 时 +1——封顶转 dead(放掉 mapping,允许
-     * 重新入队);未封顶转 failed + 指数退避 nextAttemptAt(mapping 保留防重复入队)。
+     * 投影失败收尾:attempts 已在 claim 时 +1——根据错误分类选不同封顶:
+     * - 永久错误(校验/解析):attempts >= GRAPH_JOB_MAX_ATTEMPTS(3) → dead
+     * - 瞬态错误(aborted/timeout/网络):attempts >= GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS(6) → dead
+     * dead 放掉 mapping(允许下次 backfill 重新入队);未封顶转 failed + 指数退避。
      */
-    fail(jobId, error) {
+    fail(jobId, error, opts) {
         if (!this.db)
             return;
         try {
             const db = this.db;
             const nowMs = Date.now();
             const nowIso = new Date(nowMs).toISOString();
+            const cap = opts?.transient ? GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS : GRAPH_JOB_MAX_ATTEMPTS;
             this.tx(() => {
                 const row = db.prepare('SELECT attempts FROM graph_projection_jobs WHERE job_id = ?').get(jobId);
                 if (!row)
                     return;
-                if (row.attempts >= GRAPH_JOB_MAX_ATTEMPTS) {
+                if (row.attempts >= cap) {
                     db.prepare(`UPDATE graph_projection_jobs SET status = 'dead', error = ?, updated_time = ? WHERE job_id = ?`).run(error.slice(0, 500), nowIso, jobId);
                     db.prepare('DELETE FROM graph_job_records WHERE job_id = ?').run(jobId);
-                    this.logger?.warn(`${TAG} 投影任务达重试上限,标记 dead(job=${jobId}): ${error.slice(0, 200)}`);
+                    this.logger?.warn(`${TAG} 投影任务达重试上限(${opts?.transient ? '瞬态' : '永久'}cap=${cap}),标记 dead(job=${jobId}): ${error.slice(0, 200)}`);
                 }
                 else {
                     const backoffMs = GRAPH_JOB_BACKOFF_BASE_MS * 2 ** (row.attempts - 1);
@@ -776,6 +997,94 @@ export class GraphStore {
         }
         catch (err) {
             this.logger?.warn(`${TAG} 删除传播失败(忽略): ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+    /**
+     * 退场传播(计划 expiry-tiering R9 冻结契约 · 先行刀):软删/取代后的图谱
+     * 来源活性重算清扫。
+     *
+     * 与 `markSourcesDeleted` 的分野:那边判"来源 row 是否还活着",对软删(主表行
+     * 一直在)结构性失效;这边判"来源是否全部处于**退场态**"——即
+     * `classifyValidity` ∈ {superseded, retired}。退场判据单源在 validity 层,
+     * 本方不再自写一份 valid_to/marker 比较(写面计划约束 §4)。
+     *
+     * 重算式 sweep(不是逐条事件改写):每次按当前 L1 全量判定候选节点/边,
+     * 双向收敛——
+     * - active/disputed 且来源全部退场(含 row 消失)→ `archived` 墓碑(保留行,
+     *   expand 可见,与物理删传播同落库形态);
+     * - archived 且来源全部复活(row 存在且非退场态)→ 回 `active`(restore 的回药;
+     *   被物理删清空来源的永不满 足此条,不会误复活)。
+     *
+     * `changedIds` 只作早退与诊断日志的口径,不参与判定(判定面 = 全图来源集)。
+     */
+    markSourcesRetired(changedIds) {
+        if (!this.db || changedIds.length === 0)
+            return;
+        try {
+            const { nodes, edges } = this.loadGraph();
+            const sourceIds = new Set();
+            for (const n of nodes)
+                for (const id of n.sourceRecordIds)
+                    sourceIds.add(id);
+            for (const e of edges)
+                for (const id of e.sourceRecordIds)
+                    sourceIds.add(id);
+            if (sourceIds.size === 0)
+                return;
+            // 现读 L1 行(含已退场软删行——主表行一直在,差别在 marker);
+            // 列形状按 l1SelectCols 同款容缺(独立测试夹具/旧库可能没有时间增强列)。
+            const now = Date.now();
+            const byId = new Map();
+            for (const chunk of chunkOf([...sourceIds])) {
+                const ph = chunk.map(() => '?').join(',');
+                for (const r of this.db
+                    .prepare(`SELECT ${l1SelectCols(this.db)} FROM l1_records WHERE record_id IN (${ph})`)
+                    .all(...chunk)) {
+                    byId.set(String(r.record_id), rowToRecord(r));
+                }
+            }
+            /** 单条来源是否处于退场态:row 消失也算(与物理删传播同口径,宁保守勿复活)。 */
+            const exited = (id) => {
+                const rec = byId.get(id);
+                if (!rec)
+                    return true;
+                const state = classifyValidity({
+                    marker: readSupersedeMarker(rec.metadata),
+                    persistence: rec.persistence,
+                    validTo: rec.validTo,
+                    validToSource: validToSourceOf(rec.metadata),
+                    now,
+                });
+                return isExitedState(state);
+            };
+            const allExited = (ids) => ids.length > 0 && ids.every(exited);
+            const allRevived = (ids) => ids.length > 0 && ids.every((id) => byId.has(id) && !exited(id));
+            const toArchive = nodes.filter((n) => (n.status === 'active' || n.status === 'disputed') && allExited(n.sourceRecordIds));
+            const toArchiveEdges = edges.filter((e) => (e.status === 'active' || e.status === 'disputed') && allExited(e.sourceRecordIds));
+            const toRevive = nodes.filter((n) => n.status === 'archived' && allRevived(n.sourceRecordIds));
+            const toReviveEdges = edges.filter((e) => e.status === 'archived' && allRevived(e.sourceRecordIds));
+            if (toArchive.length === 0 && toArchiveEdges.length === 0 && toRevive.length === 0 && toReviveEdges.length === 0)
+                return;
+            const nowIso = new Date(now).toISOString();
+            this.tx(() => {
+                for (const n of toArchive) {
+                    this.db.prepare(`UPDATE graph_nodes SET status = 'archived', updated_time = ? WHERE node_id = ?`).run(nowIso, n.id);
+                }
+                for (const e of toArchiveEdges) {
+                    this.db.prepare(`UPDATE graph_edges SET status = 'archived', updated_time = ? WHERE edge_id = ?`).run(nowIso, e.id);
+                }
+                for (const n of toRevive) {
+                    this.db.prepare(`UPDATE graph_nodes SET status = 'active', updated_time = ? WHERE node_id = ?`).run(nowIso, n.id);
+                }
+                for (const e of toReviveEdges) {
+                    this.db.prepare(`UPDATE graph_edges SET status = 'active', updated_time = ? WHERE edge_id = ?`).run(nowIso, e.id);
+                }
+            });
+            this.logger?.info(`${TAG} 退场传播(重算清扫):${toArchive.length + toArchiveEdges.length} 项标 archived,` +
+                `${toRevive.length + toReviveEdges.length} 项复活(触发记录 ${changedIds.length} 条)`);
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} 退场传播失败(忽略): ${err instanceof Error ? err.message : String(err)}`);
         }
     }
     /**

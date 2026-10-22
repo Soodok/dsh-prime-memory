@@ -81,6 +81,15 @@ export interface MemoryConfig {
          *  同时为真才执行;图谱是 L1 的可重建投影,关闭不影响记忆主链路。 */
         enabled: boolean;
     };
+    /**
+     * 时效分级(expiry-tiering 门2):`tieringEnabled` 灰度闸，**默认关**。
+     * 关时被动注入与改前逐字一致(零漂移)；开时注入候选按 classifyValidity 现算态
+     * 剔除 `expired`(仍在索引可检索，只是不自动浮现)，`expired_suspect` 保留并带标注。
+     * 与部署 cfg.validity.tieringEnabled 取或的还有面板运行时开关(live.validityTiering)。
+     * 门1 解耦本身不受本闸控(它是 bugfix:误遮蔽历史应尽快恢复)。 */
+    validity: {
+        tieringEnabled: boolean;
+    };
     /** §C 矛盾冻结:去重判定"两边都像是对的、机器判不了"时不自动裁决,
      *  把冲突对停放到待人工裁决区(conflict_pending)。**默认关**——
      *  冻结消耗人的注意力,不可默认全开。 */

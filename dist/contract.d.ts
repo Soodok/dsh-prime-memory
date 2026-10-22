@@ -116,6 +116,8 @@ export interface MemoryLiveSettings {
     mdSyncEnabled: boolean;
     /** 外部记忆来源 Connect 启用开关（概览区可拨）:true = 放行 memport-* 端点。与部署 cfg.memport.enabled 取或。 */
     memportEnabled: boolean;
+    /** 时效分级门2 启用开关（概览区可拨）:true = 被动注入剔除 expired。与部署 cfg.validity.tieringEnabled 取或；关=注入与改前逐字一致。 */
+    validityTiering: boolean;
     /** md 投射/后缀收敛的单次动作护栏运行时覆盖:0 = 跟随部署 `cfg.memExport.maxRecords`（默认 2000）。
      *  存在的理由：一次点完多少条属于“回填历史时才改一下”的旋钮，不该要求改 YAML + 重启。 */
     mdExportMaxRecords: number;
@@ -928,6 +930,13 @@ export interface UiRecord {
      */
     superseded?: boolean;
     /**
+     * 路归因：hybrid 融合时这条命中来自哪几路（`'fts'|'vec'|'graph'|'recency'`）。
+     * 只在 `dsh-memory/session-recalled` 路径上有意义；缺省 = 无从归因
+     * （单路检索策略/旧文件条目/旧服务端），展示层不渲染徽标。纯投影字段，
+     * 存储侧落 `session-recalled.json` 的 lanes 键（读时拆管道串）。
+     */
+    lanes?: string[];
+    /**
      * 成熟度(G3 读时派生):priority + 被用次数 + 老化权重合成。
      * 可选字段——旧 client 忽略=向后兼容；不参与存储/快照（纯投影）。
      */
@@ -1227,6 +1236,69 @@ export interface GraphNodeGetResponse {
     node: GraphNode | null;
     /** 与该节点相连的 active 边。 */
     edges: GraphEdge[];
+}
+/** dsh-memory/graph-preview(面板图谱预览:缺省返回推荐种子榜,seedId 给定展开该节点邻域)。
+ *  候选只含 active|disputed 节点×active 边(与检索同判据);空图/未启用返全零结构不抛。 */
+export interface GraphPreviewRequest {
+    /** 给定即以该节点为唯一中心(悬挂 id 返空 seeds,不解析不抛——graph-node-get 同款宽容)。 */
+    seedId?: string;
+    /** 'full' = 响应附全图轻量块(mode:'full' 与大图星图共用同端点,一次 loadGraph 全供)。
+     *  非 'full' 一律按缺省——无 mode 响应形状与旧版逐字一致(可选键缺席=零漂移)。 */
+    mode?: 'full';
+}
+export interface GraphPreviewResponse {
+    seeds: Array<{
+        node: {
+            id: string;
+            name: string;
+            type: string;
+            degree: number;
+            causalDegree: number;
+        };
+        /** 因果边优先→邻居度数降序→updatedAt 新先;长度 ≤ GRAPH_PREVIEW_NEIGHBORS。 */
+        neighbors: Array<{
+            id: string;
+            name: string;
+            type: string;
+            relation: string;
+            causal: boolean;
+        }>;
+        truncated: boolean;
+    }>;
+    stats: {
+        nodes: number;
+        edges: number;
+        causalEdges: number;
+        /** 未定投影 job 数(pending/running/failed 退避中),>0 → UI 显"构建中 x/y"(x=jobsTotal-pendingJobs)。 */
+        pendingJobs: number;
+        /** 全量 job 数(含各状态),"构建中 x/y"的分母——名字即分母,不拿 done 冒充分子。 */
+        jobsTotal: number;
+        /** 永久失败作业数(dead),可选(零漂移先例);>0 → UI 拆成"完成/失败/排队"三档显示。 */
+        deadJobs?: number;
+    };
+    /** mode==='full' 才出现;全图星图轻量块(可见节点×active 边,截断标记 truncated)。
+     *  不带此键时响应与旧形状逐字节一致——消费方按需读 `res.full?`。 */
+    full?: {
+        nodes: Array<{
+            id: string;
+            name: string;
+            type: string;
+        }>;
+        edges: Array<{
+            from: string;
+            to: string;
+            relation: string;
+            causal: boolean;
+        }>;
+        truncated: boolean;
+    };
+}
+/** dsh-memory/graph-cleanup-dead(清理历史失败作业:删除 status='dead' 的行,不影响已重入队的记录)。 */
+export interface GraphCleanupDeadRequest {
+    olderThanMs?: number;
+}
+export interface GraphCleanupDeadResponse {
+    removed: number;
 }
 /** dsh-memory/scenes(两族拼接的混合视图)。 */
 export interface ScenesResponse {
@@ -1778,6 +1850,8 @@ export interface DshMemoryRequestMap {
     'dsh-memory/conflicts-rejected': ConflictRejectedRequest;
     'dsh-memory/graph-search': GraphSearchRequest;
     'dsh-memory/graph-node-get': GraphNodeGetRequest;
+    'dsh-memory/graph-preview': GraphPreviewRequest;
+    'dsh-memory/graph-cleanup-dead': GraphCleanupDeadRequest;
     'dsh-memory/scenes': Record<string, never>;
     'dsh-memory/persona': Record<string, never>;
     'dsh-memory/log-tail': LogTailRequest;
@@ -1843,6 +1917,8 @@ export interface DshMemoryResponseMap {
     'dsh-memory/conflicts-rejected': ConflictRejectedResponse;
     'dsh-memory/graph-search': GraphSearchResponse;
     'dsh-memory/graph-node-get': GraphNodeGetResponse;
+    'dsh-memory/graph-preview': GraphPreviewResponse;
+    'dsh-memory/graph-cleanup-dead': GraphCleanupDeadResponse;
     'dsh-memory/scenes': ScenesResponse;
     'dsh-memory/persona': PersonaResponse;
     'dsh-memory/log-tail': LogTailResponse;

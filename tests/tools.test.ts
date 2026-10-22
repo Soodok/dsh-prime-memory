@@ -160,7 +160,7 @@ describe('memory tools', () => {
     // 早就写着"待裁决对可用 memory_conflicts 查看",而那个工具**一直不存在** ——
     // 模型照着描述调用只会拿到"工具不存在"。本次补上读出口,故在此登记。
     expect(h.registered.map((t) => t.name).sort()).toEqual([
-      'conversation_search', 'memory_add', 'memory_conflicts', 'memory_conflicts_rejected', 'memory_delete', 'memory_expand_graph_node', 'memory_import', 'memory_read_scene', 'memory_receipts', 'memory_resolve_conflict', 'memory_room_admin', 'memory_room_review', 'memory_ruminate', 'memory_ruminate_cancel', 'memory_ruminate_status', 'memory_search', 'memory_search_graph',
+      'conversation_search', 'memory_add', 'memory_conflicts', 'memory_conflicts_rejected', 'memory_delete', 'memory_expand_graph_node', 'memory_import', 'memory_migrate_relation', 'memory_read_scene', 'memory_receipts', 'memory_reproject', 'memory_resolve_conflict', 'memory_room_admin', 'memory_room_review', 'memory_ruminate', 'memory_ruminate_cancel', 'memory_ruminate_status', 'memory_search', 'memory_search_graph', 'memory_update',
     ]);
     stores.db.close();
   });
@@ -239,7 +239,9 @@ describe('memory tools', () => {
     expect(rec.family).toBe('work');
     expect(rec.priority).toBe(80);
     expect(rec.scene_name).toBe('__manual__');
-    expect(rec.metadata).toEqual({ hall: 'work', temporal: { st: '?', vf: null, vt: null } });
+    expect(rec.metadata).toMatchObject({ hall: 'work', temporal: { st: '?', vf: null, vt: null } });
+    // 写侧标注(task_3.2):工具路径落库时盖 dsh_validity 快照(validToSource 由汇流口补 'unknown')
+    expect((rec.metadata as Record<string, unknown>).dsh_validity).toBeDefined();
     // 非法 type 缺省 episodic
     const fallback = (await add2.execute({ content: '随便记一条' }, {})) as { id: string };
     expect(stores.l1.getByIds([fallback.id])[0].type).toBe('episodic');
@@ -344,13 +346,14 @@ describe('memory tools', () => {
     expect(noMatch.deleted).toBe(0);
     const ok = (await del.execute({ query: '手冲咖啡', limit: 1 }, { agent: { id: 'auto-sess' } })) as { deleted: number; ids: string[] };
     expect(ok.deleted).toBe(1);
-    // **软删**:主表仍在(可恢复的载体),但已退出检索面
+    // **软删**:主表仍在(可恢复的载体),但已退出检索面。
+    // 门1 解耦:退场判据是 marker 单源，valid_to 不再被 retire 闭合。
     const [retired] = stores.l1.getByIds(ok.ids);
     expect(retired, '退场不该让记录消失').toBeDefined();
-    expect(retired.validTo).toBeDefined();
+    expect(retired.metadata && (retired.metadata as Record<string, unknown>).dsh_superseded).toBeDefined();
     expect(stores.db.searchL1Fts('手冲咖啡', 5).map((h) => h.id)).not.toContain(ok.ids[0]);
     expect(stores.l1.listRetired({ limit: 10, offset: 0 }).items.map((r) => r.id)).toEqual(ok.ids);
-    // 恢复闭环:回到检索面
+    // 恢复闭环:回到检索面(marker 被清;valid_to 本就不再写,保持未闭合)
     expect((await stores.l1.restore(ok.ids)).restored).toBe(1);
     expect(stores.l1.getByIds(ok.ids)[0]?.validTo).toBeUndefined();
     // 关门拒绝
@@ -387,7 +390,8 @@ describe('memory tools', () => {
     const r = (await del.execute({ ids: ['r2'], query: '手冲咖啡' }, { agent: { id: 'auto-sess' } })) as { deleted: number; ids: string[] };
     expect(r.ids).toEqual(['r2']);
     expect(r.deleted).toBe(1);
-    expect(stores.l1.getByIds(['r2'])[0]?.validTo).toBeDefined();
+    // 门1 解耦:退场凭 marker 表达，不再拿 valid_to 当退场凭据。
+    expect(stores.l1.getByIds(['r2'])[0]?.metadata?.dsh_superseded).toBeDefined();
     // 与 query 匹配的 r1 未被牵连(语义匹配根本没跑)
     expect(stores.l1.getByIds(['r1'])[0]?.validTo).toBeUndefined();
     stores.db.close();

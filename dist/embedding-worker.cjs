@@ -1,3 +1,5 @@
+// DEPRECATED: use embedding-child.cjs (subprocess isolation, fix #11)
+// 保留一版兼容(opts.useWorker 逃生门),下版删除。不再主动修改。
 /**
  * 本地嵌入 worker:transformers.js 的模型加载与推理在本线程执行,主线程只
  * 投递文本、收回向量。onnxruntime-node 的 run/loadModel 是 setImmediate 回调里

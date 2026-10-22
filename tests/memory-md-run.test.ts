@@ -21,6 +21,19 @@ afterAll(async () => {
 
 const RETIRED_AT = Date.parse('2026-10-12T09:00:00Z');
 
+/** 门1 解耦:"已退场"快照凭 marker(validTo 留着顺带回归共存形状)。 */
+const retiredLike = (r: MemoryRecord): MemoryRecord => ({
+  ...r,
+  validTo: RETIRED_AT,
+  metadata: { ...(r.metadata ?? {}), dsh_superseded: { at: new Date(RETIRED_AT).toISOString(), reason: 'manual' } },
+});
+/** 活跃快照:清 validTo 与 marker(门1 前"清 validTo 即活跃"的等价新形状)。 */
+const liveLike = (r: MemoryRecord): MemoryRecord => {
+  const meta = { ...(r.metadata ?? {}) } as Record<string, unknown>;
+  delete meta.dsh_superseded;
+  return { ...r, validTo: undefined, metadata: meta };
+};
+
 function rec(id: string, content: string, extra: Partial<MemoryRecord> = {}): MemoryRecord {
   const t = Date.parse('2026-10-12T00:00:00Z');
   return { id, content, type: 'work_fact', priority: 60, scene_name: 's', timestamps: [t], createdAt: t, updatedAt: t, ...extra };
@@ -37,7 +50,11 @@ async function ctx() {
 
 /** 造 n 条记录（一半标成已退场，好让收敛阶段真有活可干）。 */
 function many(n: number, ws: string): MemoryRecord[] {
-  return Array.from({ length: n }, (_, i) => rec(`r${i}`, `记忆内容 ${i}`, { name: `run-${i}`, workspaceId: ws, validTo: i % 2 === 0 ? RETIRED_AT : undefined }));
+  return Array.from({ length: n }, (_, i) => {
+    const r = rec(`r${i}`, `记忆内容 ${i}`, { name: `run-${i}`, workspaceId: ws });
+    // 一半标成已退场(marker 单源，门1)，好让收敛阶段真有活可干。
+    return i % 2 === 0 ? retiredLike(r) : r;
+  });
 }
 
 describe('runProjection / 一次调用滚到完', () => {
@@ -103,10 +120,10 @@ describe('runProjection / 一次调用滚到完', () => {
 
   it('先导出后退场（真实顺序）：改名后的第二轮既不重写也不重改名', async () => {
     const c = await ctx();
-    const live = many(80, c.ws).map((r) => ({ ...r, validTo: undefined }));
+    const live = many(80, c.ws).map(liveLike);
     await runProjection({ records: live, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger, maxRecords: 30, timeBudgetMs: 600_000 });
     // 退场发生在导出之后：盘上那份是 live 渲染，改名分支不会重写它
-    const retired = live.map((r, i) => (i % 2 === 0 ? { ...r, validTo: RETIRED_AT } : r));
+    const retired = live.map((r, i) => (i % 2 === 0 ? retiredLike(r) : r));
     const a = await runProjection({ records: retired, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger, maxRecords: 30, timeBudgetMs: 600_000 });
     expect(a.suffix.renamed).toBe(40);
     const b = await runProjection({ records: retired, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger, maxRecords: 30, timeBudgetMs: 600_000 });

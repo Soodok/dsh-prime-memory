@@ -135,10 +135,10 @@ describe('取代路径(update/merge)改软删', () => {
       expect(newId).toBeTruthy();
       expect(newId).not.toBe(OLD_ID);
 
-      // ① 旧记录**没被物理删除**
+      // ① 旧记录**没被物理删除**(门1 解耦:退场凭 marker，valid_to 不再被闭合)
       const [old] = store.getByIds([OLD_ID]);
       expect(old, '取代不该让旧记录消失(否则无从恢复)').toBeDefined();
-      expect(old.validTo).toBeDefined();
+      expect(old.validTo).toBeUndefined();
       expect(readSupersedeMarker(old.metadata)).toMatchObject({ reason: 'superseded', by: newId });
       expect(old.content).toBe('项目 Zeta 负责人是甲'); // 内容不被改写
 
@@ -163,7 +163,8 @@ describe('取代路径(update/merge)改软删', () => {
       const out = await runExtraction({} as never, cfg(), store, states(), messages(), [], noopLogger, 'auto');
       expect(out.stored).toBe(1);
       const [old] = store.getByIds([OLD_ID]);
-      expect(old?.validTo).toBeDefined();
+      // 门1 解耦:merge 产物同走 marker 单源软删，不闭 valid_to。
+      expect(old?.validTo).toBeUndefined();
       expect(readSupersedeMarker(old?.metadata)?.reason).toBe('superseded');
       expect(store.listRetired({ limit: 10, offset: 0 }).total).toBe(1);
     } finally {

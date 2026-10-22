@@ -22,11 +22,12 @@ export interface SlotMigrateStoreFace {
     list(): Slot[];
     close(id: string, status: 'done' | 'dropped'): Promise<boolean>;
 }
-/** 迁移需要的 L1 只读面（validTo 非空 = 已退场（epoch ms），不作为信息载体）。 */
+/** 迁移需要的 L1 只读面（门1 解耦：退场判据是 marker 单源——metadata 带 `dsh_superseded`
+ *  即已退场；valid_to 只是现实有效期，带着它不算退场）。 */
 export interface SlotMigrateL1Face {
     getByIds(ids: string[]): Array<{
         id: string;
-        validTo?: number | null;
+        metadata?: unknown;
     }>;
 }
 /** 一条可迁移槽位（预览用，执行前即可展示）。 */

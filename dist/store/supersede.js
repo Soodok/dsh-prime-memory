@@ -76,7 +76,15 @@ export function stripSupersedeMarker(metadata) {
     delete next[SUPERSEDE_METADATA_KEY];
     return next;
 }
-/** 该记录是否处于**已退场**状态(读主表 `valid_to` 的语义封装)。 */
+/**
+ * 该记录是否处于**已退场**状态(退场判据的唯一读侧封装)。
+ *
+ * 门1 解耦(expiry-tiering R1):只认 marker，**不再**把 `validTo !== undefined` 当退场——
+ * valid_to 回归纯现实有效期(一条 2020 年结束的旅行记忆没有退场，只是成了历史)。
+ * 旧口径把"过时""历史区间""软删"三件事塞进一根列，导致合法带 valid_to 的存量记录
+ * 被检索面静默遮蔽——那是本计划要根治的病根(误遮蔽历史由升版回灌收敛，见迁移 task_6.1)。
+ * `retiredL1Sql()`(sqlite.ts)与本函数是全仓同口径的一对，改动必须两处同步。
+ */
 export function isRetired(record) {
-    return record.validTo !== undefined || readSupersedeMarker(record.metadata) !== undefined;
+    return readSupersedeMarker(record.metadata) !== undefined;
 }

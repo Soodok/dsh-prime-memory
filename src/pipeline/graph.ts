@@ -108,6 +108,45 @@ export function isTransientGraphFailure(msg: string): boolean {
 }
 
 /**
+ * 节点向量化的嵌入文本(单一形态定义,读写两侧共用):
+ * 实体名 + 别名 + 当前状态串。读侧种子查询用用户 query 的文本向量,
+ * 两边同嵌入源同空间即可——不追求"同一句话",追求"同一语义面"。
+ */
+export function nodeEmbedText(node: GraphNode): string {
+  return [node.name, ...node.aliases, node.currentState].filter((s) => s && s.trim()).join(' ');
+}
+
+/**
+ * 投影收尾的节点向量补写(G-vec 缺陷修:此前 upsertNodeVectors 生产零调用点,
+ * 嵌入开着时 graph_node_vec 永远是 0 行,"向量种子"读路结构性空转)。
+ *
+ * 失败隔离:嵌入失败/未就绪只 warn——向量是召回增益,缺了它图谱词法路照常,
+ * 绝不能把一个旁路补算弄挂投影主流程(与 L1 侧 restore 的向量纪律同向)。
+ */
+export async function writeNodeVectorsAfterComplete(
+  graphs: GraphStore,
+  touched: readonly GraphNode[],
+  embed: ((text: string) => Promise<Float32Array | undefined>) | undefined,
+  logger: MemoryLogger,
+): Promise<number> {
+  if (!graphs.nodeVecReady || !embed || touched.length === 0) return 0;
+  const rows: Array<{ nodeId: string; embedding: Float32Array; updatedAt?: string }> = [];
+  for (const n of touched) {
+    if (n.status !== 'active' && n.status !== 'disputed') continue;
+    try {
+      const v = await embed(nodeEmbedText(n));
+      if (v && v.length > 0) rows.push({ nodeId: n.id, embedding: v, updatedAt: n.updatedAt });
+    } catch (err) {
+      logger.warn(`[memory] 节点向量计算失败(该节点跳过,词法路不受影响): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (rows.length === 0) return 0;
+  const written = graphs.upsertNodeVectors(rows);
+  if (written > 0) logger.debug?.(`[memory] 节点向量随投影写入 ${written} 条`);
+  return written;
+}
+
+/**
  * 执行一次图谱投影(claim 一个 job → LLM → 校验落库;无 job 时静默返回)。
  * 返回是否实际认领了任务(泵据此决定是否续排)。失败转 fail(退避/封顶由
  * GraphStore 管),不向 runner 上抛。
@@ -117,6 +156,8 @@ export async function runGraphProjection(
   cfg: MemoryConfig,
   graphs: GraphStore,
   logger: MemoryLogger,
+  /** 节点向量补算的嵌入缝(runner 接 stores.l1.embedText;缺席/未就绪 = 不补)。 */
+  embedNode?: (text: string) => Promise<Float32Array | undefined>,
 ): Promise<boolean> {
   const claim = graphs.claimNext();
   if (!claim) return false;
@@ -135,7 +176,10 @@ export async function runGraphProjection(
       // 实测 ~2min/job,正好撞线(14 dead 根因);照 backfill callTimeoutMs 先例给 240s。
       signal: AbortSignal.timeout(GRAPH_PROJECTION_CALL_TIMEOUT_MS),
     });
-    graphs.complete(job.id, parseProjection(raw, logger), { now: new Date().toISOString() });
+    const touched = graphs.complete(job.id, parseProjection(raw, logger), { now: new Date().toISOString() });
+    // 投影落库后的向量收尾(G-vec 缺陷修):事务外做——嵌入是网络/推理调用,
+    // LLM 与嵌入永不进事务缝是本文件头注释写死的既有纪律。
+    await writeNodeVectorsAfterComplete(graphs, touched, embedNode, logger);
   } catch (err) {
     const detail = errDetail(err);
     logger.warn(`[memory] 图谱投影失败(job=${job.id},attempts=${job.attempts}): ${detail}`);

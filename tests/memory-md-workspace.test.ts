@@ -116,8 +116,8 @@ describe('失效联动 .disable（N11）', () => {
     const abs = join(resolve(c.ws, '.agents', 'memory'), 'work_fact', 'to-disable.memory.md');
     expect(await readFile(abs, 'utf8')).toContain('要被判过时的记忆');
 
-    // 调用方传的是退场**后**的快照（带 validTo）。
-    const r = { ...live, validTo: Date.parse('2026-10-12T09:00:00Z') };
+    // 调用方传的是退场**后**的快照(门1 解耦:退场凭 marker，md 层与库侧同口径)。
+    const r = { ...live, validTo: Date.parse('2026-10-12T09:00:00Z'), metadata: { ...(live.metadata ?? {}), dsh_superseded: { at: '2026-10-12T09:00:00.000Z', reason: 'manual' } } };
     expect(await disableProjectionFile({ record: r, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger })).toBe('renamed');
     await expect(stat(abs)).rejects.toThrow();
     const text = await readFile(dis(abs), 'utf8');
@@ -134,7 +134,7 @@ describe('失效联动 .disable（N11）', () => {
 
   it('从没导出过 → 创建 .disable 凭证（内容带 retired: true）', async () => {
     const c = await ctx();
-    const r = { ...rec('d2', '没导出过就被判过时', { name: 'never-exported', workspaceId: c.ws }), validTo: Date.parse('2026-10-12T09:00:00Z') };
+    const r = { ...rec('d2', '没导出过就被判过时', { name: 'never-exported', workspaceId: c.ws }), validTo: Date.parse('2026-10-12T09:00:00Z'), metadata: { dsh_superseded: { at: '2026-10-12T09:00:00.000Z', reason: 'manual' } } };
     expect(await disableProjectionFile({ record: r, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger })).toBe('created');
     const disPath = join(resolve(c.ws, '.agents', 'memory'), 'work_fact', 'never-exported.memory.md.disable');
     const text = await readFile(disPath, 'utf8');
@@ -144,7 +144,7 @@ describe('失效联动 .disable（N11）', () => {
 
   it('再点一次 ⇒ already，不产生第二个凭证', async () => {
     const c = await ctx();
-    const r = { ...rec('d3', '重复点击', { name: 'twice', workspaceId: c.ws }), validTo: Date.parse('2026-10-12T09:00:00Z') };
+    const r = { ...rec('d3', '重复点击', { name: 'twice', workspaceId: c.ws }), validTo: Date.parse('2026-10-12T09:00:00Z'), metadata: { dsh_superseded: { at: '2026-10-12T09:00:00.000Z', reason: 'manual' } } };
     await disableProjectionFile({ record: r, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger });
     expect(await disableProjectionFile({ record: r, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger })).toBe('already');
     const listed = await readdir(join(resolve(c.ws, '.agents', 'memory'), 'work_fact'));

@@ -1,4 +1,4 @@
-import type { MemoryLogger } from '../types.js';
+import type { MemoryLogger, RecallLane } from '../types.js';
 export declare class SessionRecalledStore {
     private readonly logger?;
     private readonly file;
@@ -12,8 +12,9 @@ export declare class SessionRecalledStore {
     constructor(dataDir: string, logger?: MemoryLogger | undefined);
     revision(): number;
     private init;
-    /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。 */
-    add(sessionKey: string, recordIds: readonly string[], injectionId?: string): void;
+    /** 记入本 sessionKey 本轮实际注入的记录 id（写穿；插入序淘汰最旧）。
+     *  laneById 只带真正有归因的条目（hybrid 融合才挂 lanes；单路/旧路不传）。 */
+    add(sessionKey: string, recordIds: readonly string[], injectionId?: string, laneById?: ReadonlyMap<string, readonly RecallLane[]>): void;
     /**
      * 标为受保护（判过时/软退场）：条目留在列表里，且不受上限淘汰与压缩清理影响。
      * id 不在本会话列表里时忽略（不凭这个调用新建条目）。
@@ -34,6 +35,11 @@ export declare class SessionRecalledStore {
      * 未出现过取代的会话返回共享空集，不每次新建）。
      */
     supersededOf(sessionKey: string): ReadonlySet<string>;
+    /**
+     * 本会话的路归因表（record id → 管道串；只读共享，投影/端点用）。
+     * 不在表里 = 无从归因（单路检索/旧文件条目），展示层不渲染徽标。
+     */
+    lanesOf(sessionKey: string): ReadonlyMap<string, string>;
     /**
      * 用会话日志的可见性事实**对账**取代标记（Phase 0B）。
      *

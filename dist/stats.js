@@ -26,7 +26,7 @@ import { RECEIPTS_QUERY_LIMIT_MAX, dimensionOf, toReceiptView } from './store/re
 import { getTraceStore } from './store/trace.js';
 import { resolveConflictPair, listConflictPairs } from './conflict-service.js';
 import { sourceAnchorLabels } from './pipeline/anchors.js';
-import { readSupersedeMarker } from './store/supersede.js';
+import { readSupersedeMarker, withSupersedeMarker, isRetired } from './store/supersede.js';
 import { isSnapshotName } from './store/l1-snapshot.js';
 import { WING_CATALOG, WING_FALLBACK } from './types.js';
 import { isRoomSlug } from './metadata-validators.js';
@@ -107,6 +107,8 @@ export const MEMORY_ENDPOINTS = [
     'dsh-memory/conflicts-rejected',
     'dsh-memory/graph-search',
     'dsh-memory/graph-node-get',
+    'dsh-memory/graph-preview',
+    'dsh-memory/graph-cleanup-dead',
     'dsh-memory/scenes',
     'dsh-memory/persona',
     'dsh-memory/log-tail',
@@ -474,6 +476,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 return { sessionId, records: [], typeCatalog: typeCatalogEntries() };
             // 压缩水位之上的那批：正文已被摘要取代。与 retired 正交（真实实现见 session-recalled.ts）。
             const superseded = stores.recalled?.supersededOf(sessionId);
+            // 路归因表（record id → 管道串）：不在表里 = 无从归因，不挂 lanes 字段。
+            const laneTab = stores.recalled?.lanesOf(sessionId);
             const halfLife = effectiveCfg(cfg, live).recall?.decayHalfLifeDays ?? 0;
             const byId = new Map(stores.l1.getByIds(ids).map((r) => [r.id, r]));
             const records = ids
@@ -486,7 +490,11 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     userRelevance: stores.feedback?.meanOf(r.id) ?? null,
                     userMark: stores.feedback?.lastOf(r.id) ?? null,
                 });
-                return superseded?.has(r.id) === true ? { ...ui, superseded: true } : ui;
+                let out = superseded?.has(r.id) === true ? { ...ui, superseded: true } : ui;
+                const laneStr = laneTab?.get(r.id);
+                if (laneStr !== undefined && laneStr.length > 0)
+                    out = { ...out, lanes: laneStr.split('|') };
+                return out;
             });
             return { sessionId, records, typeCatalog: typeCatalogEntries() };
         }
@@ -517,7 +525,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
             let retired = false;
             let announced = false;
             // 退场**前**的记录快照（带 workspaceId/name）——失效联动要靠它算落点，
-            // 而 `retire` 只改 `valid_to`，不会动这两列，所以取在退场前后等价，取在前更直白。
+            // 而 `retire` 只写 marker，不会动这两列，所以取在退场前后等价，取在前更直白。
             let rec;
             if (p.score === -1) {
                 rec = stores.l1.getByIds([id])[0];
@@ -539,9 +547,11 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 // （面板无消费方），磁盘凭证的对账走 mem-reconcile。
                 if (retired && rec !== undefined && cfg.memExport?.enabled === true && stores.mdLedger !== undefined) {
                     void disableProjectionFile({
-                        // 传退场**后**的快照：渲染出的 frontmatter 才带 `retired: true`，
-                        // 凭证自己就能说清它为什么存在。
-                        record: { ...rec, validTo: Date.parse(retiredAt) || Date.now() },
+                        // 传退场**后**的快照：门1 解耦后 md 层按 marker 判退场，这里补上同样形状的
+                        // 取代标记，渲染出的 frontmatter 才带 `retired: true`——凭证自己就能说清它为什么存在。
+                        record: withSupersedeMarker(rec.metadata, { at: retiredAt, reason: 'obsolete' }) === rec.metadata
+                            ? rec
+                            : { ...rec, metadata: withSupersedeMarker(rec.metadata, { at: retiredAt, reason: 'obsolete' }) },
                         cfgRoot: cfg.memExport.root,
                         dataDir: deps.dataDir,
                         ledger: stores.mdLedger,
@@ -1344,6 +1354,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     redistillEnabled: live?.get()?.redistillEnabled === true,
                     mdSyncEnabled: live?.get()?.mdSyncEnabled === true,
                     memportEnabled: live?.get()?.memportEnabled === true,
+                    validityTiering: live?.get()?.validityTiering === true,
                     mdExportMaxRecords: live?.get()?.mdExportMaxRecords ?? 0,
                     backfillConcurrency: live?.get()?.backfillConcurrency ?? 0,
                 }),
@@ -1742,7 +1753,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     ...(Array.isArray(r.metadata?.dsh_keywords) ? { keywords: r.metadata.dsh_keywords.filter((k) => typeof k === 'string' && k !== '') } : {}),
                     ...(Array.isArray(r.metadata?.dsh_usage_scenario) ? { usageScenario: r.metadata.dsh_usage_scenario } : {}),
                     filePath,
-                    retired: r.validTo !== undefined,
+                    // 退场判据与库侧同源（门1:marker 单源，valid_to 只是现实有效期）。
+                    retired: isRetired(r),
                 };
             });
             return { items };
@@ -1820,8 +1832,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
             let targets;
             if (explicit.length > 0) {
                 // 显式 id 也要**复核**是否真的处于已退场态:防止调用方用一个 id 列表
-                // 把活动记忆绕过软删直接物理抹掉(那等于给了一条硬删后门)。
-                targets = explicit.filter((id) => stores.l1.getByIds([id]).some((r) => r.validTo !== undefined));
+                // 把活动记忆绕过软删直接物理抹掉(那等于给了一条硬删后门)。判据 marker 单源(门1)。
+                targets = explicit.filter((id) => stores.l1.getByIds([id]).some((r) => isRetired(r)));
             }
             else {
                 targets = [];
@@ -1839,7 +1851,8 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     id: r.id,
                     name: r.name ?? '',
                     type: r.type,
-                    retiredAt: r.validTo === undefined ? '' : new Date(r.validTo).toISOString(),
+                    // 退场时刻:marker.at 优先;旧版 retire 写的 valid_to 作回退(存量行兼容)。
+                    retiredAt: readSupersedeMarker(r.metadata)?.at ?? (r.validTo === undefined ? '' : new Date(r.validTo).toISOString()),
                 }));
                 const resp = {
                     dryRun: true,
@@ -1885,7 +1898,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     id: x.id,
                     name: x.name ?? '',
                     type: x.type,
-                    retiredAt: x.validTo === undefined ? '' : new Date(x.validTo).toISOString(),
+                    retiredAt: readSupersedeMarker(x.metadata)?.at ?? (x.validTo === undefined ? '' : new Date(x.validTo).toISOString()),
                 })),
             };
             return resp;
@@ -2018,6 +2031,27 @@ export async function handleEndpoint(endpoint, payload, deps) {
             if (!node)
                 return { node: null, edges: [] };
             return { node, edges: graph.edgesOf(id) };
+        }
+        case 'dsh-memory/graph-preview': {
+            // 面板图谱预览:缺省种子推荐榜,seedId 给定展开该邻域(悬挂/不可见→空 seeds 不抛)。
+            // mode==='full' 附全图轻量块(大图星图);非 'full' 一律按缺省——无 full 键零漂移。
+            const p = (payload ?? {});
+            const seedId = typeof p.seedId === 'string' && p.seedId.length > 0 ? p.seedId.slice(0, 200) : undefined;
+            const mode = p.mode === 'full' ? 'full' : undefined;
+            const graph = stores.graph;
+            if (!graph) {
+                const zero = { seeds: [], stats: { nodes: 0, edges: 0, causalEdges: 0, pendingJobs: 0, jobsTotal: 0 } };
+                return mode === 'full' ? { ...zero, full: { nodes: [], edges: [], truncated: false } } : zero;
+            }
+            return graph.buildPreview(seedId, mode);
+        }
+        case 'dsh-memory/graph-cleanup-dead': {
+            const graph = stores.graph;
+            if (!graph)
+                return { removed: 0 };
+            const p = (payload ?? {});
+            const ms = typeof p.olderThanMs === 'number' && p.olderThanMs > 0 ? p.olderThanMs : undefined;
+            return { removed: graph.cleanupDead(ms) };
         }
         case 'dsh-memory/scenes': {
             // 两族拼接展示(浏览器保持混合视图;路径冲突时后写入的族覆盖显示名,读取仍各自独立)
@@ -2322,7 +2356,8 @@ export function agingWeightOf(updatedAtMs, halfLifeDays, now = Date.now()) {
     return Math.max(0.5, Math.pow(0.5, ageDays / halfLifeDays));
 }
 export function hitToUiRecord(r, extra) {
-    const retired = r.validTo !== undefined;
+    // 退场判据 marker 单源(门1 解耦,与 `isRetired`/`retiredL1Sql` 同口径)。
+    const retired = isRetired(r);
     const mark = retired ? readSupersedeMarker(r.metadata) : undefined;
     return {
         id: r.id,

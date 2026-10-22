@@ -298,7 +298,7 @@ describe('批量与失败面', () => {
     expect(await until(() => existsSync(dis))).toBe(true);
     const before = await readFileSafe(dis);
     // 面板那条路径仍在直接调它（确定性凭证语义），钩子那条也已经跑过 → 第二次必须 `already`
-    const outcome = await disableProjectionFile({ record: { ...r, validTo: Date.parse(RETIRED_AT) }, cfgRoot: undefined, dataDir: h.dataDir, ledger: h.ledger });
+    const outcome = await disableProjectionFile({ record: { ...r, validTo: Date.parse(RETIRED_AT), metadata: { ...(r.metadata ?? {}), dsh_superseded: { at: RETIRED_AT, reason: 'manual' } } }, cfgRoot: undefined, dataDir: h.dataDir, ledger: h.ledger });
     expect(outcome).toBe('already');
     await syncFiles(h.deps, h.store.getByIds(['d1']));
     expect(existsSync(dis)).toBe(true);

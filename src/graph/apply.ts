@@ -103,8 +103,15 @@ function recordFamily(r: MemoryRecord): MemoryFamily {
  * validTo → validFrom(时间增强列,新写入路径)→ metadata.activity_end_time →
  * metadata.activity_start_time(列迁移前的存量数据)→ timestamps 最新 → createdAt。
  * 全部无证据才用 fallback(now),绝不猜测。
+ *
+ * task_2.6(expiry-tiering):兜底 now 分支回传 `'fallback_now'` 证据等级——供图谱侧
+ * 同口径读时派生使用(落到 now 的 validFrom **不是**时间证据,与 activity_* 链的
+ * 'evidence' 必须可区分;否则假过期与真过期同形)。
  */
-export function anchorTimeFromRecords(records: readonly MemoryRecord[], fallbackIso: string): string {
+export function anchorTimeFromRecordsDetailed(
+  records: readonly MemoryRecord[],
+  fallbackIso: string,
+): { iso: string; source: 'evidence' | 'fallback_now' } {
   let latest = Number.NaN;
   const consider = (raw: unknown): void => {
     const t = typeof raw === 'number' ? raw : typeof raw === 'string' ? Date.parse(raw) : Number.NaN;
@@ -120,7 +127,14 @@ export function anchorTimeFromRecords(records: readonly MemoryRecord[], fallback
     for (const t of r.timestamps ?? []) consider(t);
     consider(r.createdAt);
   }
-  return Number.isNaN(latest) ? fallbackIso : new Date(latest).toISOString();
+  return Number.isNaN(latest)
+    ? { iso: fallbackIso, source: 'fallback_now' }
+    : { iso: new Date(latest).toISOString(), source: 'evidence' };
+}
+
+/** {@link anchorTimeFromRecordsDetailed} 的旧签名封装(调用方只要时刻时的零改动通道)。 */
+export function anchorTimeFromRecords(records: readonly MemoryRecord[], fallbackIso: string): string {
+  return anchorTimeFromRecordsDetailed(records, fallbackIso).iso;
 }
 
 /** 来源集并集封顶(保最新:新引用追加在尾部,溢出丢头部最老引用)。 */

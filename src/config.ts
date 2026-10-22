@@ -92,6 +92,15 @@ export interface MemoryConfig {
      *  同时为真才执行;图谱是 L1 的可重建投影,关闭不影响记忆主链路。 */
     enabled: boolean;
   };
+  /**
+   * 时效分级(expiry-tiering 门2):`tieringEnabled` 灰度闸，**默认关**。
+   * 关时被动注入与改前逐字一致(零漂移)；开时注入候选按 classifyValidity 现算态
+   * 剔除 `expired`(仍在索引可检索，只是不自动浮现)，`expired_suspect` 保留并带标注。
+   * 与部署 cfg.validity.tieringEnabled 取或的还有面板运行时开关(live.validityTiering)。
+   * 门1 解耦本身不受本闸控(它是 bugfix:误遮蔽历史应尽快恢复)。 */
+  validity: {
+    tieringEnabled: boolean;
+  };
   /** §C 矛盾冻结:去重判定"两边都像是对的、机器判不了"时不自动裁决,
    *  把冲突对停放到待人工裁决区(conflict_pending)。**默认关**——
    *  冻结消耗人的注意力,不可默认全开。 */
@@ -510,6 +519,9 @@ export function liveSettingsSchema(): VolatileRef<MemoryLiveSettings> {
     redistillEnabled: Schema.boolean().default(false),
     mdSyncEnabled: Schema.boolean().default(false),
     memportEnabled: Schema.boolean().default(false),
+    /** 时效分级门2 面板开关:与部署 cfg.validity.tieringEnabled 取或(任一为真即启用
+     *  注入侧 expired 过滤)。默认关;先面板验证再翻部署默认(照 keywordEnabled 先例)。 */
+    validityTiering: Schema.boolean().default(false),
     /**
      * 存量回填（keyword / redistill）LLM 批调用的**运行时并行度**覆盖：
      * `0` = 跟随部署 `cfg.backfill.concurrency`；1–8 = 直接覆盖。
@@ -590,6 +602,11 @@ export const memorySchema: ConfigSchema = Schema.object({
   // 知识图谱投影:默认关(新功能默认关,用户显式开启;开启后受运行时蒸馏门约束)
   graph: Schema.object({
     enabled: Schema.boolean().default(false),
+  }),
+  // 时效分级门2 灰度闸:默认关(关=注入行为与改前逐字一致)。验后翻默认为 true 的
+  // 发版决策记在计划 findings(task_8.6)。
+  validity: Schema.object({
+    tieringEnabled: Schema.boolean().default(false),
   }),
   // §C 矛盾冻结:默认关。开启后去重决策词表多出 conflict 动作,冲突对停放待人工裁决。
   conflictFreeze: Schema.object({

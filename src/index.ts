@@ -441,6 +441,8 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   runner.startIdleTimer();
   // 图谱周期补投影(cfg.graph.enabled 门控;30 分钟一次低速收敛)
   runner.startGraphBackfillTimer();
+  // 时效标注存量回填(expiry-tiering task_6.3:tieringEnabled 门控,低频、让位蒸馏)
+  runner.startValidityBackfillTimer();
 
   // 重建控制器(存储降级时不建——RPC 端点走 supported=false 分支)
   const rebuild =
@@ -520,7 +522,12 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   stores.l1.setFileSyncHook(fileSync);
   const recall = registerRecall(ctx, config, stores, logger, live, modes, dataDir, recallUsage);
   runner.setAfterRun(recall.invalidateProfile);
-  const toolSeals = registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined);
+  const toolSeals = registerMemoryTools(ctx, config, stores, logger, modes, live, ruminate, storageOk ? roomRegistry : undefined, {
+    // 确定性写面钩子(graph-write-plane R2/R3):runner 公开方法直连,工具三路径与
+    // distill 分支共用同一个入队实现,不存在第二套优先级/去重逻辑。
+    enqueueGraph: (ids) => runner.enqueueGraphFor(ids),
+    reprojectGraph: (ids) => runner.reprojectGraph(ids),
+  });
   // 激活槽位(active slot):工具面 + 常驻注入 + 服务端投影(均走 ctx.effect,可撤销)
   registerSlotTools(ctx, config, stores.slots, logger, modes, live, stores.l1);
   const slotRecall = registerSlotRecall(ctx, config, stores.slots, logger, live);

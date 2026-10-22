@@ -12,8 +12,9 @@ export type DisableOutcome = 'renamed' | 'created' | 'already' | 'no-workspace' 
 export { isRetiredRecord };
 export interface DisableDeps {
     /**
-     * 刚被退场的那条记录。调用方应传**退场后**的快照（带 `validTo`），这样渲染出的
-     * frontmatter 自然包含 `retired: true`——凭证自己就说清了它为什么存在。
+     * 刚被退场的那条记录。调用方应传**退场后**的快照（带 `dsh_superseded` 标记，
+     * 门1 解耦后 md 层按 marker 判退场），这样渲染出的 frontmatter 自然包含
+     * `retired: true`——凭证自己就说清了它为什么存在。
      */
     record: MemoryRecord;
     /** `cfg.memExport.root`（只管无 workspace 那批，这里用不到但落点函数要它）。 */

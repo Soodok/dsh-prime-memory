@@ -145,7 +145,7 @@ describe('task_25 裁决闭环:winner / loser / both', () => {
       // 旧断言是 `toHaveLength(0)`(物理删除)——那正是"删错了只能去 JSONL 事实源捞"的病根。
       const [gone] = h.store.getByIds([h.loserId]);
       expect(gone, '主表行必须保留,否则无从恢复').toBeDefined();
-      expect(gone.validTo).toBeDefined();
+      expect(gone.metadata?.dsh_superseded).toBeDefined(); // 门1:退场凭 marker，valid_to 不再被闭合
       expect(readSupersedeMarker(gone.metadata)).toMatchObject({ reason: 'conflict', verdict: 'winner' });
       expect(h.store.listRetired({ limit: 10, offset: 0 }).items.map((x) => x.id)).toContain(h.loserId);
       expect(h.store.getByIds([h.winnerId])).toHaveLength(1); // 保留(活动)
@@ -178,7 +178,7 @@ describe('task_25 裁决闭环:winner / loser / both', () => {
       const r = await calls(h, h.pairId, 'loser');
       expect(r.removed_record_id).toBe(h.winnerId);
       const [goneW] = h.store.getByIds([h.winnerId]);
-      expect(goneW?.validTo).toBeDefined();
+      expect(goneW?.metadata?.dsh_superseded).toBeDefined(); // 门1:marker 单源
       expect(h.store.listRetired({ limit: 10, offset: 0 }).items.map((x) => x.id)).toContain(h.winnerId);
       expect(h.store.getByIds([h.loserId])).toHaveLength(1);
     } finally {
@@ -279,7 +279,7 @@ describe('task_25 RPC 端点(与工具共用同一形状与语义)', () => {
       expect(r.removed_record_id).toBe(h.loserId);
       // 端点路径与工具路径同语义:软删(可恢复),不是物理删除
       const [viaEndpoint] = h.store.getByIds([h.loserId]);
-      expect(viaEndpoint?.validTo).toBeDefined();
+      expect(viaEndpoint?.metadata?.dsh_superseded).toBeDefined(); // 门1:marker 单源
       expect(readSupersedeMarker(viaEndpoint?.metadata)).toMatchObject({ reason: 'conflict', verdict: 'winner' });
     } finally {
       h.close();

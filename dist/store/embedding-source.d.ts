@@ -63,8 +63,10 @@ export interface InitialEmbedding {
 export declare function remoteCeiling(cfg: MemoryConfig): boolean;
 export declare function resolveInitialEmbedding(cfg: MemoryConfig, sourceStore: EmbeddingSourceStore, downloader: ModelDownloadQueue, makeLocal: (modelId: string) => LocalEmbeddingService | null, logger?: MemoryLogger): Promise<InitialEmbedding>;
 /** 本地服务构造工厂(index.ts 的初始解析与 Manager 共用一份实现,防漂移)。
- *  推理在 worker 线程(见 local-embedding.ts);此处只传 runtime 目录与模型目录。 */
-export declare function makeLocalServiceFactory(installer: RuntimeInstaller, downloader: ModelDownloadQueue, logger?: MemoryLogger, maxInputChars?: number): (modelId: string) => LocalEmbeddingService | null;
+ *  推理在 fork 子进程(见 local-embedding.ts,fix #11);此处只传 runtime 目录与模型目录。 */
+export declare function makeLocalServiceFactory(installer: RuntimeInstaller, downloader: ModelDownloadQueue, logger?: MemoryLogger, maxInputChars?: number, 
+/** 测试注入缝:子进程资产路径(源码态下 dist 产物不存在,显式指向 resources 源文件)。 */
+childPath?: string): (modelId: string) => LocalEmbeddingService | null;
 export interface EmbeddingManagerDeps {
     dataDir: string;
     cfg: MemoryConfig;

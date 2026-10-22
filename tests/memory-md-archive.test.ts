@@ -82,6 +82,7 @@ describe('renderArchiveMarkdown', () => {
 
   it('retiredAt 取记录上的退场时刻，不是归档时刻', () => {
     const retired = Date.parse('2026-09-01T00:00:00Z');
+    // 门1 解耦后归档行优先取 marker.at；无 marker 时回退 validTo(存量旧行兼容)，两路都测。
     const md = renderArchiveMarkdown([rec('a', '内容', { name: 'a', validTo: retired })], meta);
     expect(md).toContain('retiredAt: "2026-09-01T00:00:00.000Z"');
     expect(md).not.toContain('retiredAt: "2026-10-12T08:00:00.000Z"');
@@ -130,7 +131,8 @@ describe('清理时的归档', () => {
     await rm(base, { force: true });
     store.retire(['r1'], { at: new Date().toISOString(), reason: 'obsolete' });
 
-    const records = store.all().filter((r) => r.validTo !== undefined);
+    // 门1 解耦:退场凭 marker(retire 不再闭 valid_to)，筛退场行改判 marker。
+    const records = store.all().filter((r) => r.metadata && (r.metadata as Record<string, unknown>).dsh_superseded !== undefined);
     const files = await collectProjectionFiles(records, undefined, dataDir);
     expect(files.has('r1')).toBe(true);
 
@@ -162,7 +164,8 @@ describe('清理时的归档', () => {
     const { store, ledger, root, dataDir } = await setup([rec('r1', '搬运会失败的一条', { name: 'r1' })]);
     await exportRecords({ records: store.all(), cfgRoot: undefined, dataDir, ledger, maxRecords: 10, timeBudgetMs: 60_000 });
     store.retire(['r1'], { at: new Date().toISOString(), reason: 'obsolete' });
-    const records = store.all().filter((r) => r.validTo !== undefined);
+    // 门1 解耦:marker 单源筛退场行(同 :133 那处)。
+    const records = store.all().filter((r) => r.metadata && (r.metadata as Record<string, unknown>).dsh_superseded !== undefined);
     const files = await collectProjectionFiles(records, undefined, dataDir);
     // 先手工把源文件删掉 ⇒ rename 必然 ENOENT ⇒ 走 failed 分支
     await rm(join(root, 'work_fact', 'r1.memory.md'), { force: true });

@@ -102,9 +102,47 @@ export class RuntimeInstaller {
             return null;
         }
     }
-    /** 是否就绪(版本精确匹配目标)。 */
+    /** 是否就绪(版本精确匹配目标 + sharp 平台原生件就位)。 */
     async isReady() {
-        return (await this.installedVersion()) === this.target;
+        if ((await this.installedVersion()) !== this.target)
+            return false;
+        // fix #11 辅助检测:--ignore-scripts 安装半坏(平台原生包缺失/被剪)时,
+        // transformers 顶层 require('sharp') 必炸——判存在性,缺失报未就绪触发重装。
+        if (!(await this.sharpNativePresent())) {
+            this.logger?.warn('[memory] 运行时 sharp 平台原生件缺失(半装状态),isReady=false 触发重装');
+            return false;
+        }
+        return true;
+    }
+    /**
+     * 当前平台的 sharp 原生件候选路径(测试注入缝与单测共用):
+     * 绑定 .node 在 @img/sharp-<os>-<arch>/lib/,libvips 在 @img/sharp-libvips-<os>-<arch>/lib/。
+     * linux 有 glibc/musl 双候选;libvips 库文件名含版本串(仅 win 的 libvips-42.dll 稳定),
+     * 故统一按 lib 目录内存在 libvips* 文件判定,不钉文件名。
+     */
+    sharpNativeCandidates() {
+        const arch = process.arch; // x64 | arm64
+        const osKeys = process.platform === 'linux' ? ['linux', 'linuxmusl'] : process.platform === 'darwin' ? ['darwin'] : ['win32'];
+        const img = path.join(this.runtimeDir, 'node_modules', '@img');
+        return osKeys.map((k) => ({
+            binding: path.join(img, `sharp-${k}-${arch}`, 'lib', `sharp-${k}-${arch}.node`),
+            libvipsDir: path.join(img, `sharp-libvips-${k}-${arch}`, 'lib'),
+        }));
+    }
+    /** 任一候选同时具备绑定 .node 与 libvips 库文件 → true(ENOENT/读取失败均计缺失)。 */
+    async sharpNativePresent() {
+        for (const c of this.sharpNativeCandidates()) {
+            try {
+                await fs.access(c.binding);
+                const files = await fs.readdir(c.libvipsDir);
+                if (files.some((f) => f.startsWith('libvips')))
+                    return true;
+            }
+            catch {
+                /* 本候选不命中,试下一个 */
+            }
+        }
+        return false;
     }
     /**
      * 确保运行时就位:版本匹配直接就绪;否则安装(忙时并 await 同一次任务)。

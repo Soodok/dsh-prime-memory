@@ -87,10 +87,10 @@ describe('软删原语:退场 → 检索不可见 → 恢复可见', () => {
     expect(ids(await store.search('咖啡豆', 5))).toContain(KEEP);
     expect(db.searchL1Fts(Q, 5).map((h) => h.id)).not.toContain(GONE);
 
-    // ② 主表仍在 + `valid_to` 闭合 + 标记可读
+    // ② 主表仍在 + 标记可读(门1 解耦:retire 不再闭合 valid_to——它回归现实有效期)
     const [row] = store.getByIds([GONE]);
     expect(row, '主表行必须保留(可恢复的载体)').toBeDefined();
-    expect(row.validTo).toBe(Date.parse(AT));
+    expect(row.validTo).toBeUndefined();
     expect(readSupersedeMarker(row.metadata)).toEqual({ at: AT, reason: 'manual' });
     expect(row.content).toBe('部署脚本 evidence 目录 回滚逻辑');
 
@@ -108,7 +108,7 @@ describe('软删原语:退场 → 检索不可见 → 恢复可见', () => {
     expect(ids(await store.search(Q, 5))).toContain(GONE);
     expect(store.listRetired({ limit: 50, offset: 0 }).total).toBe(0);
     const [back] = store.getByIds([GONE]);
-    expect(back.validTo).toBeUndefined();
+    expect(back.validTo).toBeUndefined(); // 本就没写,恢复后依旧未闭合
     expect(readSupersedeMarker(back.metadata)).toBeUndefined();
     expect(back.content).toBe('部署脚本 evidence 目录 回滚逻辑');
 

@@ -1,5 +1,6 @@
 import { resolveDataDir } from '../config.js';
 import { GRAPH_PRIORITY_NEW } from '../graph/types.js';
+import { startValidityBackfill } from '../validity-backfill.js';
 import { drscRowToConversationMessage } from '../clients/drsc.js';
 import { trace } from '../store/trace.js';
 import { emptyPending, freshWarmup, groupPendingBySession, loadPending, PENDING_MODES, pendingPathFor, savePending, } from '../store/pending.js';
@@ -136,6 +137,11 @@ export function effectiveCfg(cfg, live) {
     const mpOverride = s?.memportEnabled !== undefined
         ? { memport: { ...(cfg.memport ?? {}), enabled: cfg.memport?.enabled === true || s.memportEnabled === true } }
         : null;
+    // 时效分级门2 灰度闸:live.validityTiering 与部署 cfg.validity.tieringEnabled 取或
+    // (同一先例)。两字都假时回 `{tieringEnabled:false}` 与缺省形状等价，注入侧零漂移不破。
+    const vtOverride = s?.validityTiering !== undefined
+        ? { validity: { ...(cfg.validity ?? {}), tieringEnabled: cfg.validity?.tieringEnabled === true || s.validityTiering === true } }
+        : null;
     // md 投射/后缀收敛的单次动作护栏运行时覆盖(0 = 跟随部署 cfg.memExport.maxRecords)。
     // 只覆盖条数护栏，不动 enabled/root——开关与根路径仍属部署配置。
     const mdx = s?.mdExportMaxRecords ?? 0;
@@ -144,7 +150,7 @@ export function effectiveCfg(cfg, live) {
     // 不动 maxRecords/timeBudgetMs/callTimeoutMs——那三个仍属部署护栏，要改得改 YAML。
     const bf = s?.backfillConcurrency ?? 0;
     const backfillOverride = bf > 0 ? { backfill: { ...(cfg.backfill ?? {}), concurrency: bf } } : null;
-    if (!override && !budgets && !maxInput && !fallbacksTakeover && !chainEffort && !chainFallbacks && !effortInject && !layerChains && !hasChannel && !embedOverride && !cfOverride && !memExportOverride && !backfillOverride && !kwOverride && !rdOverride && !mdsOverride && !mpOverride)
+    if (!override && !budgets && !maxInput && !fallbacksTakeover && !chainEffort && !chainFallbacks && !effortInject && !layerChains && !hasChannel && !embedOverride && !cfOverride && !memExportOverride && !backfillOverride && !kwOverride && !rdOverride && !mdsOverride && !mpOverride && !vtOverride)
         return cfg;
     return {
         ...cfg,
@@ -154,6 +160,7 @@ export function effectiveCfg(cfg, live) {
         ...(rdOverride ?? {}),
         ...(mdsOverride ?? {}),
         ...(mpOverride ?? {}),
+        ...(vtOverride ?? {}),
         ...(memExportOverride ?? {}),
         ...(backfillOverride ?? {}),
         llm: {
@@ -455,6 +462,65 @@ export class MemoryRunner {
         });
     }
     /**
+     * validity 标注存量回填的接线(task_6.3):低频、让位于蒸馏——启动 3 分钟后首轮,
+     * 之后每 6h 一次(首轮收敛后多数轮是纯扫描 no-op;defer 的部分自动续上)。
+     * 门控跟灰度闸走:tieringEnabled(部署 ∨ 面板)关时不进任务——功能关着时
+     * 存量 metadata 逐字不变(零漂移,与 keyword-backfill 的门控同法)。
+     */
+    startValidityBackfillTimer() {
+        this.ctx.effect(() => {
+            let loop = null;
+            const first = setTimeout(() => {
+                this.runValidityBackfillTick();
+                loop = setInterval(() => this.runValidityBackfillTick(), 6 * 3_600_000);
+            }, 180_000);
+            return () => { clearTimeout(first); if (loop !== null)
+                clearInterval(loop); };
+        });
+    }
+    runValidityBackfillTick() {
+        if (this.stopped)
+            return;
+        const eff = effectiveCfg(this.cfg, this.live);
+        if (eff.validity?.tieringEnabled !== true)
+            return;
+        startValidityBackfill({
+            l1: this.stores.l1,
+            logger: this.logger,
+            // task_7.7 接缝:回填改过标注的记录顺手重投保鲜图谱(图谱未启用时 reprojectGraph 自己回零)。
+            reproject: (ids) => { this.reprojectGraph(ids); },
+            shouldCancel: () => this.stopped,
+        });
+    }
+    /**
+     * 确定性写面的公共入队钩子(graph-write-plane R2):非蒸馏写入路径
+     * (`memory_add`/`memory_import`/`memory_update`)落库成功后把涉及记录投进
+     * 投影队——与 distill 分支同源同优先级,闭合"只有蒸馏才投影"的旁路缺口
+     * (用户手加记录长期 projected=None 的真根因)。部署未开图谱时 no-op,
+     * 用户后续开启由启动/周期补投影兜底(与 distill 分支同一口径)。
+     */
+    enqueueGraphFor(recordIds) {
+        if (recordIds.length === 0 || !this.stores.graph || !this.cfg.graph?.enabled)
+            return;
+        this.stores.graph.queueGraphProjection([...recordIds], GRAPH_PRIORITY_NEW);
+        this.maybeQueueGraphTask();
+    }
+    /**
+     * 强制重投的写面入口(graph-write-plane R3):把上游 R10 的内部
+     * `forceReprojectRecord` 接到泵上——删凭证、高优入队、拉泵;幂等由
+     * 在途 mapping 的 PK 去重保证。图谱未启用时直接回零(不开"投了永不泵"
+     * 的陈旧队列口子,纠正通道的语义前提是图谱通路存在)。
+     */
+    reprojectGraph(recordIds) {
+        const graphs = this.stores.graph;
+        if (!graphs || !this.cfg.graph?.enabled || recordIds.length === 0)
+            return { queued: 0, jobIds: [] };
+        const r = graphs.forceReprojectRecord(recordIds);
+        if (r.queued > 0)
+            this.maybeQueueGraphTask();
+        return r;
+    }
+    /**
      * 图谱投影泵入队判定:
      * - 双门:部署级 cfg.graph.enabled + 运行时 live.enabled/distill,任一为假不入队;
      * - 占位:同一时刻至多一个 graph 任务在队列(靠 graphPumpQueued 标志),永不与
@@ -478,7 +544,10 @@ export class MemoryRunner {
                 this.graphPumpQueued = false;
                 if (this.stopped)
                     return;
-                const had = await runGraphProjection(this.ctx, effectiveCfg(this.cfg, this.live), graphs, this.logger);
+                const had = await runGraphProjection(this.ctx, effectiveCfg(this.cfg, this.live), graphs, this.logger, 
+                // G-vec 缺陷修的嵌入缝:惰性取 L1 同一嵌入源(活切换不被钉死),
+                // 未就绪/失败 embedText 回 undefined = 不补写(词法路不受影响)。
+                (t) => this.stores.l1.embedText(t));
                 // 有实际投影(说明队列还有积压)才续排;claim 落空则停泵,等下一个触发源
                 if (had)
                     this.maybeQueueGraphTask();
@@ -572,11 +641,9 @@ export class MemoryRunner {
             if ((opts?.force || sliceLen >= effective) && !backedOff) {
                 newRecords = await this.extractSessionSlice(sessionId, mode, cfg, effective, opts);
                 // 新记录入投影队列(优先级恒高于存量补投影)并拉起图谱泵;入队本身廉价,
-                // 部署未开图谱(cfg.graph.enabled)时不入队——用户后续开启由启动补投影兜底
-                if (newRecords.length > 0 && this.stores.graph && this.cfg.graph?.enabled) {
-                    this.stores.graph.queueGraphProjection(newRecords.map((r) => r.id), GRAPH_PRIORITY_NEW);
-                    this.maybeQueueGraphTask();
-                }
+                // 部署未开图谱(cfg.graph.enabled)时不入队——用户后续开启由启动补投影兜底。
+                // (写面 R2:分支本体抽成 enqueueGraphFor,与工具三路径同源,不再两处漂移。)
+                this.enqueueGraphFor(newRecords.map((r) => r.id));
             }
             else {
                 this.logger.debug?.(backedOff

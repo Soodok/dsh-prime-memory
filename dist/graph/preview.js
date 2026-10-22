@@ -1,0 +1,186 @@
+/**
+ * 面板图谱预览(读路径纯函数):种子推荐榜 + 指定节点邻域展开。
+ *
+ * 定位:图谱投影三表的"值得画哪些片"视图筛选,不查库、不落库、无 I/O——
+ * job 计数(pendingJobs/jobsTotal)由存储缝(graph-store.buildPreview)传入。
+ * 起点推荐有实证底座(2026-10-20 装机审计):关系全落规范词表、因果边 ~24%,
+ * 故 score 以 active 度数为主键、因果边加权——纯 top 度会漏"因→果"链。
+ *
+ * 判据与检索同源(search.ts):候选 = active|disputed 节点 × active 边;
+ * 确定性 = 同输入两次调用逐位一致(同分裁决链落到 id 升序兜底)。
+ */
+import { GRAPH_CAUSAL_RELATIONS } from './constraints.js';
+import { GRAPH_PREVIEW_CAUSAL_WEIGHT, GRAPH_PREVIEW_FULL_EDGES, GRAPH_PREVIEW_FULL_NODES, GRAPH_PREVIEW_NEIGHBORS, GRAPH_PREVIEW_SEEDS, } from './types.js';
+const CAUSAL_SET = new Set(GRAPH_CAUSAL_RELATIONS);
+/** 预览唯一判定的节点可见性(与 searchGraphNodes 候选集同式)。 */
+function visible(n) {
+    return n.status === 'active' || n.status === 'disputed';
+}
+export function degreeMaps(nodes, edges) {
+    const candidate = new Set(nodes.filter(visible).map((n) => n.id));
+    const degree = new Map();
+    const causal = new Map();
+    for (const e of edges) {
+        if (e.status !== 'active')
+            continue;
+        if (!candidate.has(e.fromNodeId) || !candidate.has(e.toNodeId))
+            continue;
+        const isCausal = CAUSAL_SET.has(e.relation);
+        for (const id of [e.fromNodeId, e.toNodeId]) {
+            degree.set(id, (degree.get(id) ?? 0) + 1);
+            if (isCausal)
+                causal.set(id, (causal.get(id) ?? 0) + 1);
+        }
+    }
+    return { degree, causal };
+}
+/** 种子卡装配:邻居条目 + 因果优先排序 + 截断。 */
+function seedView(center, edges, byId, dm, neighborLimit) {
+    const list = [];
+    for (const e of edges) {
+        if (e.status !== 'active')
+            continue;
+        let otherId;
+        if (e.fromNodeId === center.id)
+            otherId = e.toNodeId;
+        else if (e.toNodeId === center.id)
+            otherId = e.fromNodeId;
+        else
+            continue;
+        const o = byId.get(otherId);
+        if (!o || !visible(o))
+            continue;
+        list.push({
+            id: o.id,
+            name: o.name,
+            type: o.type,
+            relation: e.relation,
+            causal: CAUSAL_SET.has(e.relation),
+            _deg: dm.degree.get(o.id) ?? 0,
+            _upd: o.updatedAt,
+        });
+    }
+    list.sort((a, b) => {
+        if (a.causal !== b.causal)
+            return a.causal ? -1 : 1;
+        if (a._deg !== b._deg)
+            return b._deg - a._deg;
+        if (a._upd !== b._upd)
+            return a._upd < b._upd ? -1 : 1; // updatedAt 新(大)先
+        return a.id < b.id ? -1 : 1;
+    });
+    const truncated = list.length > neighborLimit;
+    return {
+        node: {
+            id: center.id,
+            name: center.name,
+            type: center.type,
+            degree: dm.degree.get(center.id) ?? 0,
+            causalDegree: dm.causal.get(center.id) ?? 0,
+        },
+        neighbors: list.slice(0, neighborLimit).map(({ _deg, _upd, ...view }) => view),
+        truncated,
+    };
+}
+/**
+ * S-3/S-4:预览主函数。
+ * - seedId 视图:直接展开该节点(跳过挑选);不可见/悬挂 → 空 seeds。
+ * - 榜单视图:score = degree + causal×WEIGHT;同分链 causal→sources→updatedAt→id↑;
+ *   候选落入已选种子的"自身∪邻居"覆盖集则跳过(相邻合并,画布片不重复);
+ *   孤立节点(度 0)不入榜——画布只有中心一个点没有信息量。
+ */
+export function buildGraphPreview(nodes, edges, opts = {}) {
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const dm = degreeMaps(nodes, edges);
+    const visNodes = nodes.filter(visible);
+    const visEdges = edges.filter((e) => e.status === 'active');
+    const stats = {
+        nodes: visNodes.length,
+        edges: visEdges.length,
+        causalEdges: visEdges.filter((e) => CAUSAL_SET.has(e.relation)).length,
+        pendingJobs: opts.pendingJobs ?? 0,
+        jobsTotal: opts.jobsTotal ?? 0,
+        ...(opts.deadJobs != null && opts.deadJobs > 0 ? { deadJobs: opts.deadJobs } : {}),
+    };
+    const seedLimit = Math.min(Math.max(Math.floor(opts.seedLimit ?? GRAPH_PREVIEW_SEEDS), 1), 20);
+    const neighborLimit = Math.min(Math.max(Math.floor(opts.neighborLimit ?? GRAPH_PREVIEW_NEIGHBORS), 1), 40);
+    if (opts.seedId !== undefined) {
+        const target = byId.get(opts.seedId);
+        if (!target || !visible(target))
+            return { seeds: [], stats };
+        return { seeds: [seedView(target, edges, byId, dm, neighborLimit)], stats };
+    }
+    const scored = visNodes
+        .map((n) => ({
+        n,
+        score: (dm.degree.get(n.id) ?? 0) + (dm.causal.get(n.id) ?? 0) * GRAPH_PREVIEW_CAUSAL_WEIGHT,
+    }))
+        .sort((a, b) => {
+        if (a.score !== b.score)
+            return b.score - a.score;
+        const ca = dm.causal.get(a.n.id) ?? 0;
+        const cb = dm.causal.get(b.n.id) ?? 0;
+        if (ca !== cb)
+            return cb - ca;
+        const sa = a.n.sourceRecordIds.length;
+        const sb = b.n.sourceRecordIds.length;
+        if (sa !== sb)
+            return sb - sa;
+        if (a.n.updatedAt !== b.n.updatedAt)
+            return a.n.updatedAt < b.n.updatedAt ? 1 : -1;
+        return a.n.id < b.n.id ? -1 : 1;
+    });
+    const picked = [];
+    const covered = new Set();
+    for (const { n, score } of scored) {
+        if (picked.length >= seedLimit)
+            break;
+        if (score === 0)
+            continue; // 孤立点不入榜(score 单调降,continue 等价于提前结束)
+        if (covered.has(n.id))
+            continue; // 相邻合并:已被前一种子的邻域覆盖
+        picked.push(n);
+        covered.add(n.id);
+        for (const e of visEdges) {
+            if (e.fromNodeId === n.id)
+                covered.add(e.toNodeId);
+            else if (e.toNodeId === n.id)
+                covered.add(e.fromNodeId);
+        }
+    }
+    return {
+        seeds: picked.map((n) => seedView(n, edges, byId, dm, neighborLimit)),
+        stats,
+    };
+}
+/**
+ * 全图星图数据块（纯函数，不查库）：可见节点轻量投影 × active 边，
+ * 双上限截断。**顺序纪律**：节点按入参序截断（调用方 loadGraph 的行序），
+ * 悬挂边（端点之一被截掉/不可见）在截断前剔除——星图上不画悬空线。
+ */
+export function buildFullView(nodes, edges, caps = {}) {
+    const nodeCap = Math.max(1, Math.floor(caps.nodeCap ?? GRAPH_PREVIEW_FULL_NODES));
+    const edgeCap = Math.max(1, Math.floor(caps.edgeCap ?? GRAPH_PREVIEW_FULL_EDGES));
+    const visibleNodes = nodes.filter(visible);
+    const nodesTruncated = visibleNodes.length > nodeCap;
+    const drawn = visibleNodes.slice(0, nodeCap);
+    const keep = new Set(drawn.map((n) => n.id));
+    const outEdges = [];
+    let edgesTruncated = false;
+    for (const e of edges) {
+        if (e.status !== 'active')
+            continue;
+        if (!keep.has(e.fromNodeId) || !keep.has(e.toNodeId))
+            continue;
+        if (outEdges.length >= edgeCap) {
+            edgesTruncated = true;
+            break;
+        }
+        outEdges.push({ from: e.fromNodeId, to: e.toNodeId, relation: e.relation, causal: CAUSAL_SET.has(e.relation) });
+    }
+    return {
+        nodes: drawn.map((n) => ({ id: n.id, name: n.name, type: n.type })),
+        edges: outEdges,
+        truncated: nodesTruncated || edgesTruncated,
+    };
+}

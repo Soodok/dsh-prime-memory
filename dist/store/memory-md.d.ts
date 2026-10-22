@@ -63,14 +63,14 @@ export type MdRecordInput = Pick<MemoryRecord, 'id' | 'content' | 'type' | 'prio
  */
 export declare function targetFor(r: MdRecordInput, cfgRoot: string | undefined, dataDir: string, logger?: MemoryLogger): MdTarget;
 /**
- * 退场判据：与库侧同口径（`sqlite.ts` 的“`valid_to` 非空即退场”，与
- * `retiredL1Count`/`listRetiredL1` 一致）。
+ * 退场判据：与库侧同口径（门1 解耦后**只认 marker**，与 `supersede.isRetired`/
+ * `retiredL1Sql` 一致；valid_to 回归现实有效期，不再拿它判退场）。
  *
  * 为什么住在本文件：导出（要不要把文件放回非退场路径）与失效联动（后缀该不该带）
  * 两侧都得用同一个判据，否则“列表说它退了、文件却没后缀”会回来。放 `memory-md-disable.ts`
  * 会让 `memory-md-export.ts` 反向 import 它形成循环（那边已经 import 这边）。
  */
-export declare function isRetiredRecord(r: Pick<MemoryRecord, 'validTo'>): boolean;
+export declare function isRetiredRecord(r: Pick<MemoryRecord, 'metadata'>): boolean;
 /**
  * 投射文件的失效路径：`x.memory.md` → `x.memory.md.disable`。
  * 已带后缀的原样返回（幂等靠这个性质，而不是靠调用方记住判重）。

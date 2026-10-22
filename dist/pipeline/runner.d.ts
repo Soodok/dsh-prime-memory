@@ -159,6 +159,32 @@ export declare class MemoryRunner {
      */
     startGraphBackfillTimer(): void;
     /**
+     * validity 标注存量回填的接线(task_6.3):低频、让位于蒸馏——启动 3 分钟后首轮,
+     * 之后每 6h 一次(首轮收敛后多数轮是纯扫描 no-op;defer 的部分自动续上)。
+     * 门控跟灰度闸走:tieringEnabled(部署 ∨ 面板)关时不进任务——功能关着时
+     * 存量 metadata 逐字不变(零漂移,与 keyword-backfill 的门控同法)。
+     */
+    startValidityBackfillTimer(): void;
+    private runValidityBackfillTick;
+    /**
+     * 确定性写面的公共入队钩子(graph-write-plane R2):非蒸馏写入路径
+     * (`memory_add`/`memory_import`/`memory_update`)落库成功后把涉及记录投进
+     * 投影队——与 distill 分支同源同优先级,闭合"只有蒸馏才投影"的旁路缺口
+     * (用户手加记录长期 projected=None 的真根因)。部署未开图谱时 no-op,
+     * 用户后续开启由启动/周期补投影兜底(与 distill 分支同一口径)。
+     */
+    enqueueGraphFor(recordIds: readonly string[]): void;
+    /**
+     * 强制重投的写面入口(graph-write-plane R3):把上游 R10 的内部
+     * `forceReprojectRecord` 接到泵上——删凭证、高优入队、拉泵;幂等由
+     * 在途 mapping 的 PK 去重保证。图谱未启用时直接回零(不开"投了永不泵"
+     * 的陈旧队列口子,纠正通道的语义前提是图谱通路存在)。
+     */
+    reprojectGraph(recordIds: readonly string[]): {
+        queued: number;
+        jobIds: string[];
+    };
+    /**
      * 图谱投影泵入队判定:
      * - 双门:部署级 cfg.graph.enabled + 运行时 live.enabled/distill,任一为假不入队;
      * - 占位:同一时刻至多一个 graph 任务在队列(靠 graphPumpQueued 标志),永不与

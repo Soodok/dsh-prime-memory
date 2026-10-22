@@ -68,6 +68,30 @@ function factValueText(value: string | string[]): string {
   return Array.isArray(value) ? value.join(' ') : value;
 }
 
+/**
+ * as-of 回放可选参数(expiry-tiering Phase 5:图谱读时派生,不加冻结列)。
+ * 默认(缺席)= 当前态检索,行为与改前逐字一致。
+ */
+export interface GraphAsOfOptions {
+  /** ISO 8601 时刻:把"当时成立"的 superseded fact/边也纳入检索与回链;
+   *  archived 仍排除(那是删除传播的墓碑，来源已不在，回放也不该复活)。 */
+  asOf?: string;
+}
+
+/** ISO 字符串区间覆盖判定(字典序=时间序;空串视作未闭合)。 */
+function coversInterval(from: string | undefined, to: string | undefined, asOf: string): boolean {
+  if (from && from > asOf) return false;
+  if (to && asOf >= to) return false;
+  return true;
+}
+
+/** fact 在回放时刻是否成立(active 恒成立;superseded 看区间)。archived/disputed 不含。 */
+function factValidAtAsOf(f: GraphNode['facts'][number], asOf: string): boolean {
+  if (f.status === 'active') return true;
+  if (f.status === 'superseded') return coversInterval(f.validFrom, f.validTo, asOf);
+  return false;
+}
+
 /** 节点新度序(updatedAt 新→旧,同值按 id 升序——与检索结果排序同式)。 */
 function byNodeRecency(a: GraphNode, b: GraphNode): number {
   return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id < b.id ? -1 : 1;
@@ -103,7 +127,9 @@ export function expandHitRecordIds(
   hits: readonly GraphNodeSearchResult[],
   nodes: readonly GraphNode[],
   edges: readonly GraphEdge[],
+  opts?: GraphAsOfOptions,
 ): string[] {
+  const asOf = typeof opts?.asOf === 'string' && opts.asOf.length > 0 ? opts.asOf : undefined;
   const seen = new Set<string>();
   const out: string[] = [];
   const take = (id: string): void => {
@@ -111,22 +137,29 @@ export function expandHitRecordIds(
     seen.add(id);
     out.push(id);
   };
-  // 直连段(节点身份来源在前,active facts 在后)
+  // 直连段(节点身份来源在前,有效 facts 在后;task_5.2:asOf 下额外纳入当时成立的 superseded fact)
   for (const h of hits) {
     for (const id of h.node.sourceRecordIds) take(id);
     for (const f of h.node.facts) {
-      if (f.status !== 'active') continue;
+      const ok = asOf === undefined ? f.status === 'active' : factValidAtAsOf(f, asOf);
+      if (!ok) continue;
       for (const id of f.sourceRecordIds ?? []) take(id);
     }
   }
   if (edges.length === 0) return out;
-  // hop 段:active 边的双向邻居 ∉ 命中集,邻居去重,状态需 active|disputed
+  // hop 段:可用边的双向邻居 ∉ 命中集,邻居去重,状态需 active|disputed
+  // (task_5.2:asOf 下"当时成立"的 superseded 边也可回链,邻居同理含当时成立的 superseded 节点)
   const hitNodeIds = new Set(hits.map((h) => h.node.id));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const edgeUsable = (e: GraphEdge): boolean =>
+    e.status === 'active' || (asOf !== undefined && e.status === 'superseded' && coversInterval(e.validFrom, e.validTo, asOf));
+  const neighborUsable = (n: GraphNode): boolean =>
+    n.status === 'active' || n.status === 'disputed'
+    || (asOf !== undefined && n.status === 'superseded' && coversInterval(n.createdAt, n.updatedAt, asOf));
   const seenNeighbor = new Set<string>();
   const neighbors: GraphNode[] = [];
   for (const e of edges) {
-    if (e.status !== 'active') continue;
+    if (!edgeUsable(e)) continue;
     const dirs: Array<readonly [string, string]> = [
       [e.fromNodeId, e.toNodeId],
       [e.toNodeId, e.fromNodeId],
@@ -134,7 +167,7 @@ export function expandHitRecordIds(
     for (const [self, other] of dirs) {
       if (!hitNodeIds.has(self) || hitNodeIds.has(other) || seenNeighbor.has(other)) continue;
       const n = nodeById.get(other);
-      if (!n || (n.status !== 'active' && n.status !== 'disputed')) continue;
+      if (!n || !neighborUsable(n)) continue;
       seenNeighbor.add(other);
       neighbors.push(n);
     }
@@ -170,15 +203,19 @@ export function searchGraphNodes(
   edges: readonly GraphEdge[],
   query: string,
   limit: number,
+  opts?: GraphAsOfOptions,
 ): GraphNodeSearchResult[] {
+  const asOf = typeof opts?.asOf === 'string' && opts.asOf.length > 0 ? opts.asOf : undefined;
   const tokens = [...new Set(tokenize(query))];
   const cappedLimit = Math.min(Math.max(Math.floor(limit) || 5, 1), GRAPH_SEARCH_LIMIT_MAX);
   if (tokens.length === 0) return [];
 
-  // nodeId → active 关系词 token 集(先建邻接表,防逐节点全量扫边)
+  // nodeId → 可用关系词 token 集(先建邻接表,防逐节点全量扫边;
+  // task_5.1:asOf 下纳入"当时成立"的 superseded 边)
   const relationTokensByNode = new Map<string, Set<string>>();
   for (const edge of edges) {
-    if (edge.status !== 'active') continue;
+    if (edge.status !== 'active'
+      && !(asOf !== undefined && edge.status === 'superseded' && coversInterval(edge.validFrom, edge.validTo, asOf))) continue;
     let set = relationTokensByNode.get(edge.fromNodeId);
     if (!set) {
       set = new Set();
@@ -195,6 +232,9 @@ export function searchGraphNodes(
 
   const results: GraphNodeSearchResult[] = [];
   for (const node of nodes) {
+    // 候选状态闸保持 active|disputed:task_5.1 的放宽面在 **fact/边**("纳入 superseded 且
+    // 区间覆盖 T 的 fact/edge")——GraphNode 没有 valid 区间列,节点主体复活无判据；
+    // 历史实体经"当时成立边"的邻居回链(task_5.2)重新可达,不需要翻状态。
     if (node.status !== 'active' && node.status !== 'disputed') continue;
     const fieldTokens: Record<SearchField, Set<string>> = {
       name: new Set(tokenize(node.name)),
@@ -203,7 +243,7 @@ export function searchGraphNodes(
       currentState: new Set(tokenize(node.currentState)),
       facts: new Set(
         node.facts
-          .filter((f) => f.status === 'active')
+          .filter((f) => (asOf === undefined ? f.status === 'active' : factValidAtAsOf(f, asOf)))
           .flatMap((f) => tokenize(`${f.key} ${factValueText(f.value)}`)),
       ),
       relations: relationTokensByNode.get(node.id) ?? new Set(),

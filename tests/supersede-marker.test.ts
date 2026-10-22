@@ -96,18 +96,20 @@ describe('stripSupersedeMarker', () => {
 });
 
 describe('isRetired', () => {
-  it('valid_to 已闭合 或 带标记 → 已退场', () => {
-    expect(isRetired({ validTo: Date.parse(AT), metadata: {} })).toBe(true);
-    expect(isRetired({ validTo: undefined, metadata: withSupersedeMarker({}, { at: AT, reason: 'manual' }) })).toBe(true);
+  // 门1 解耦(expiry-tiering R1):退场判据是 marker 单源——valid_to 回归现实有效期,
+  // 它闭合只说明"事实到期了"，不说明"记录退场了"。
+  it('带标记 → 已退场;仅 valid_to 闭合(无标记) → 未退场', () => {
+    expect(isRetired({ metadata: {} , validTo: Date.parse(AT) } as never)).toBe(false);
+    expect(isRetired({ metadata: withSupersedeMarker({}, { at: AT, reason: 'manual' }) } as never)).toBe(true);
   });
 
   it('两者皆无 → 未退场(不得把活动记录误判为已退场)', () => {
-    expect(isRetired({ validTo: undefined, metadata: {} })).toBe(false);
-    expect(isRetired({ validTo: undefined, metadata: undefined })).toBe(false);
+    expect(isRetired({ metadata: {} } as never)).toBe(false);
+    expect(isRetired({ metadata: undefined } as never)).toBe(false);
   });
 
-  it('validTo=0(时间 0)不算退场——空串才是"未填"', () => {
-    // rowToRecord 把空串映射成 undefined;0 只可能来自解析失败,不该触发退场
-    expect(isRetired({ validTo: undefined, metadata: {} })).toBe(false);
+  it('validTo=0/旧数据带退场时刻但无标记也不误判——marker 是唯一凭据', () => {
+    // 旧版 retire 会写 valid_to;门1 升版回灌后那些行若未带 marker 就是普通历史记录。
+    expect(isRetired({ metadata: {} , validTo: 0 } as never)).toBe(false);
   });
 });

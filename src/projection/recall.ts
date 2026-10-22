@@ -26,6 +26,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { SessionRecalledStore } from '../store/session-recalled.js';
 import type { MemoryRecord } from '../types.js';
 import { isRetired } from '../store/supersede.js';
+import { stateOfRecord } from '../store/validity.js';
 
 export const MEMORY_RECALL_KEY = 'memoryRecall';
 
@@ -66,6 +67,13 @@ export interface RecallItemView {
    * 读侧据此把「已被摘要取代的旧召回」与「此刻仍在上下文里的召回」区分开。
    */
   superseded?: true;
+  /**
+   * 时效定性快照(task_3.5,expiry-tiering 门2 展示面)：仅在 `expired`/`expired_suspect`
+   * 两档写键(泡泡如实标"已于 X 失效/疑似失效")；current/historical 等缺席=旧帧兼容。
+   */
+  validity?: import('../store/validity.js').ValidityState;
+  /** 现实有效期(ISO)：与 `validity` 同进同退，只在写 validity 时带上。 */
+  validUntil?: string;
 }
 
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
@@ -138,6 +146,7 @@ export const stateSchema: SchemaLike<RecallProjectionState> = {
 };
 
 /** view 校验（出网前调用；未知键容忍，同 slots 投影的语义边界）。 */
+const VALIDITY_STATES_VIEW: readonly string[] = ['current', 'historical', 'expired', 'expired_suspect', 'superseded', 'retired'];
 export const viewSchema: SchemaLike<RecallView> = {
   parse: (value) => {
     const what = 'memoryRecall.view';
@@ -162,16 +171,22 @@ export const viewSchema: SchemaLike<RecallView> = {
       if (item.body !== undefined) requireString(item.body, at, 'body');
       if (item.retired !== undefined && item.retired !== true) invalid(at, 'retired 只能是 true 或缺席');
       if (item.superseded !== undefined && item.superseded !== true) invalid(at, 'superseded 只能是 true 或缺席');
+      // 时效标注(task_3.5)：缺席=旧帧容忍；有则必须六态枚举内，validUntil 必字符串。
+      if (item.validity !== undefined && VALIDITY_STATES_VIEW.indexOf(item.validity as string) < 0) {
+        invalid(at, 'validity 必须是六态之一或缺席');
+      }
+      if (item.validUntil !== undefined) requireString(item.validUntil, at, 'validUntil');
     });
     return value as RecallView;
   },
 };
 
 /** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。
- *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。
+ *  判退场要 `validTo`/`metadata`，时效定性还要 `persistence`/`validFrom`，
+ *  故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。
  *  `name` 是名称蒸馏产出的短标题，优先作为展示标题。 */
 export interface RecallL1Face {
-  getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo' | 'name'>>;
+  getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validFrom' | 'validTo' | 'persistence' | 'name'>>;
 }
 
 /** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
@@ -255,6 +270,11 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, fe
       ? (r.metadata?.dsh_usage_scenario as string[])
       : undefined;
     const rating = feedback?.lastOf(id);
+    // 时效标注(task_3.5)：只对"过时两档"写键——current/historical 不必让人看见时效噪声；
+    // 旧帧无此键，读侧缺席即活跃。判定现算（stateOfRecord），不吃落库快照；
+    // 未退场行才会真判过时两档（退场行由 retired 键表达，validity 不再叠加）。
+    const vState = isRetired(r) ? undefined : stateOfRecord(r, Date.now());
+    const showValidity = vState === 'expired' || vState === 'expired_suspect';
     items.push({
       id: r.id,
       type: r.type,
@@ -267,6 +287,7 @@ function makeView(state: RecallProjectionState, l1: RecallL1Face | undefined, fe
       ...(isRetired(r) ? { retired: true as const } : {}),
       // 已被摘要取代：正文已不在上下文里。与 retired 正交，两者可同时在。
       ...(superseded.has(id) ? { superseded: true as const } : {}),
+      ...(showValidity ? { validity: vState, validUntil: r.validTo === undefined ? '' : new Date(r.validTo).toISOString() } : {}),
     });
   }
   const next: RecallView = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };

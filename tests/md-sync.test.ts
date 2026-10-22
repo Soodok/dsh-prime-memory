@@ -162,7 +162,8 @@ describe('syncFromFiles 边界', () => {
 
     const rep = await sync();
     expect(rep.retired).toBe(1);
-    expect(store.all().find((r) => r.id === 'r1')?.validTo).toBeDefined();
+    // 门1 解耦:同步退场走 marker(不再闭 valid_to)
+    expect(store.all().find((r) => r.id === 'r1')?.metadata?.dsh_superseded).toBeDefined();
     // 原文件没被删、也没被"顺手"重写：退场只写 valid_to
     expect(await readFile(base, 'utf8')).toBe(text);
     // 再跑一轮：已退场 → 判 same，不重复退场
@@ -219,7 +220,8 @@ describe('syncFromFiles 边界', () => {
     const rep = await sync();
     expect(rep.retired).toBe(1);
     expect(rep.hashMismatch).toBe(1);
-    expect(store.all().find((r) => r.id === 'r1')?.validTo).toBeDefined();
+    // 门1 解耦:同步退场走 marker(不再闭 valid_to)
+    expect(store.all().find((r) => r.id === 'r1')?.metadata?.dsh_superseded).toBeDefined();
   });
 
   it('没有账本也认不出记录的新文件 → 计数，绝不入库（导入须过写入内核）', async () => {

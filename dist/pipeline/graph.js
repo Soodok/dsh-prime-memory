@@ -2,6 +2,7 @@ import { callLLM, parseJsonLogged, resolveLayerTokens } from '../llm.js';
 import { buildGraphProjectionPrompt, getGraphProjectionSystemPrompt, } from '../prompts/graph-projection.js';
 import { normalizeEntityName } from '../graph/apply.js';
 import { tokenize } from '../util/text.js';
+import { GRAPH_PROJECTION_CALL_TIMEOUT_MS } from '../graph/types.js';
 import { errDetail } from '../util/filelog.js';
 /** claim 上下文装配的节点上限(词法相关 + 最近更新,总量封顶)。 */
 export const GRAPH_CONTEXT_NODE_LIMIT = 80;
@@ -65,11 +66,72 @@ export function selectContextEdges(nodes, edges, limit = GRAPH_CONTEXT_EDGE_LIMI
         .slice(0, limit);
 }
 /**
+ * 瞬态失败判据(与永久错误分流,由 GraphStore.fail 选不同重试封顶)。
+ *
+ * 真机归因(2026-10-20 审计):14 个 dead 全是 `llm aborted: Request was aborted` ×13 +
+ * `llm error: terminated` ×1——零校验类失败,全部是网关负载/超时把在飞请求掉断。
+ * 这类错误与 prompt/数据无关,退避后重试即可恢复,不该和“模型真的产坏了”同封顶。
+ * 匹配串源自 callLLM/callRoute/callDirect 的实际抛出形态(小写子串包含)。
+ */
+export function isTransientGraphFailure(msg) {
+    const low = msg.toLowerCase();
+    return (low.includes('aborted') ||
+        low.includes('timeout') ||
+        low.includes('timed out') ||
+        low.includes('terminated') ||
+        low.includes('empty output') ||
+        low.includes('econn') ||
+        low.includes('etimedout') ||
+        low.includes('fetch failed') ||
+        low.includes('socket hang') ||
+        low.includes('network'));
+}
+/**
+ * 节点向量化的嵌入文本(单一形态定义,读写两侧共用):
+ * 实体名 + 别名 + 当前状态串。读侧种子查询用用户 query 的文本向量,
+ * 两边同嵌入源同空间即可——不追求"同一句话",追求"同一语义面"。
+ */
+export function nodeEmbedText(node) {
+    return [node.name, ...node.aliases, node.currentState].filter((s) => s && s.trim()).join(' ');
+}
+/**
+ * 投影收尾的节点向量补写(G-vec 缺陷修:此前 upsertNodeVectors 生产零调用点,
+ * 嵌入开着时 graph_node_vec 永远是 0 行,"向量种子"读路结构性空转)。
+ *
+ * 失败隔离:嵌入失败/未就绪只 warn——向量是召回增益,缺了它图谱词法路照常,
+ * 绝不能把一个旁路补算弄挂投影主流程(与 L1 侧 restore 的向量纪律同向)。
+ */
+export async function writeNodeVectorsAfterComplete(graphs, touched, embed, logger) {
+    if (!graphs.nodeVecReady || !embed || touched.length === 0)
+        return 0;
+    const rows = [];
+    for (const n of touched) {
+        if (n.status !== 'active' && n.status !== 'disputed')
+            continue;
+        try {
+            const v = await embed(nodeEmbedText(n));
+            if (v && v.length > 0)
+                rows.push({ nodeId: n.id, embedding: v, updatedAt: n.updatedAt });
+        }
+        catch (err) {
+            logger.warn(`[memory] 节点向量计算失败(该节点跳过,词法路不受影响): ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+    if (rows.length === 0)
+        return 0;
+    const written = graphs.upsertNodeVectors(rows);
+    if (written > 0)
+        logger.debug?.(`[memory] 节点向量随投影写入 ${written} 条`);
+    return written;
+}
+/**
  * 执行一次图谱投影(claim 一个 job → LLM → 校验落库;无 job 时静默返回)。
  * 返回是否实际认领了任务(泵据此决定是否续排)。失败转 fail(退避/封顶由
  * GraphStore 管),不向 runner 上抛。
  */
-export async function runGraphProjection(ctx, cfg, graphs, logger) {
+export async function runGraphProjection(ctx, cfg, graphs, logger, 
+/** 节点向量补算的嵌入缝(runner 接 stores.l1.embedText;缺席/未就绪 = 不补)。 */
+embedNode) {
     const claim = graphs.claimNext();
     if (!claim)
         return false;
@@ -84,12 +146,20 @@ export async function runGraphProjection(ctx, cfg, graphs, logger) {
             maxTokens: resolveLayerTokens(cfg, 'graph'),
             layer: 'graph',
             logger,
+            // 自带宽超时信号:不传则沿用 cfg.llm.timeoutMs(120s)——图谱批 prompt 在本地网关上
+            // 实测 ~2min/job,正好撞线(14 dead 根因);照 backfill callTimeoutMs 先例给 240s。
+            signal: AbortSignal.timeout(GRAPH_PROJECTION_CALL_TIMEOUT_MS),
         });
-        graphs.complete(job.id, parseProjection(raw, logger), { now: new Date().toISOString() });
+        const touched = graphs.complete(job.id, parseProjection(raw, logger), { now: new Date().toISOString() });
+        // 投影落库后的向量收尾(G-vec 缺陷修):事务外做——嵌入是网络/推理调用,
+        // LLM 与嵌入永不进事务缝是本文件头注释写死的既有纪律。
+        await writeNodeVectorsAfterComplete(graphs, touched, embedNode, logger);
     }
     catch (err) {
-        logger.warn(`[memory] 图谱投影失败(job=${job.id},attempts=${job.attempts}): ${errDetail(err)}`);
-        graphs.fail(job.id, errDetail(err));
+        const detail = errDetail(err);
+        logger.warn(`[memory] 图谱投影失败(job=${job.id},attempts=${job.attempts}): ${detail}`);
+        // 瞬态(网关掉断/超时/空输出)与永久(校验/解析)分档——前者多给 3 次退避重试机会。
+        graphs.fail(job.id, detail, { transient: isTransientGraphFailure(detail) });
     }
     return true;
 }

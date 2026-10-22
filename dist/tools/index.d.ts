@@ -19,6 +19,18 @@ export interface ToolSealRegistry {
     /** 登记一个工具组的一次性注册器;`make()` 须返回 `ctx.tools.register` 的 disposer。 */
     reg(group: string, make: () => () => void): void;
 }
+/**
+ * 确定性写面的钩子(graph-write-plane R2/R3,由 index.ts 注入 runner 的公开方法):
+ * 工具面不直接握 runner,只拿这两个闭包——入队钩子与强制重投;缺席时写面工具
+ * 显式拒答(不开静默半功能:模型看到"已写入图谱会跟随"而实际没入队,比拒答更糟)。
+ */
+export interface GraphWriteHooks {
+    enqueueGraph: (recordIds: readonly string[]) => void;
+    reprojectGraph: (recordIds: readonly string[]) => {
+        queued: number;
+        jobIds: string[];
+    };
+}
 export declare function registerMemoryTools(ctx: Context, cfg: MemoryConfig, stores: {
     /** DRSC 客户端(T8.4 读切):conversation_search 的历史供给面;缺席=显式报错。 */
     drsc?: DrscClient;
@@ -35,4 +47,6 @@ export declare function registerMemoryTools(ctx: Context, cfg: MemoryConfig, sto
 /** 反刍控制器(可选:未装配时 ruminate 工具返回未启用提示)。 */
 ruminate?: RuminateController, 
 /** Room 注册表(分类管理 beta.4;缺省 = memory_room_admin 返回未装配提示)。 */
-roomRegistry?: RoomRegistryStore): ToolSealRegistry;
+roomRegistry?: RoomRegistryStore, 
+/** 图谱写面钩子(确定性写面计划;缺省 = update/reproject/migrate 的图谱跟随不可用)。 */
+graphWrite?: GraphWriteHooks): ToolSealRegistry;

@@ -64,7 +64,9 @@ describe('getAllL1Lite 游标分批', () => {
     const [row] = l1.allLite(10, 0);
     expect(Object.keys(row).sort()).toEqual(['id', 'metadata', 'type']);
     expect(row.type).toBe('work_method');
-    expect(row.metadata).toEqual({ hall: 'work' });
+    // 写侧标注汇流口(task_3.2)会在落库前盖 dsh_validity 快照——它就在 metadata 里。
+    expect(row.metadata).toMatchObject({ hall: 'work' });
+    expect((row.metadata as Record<string, unknown>).dsh_validity).toBeDefined();
   });
 
   it('limit<=0 或 offset 越界返回空数组(不报错)', async () => {

@@ -265,7 +265,8 @@ describe('syncFromFiles 遍历防护 · 对照：诱饵本身有牙', () => {
     expect(rep.retired).toBe(1);
     expect(rep.pending).toBe(1);
     expect(rep.newFiles).toBe(1);
-    expect(ctx.store.all().find((r) => r.id === 'r1')?.validTo).toBeDefined();
+    // 门1 解耦:退场凭 marker(同步路径不再闭 valid_to)。
+    expect(ctx.store.all().find((r) => r.id === 'r1')?.metadata?.dsh_superseded).toBeDefined();
     // 这一轮没有链接参与，不该凭空多出防护计数。
     expect(rep.skippedLinks).toBe(0);
   });

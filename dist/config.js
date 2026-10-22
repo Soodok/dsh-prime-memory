@@ -87,6 +87,9 @@ export function liveSettingsSchema() {
         redistillEnabled: Schema.boolean().default(false),
         mdSyncEnabled: Schema.boolean().default(false),
         memportEnabled: Schema.boolean().default(false),
+        /** 时效分级门2 面板开关:与部署 cfg.validity.tieringEnabled 取或(任一为真即启用
+         *  注入侧 expired 过滤)。默认关;先面板验证再翻部署默认(照 keywordEnabled 先例)。 */
+        validityTiering: Schema.boolean().default(false),
         /**
          * 存量回填（keyword / redistill）LLM 批调用的**运行时并行度**覆盖：
          * `0` = 跟随部署 `cfg.backfill.concurrency`；1–8 = 直接覆盖。
@@ -155,6 +158,11 @@ export const memorySchema = Schema.object({
     // 知识图谱投影:默认关(新功能默认关,用户显式开启;开启后受运行时蒸馏门约束)
     graph: Schema.object({
         enabled: Schema.boolean().default(false),
+    }),
+    // 时效分级门2 灰度闸:默认关(关=注入行为与改前逐字一致)。验后翻默认为 true 的
+    // 发版决策记在计划 findings(task_8.6)。
+    validity: Schema.object({
+        tieringEnabled: Schema.boolean().default(false),
     }),
     // §C 矛盾冻结:默认关。开启后去重决策词表多出 conflict 动作,冲突对停放待人工裁决。
     conflictFreeze: Schema.object({

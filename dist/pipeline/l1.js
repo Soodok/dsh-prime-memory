@@ -16,6 +16,7 @@ import { normTags, normUsageScenario, readCognitiveHall, readWing } from '../met
 import { acceptTitle } from '../util/md-name.js';
 import { formatBatchConflictPrompt, getConflictDetectionSystemPrompt } from '../prompts/l1-dedup.js';
 import { resolveSourceAnchors, withSourceAnchors } from './anchors.js';
+import { stampValidity, validToSourceOf } from '../store/validity.js';
 import { familyForType, normPersistence, normScope, resolveRecordFamily, resolveRecordScope, WING_FALLBACK } from '../types.js';
 import { normApplicability, resolveRepoScope } from '../repo-scope.js';
 import { routeWorkspace } from '../workspace-route.js';
@@ -48,28 +49,39 @@ function parseTimeEvidence(raw) {
  *
  * `activity_start_time`/`activity_end_time` 是这两列的前身(prompt 已在产出),
  * 这里把它们提升为结构化字段;`persistence` 由 prompt 产出,缺省即未判定。
+ * valid_to 源自 activity_* 证据链 → `validToSource='evidence'`(task_2.5 打标)。
  */
 function temporalOf(meta) {
+    const validTo = parseTimeEvidence(meta?.activity_end_time);
     return {
         validFrom: parseTimeEvidence(meta?.activity_start_time),
-        validTo: parseTimeEvidence(meta?.activity_end_time),
+        validTo,
         persistence: normPersistence(meta?.persistence),
+        ...(validTo !== undefined ? { validToSource: 'evidence' } : {}),
     };
 }
 /**
  * 合并(merge/update)时的有效期并集:
  * 起 = 两侧最早;止 = 任一侧未闭合则仍未闭合(undefined),否则取最晚。
  * 持续性以新记忆为准(合并产物描述的是当前认知),新记忆未判定时继承旧记录。
+ * validToSource 随**胜出值**的来源走(task_2.5):最终 valid_to 取自哪一侧,
+ * 证据等级就读哪一侧的(旧行取其 `dsh_validity` 标注,未标注算 'unknown'——
+ * 宁判疑不判死,fail-open 与 classify 同向)。
  */
 function mergeTemporal(self, targets) {
     const froms = [self.validFrom, ...targets.map((r) => r.validFrom)].filter((t) => t !== undefined);
-    const tos = [self.validTo, ...targets.map((r) => r.validTo)];
-    const anyOpen = tos.some((t) => t === undefined);
-    const closed = tos.filter((t) => t !== undefined);
+    const tos = [
+        { v: self.validTo, s: self.validToSource ?? 'unknown' },
+        ...targets.map((r) => ({ v: r.validTo, s: validToSourceOf(r.metadata) })),
+    ];
+    const anyOpen = tos.some((e) => e.v === undefined);
+    const closed = tos.filter((e) => e.v !== undefined);
+    const winner = closed.length > 0 ? closed.reduce((a, b) => (b.v > a.v ? b : a)) : undefined;
     return {
         validFrom: froms.length > 0 ? Math.min(...froms) : undefined,
-        validTo: anyOpen || closed.length === 0 ? undefined : Math.max(...closed),
+        validTo: anyOpen || winner === undefined ? undefined : winner.v,
         persistence: self.persistence ?? targets.find((r) => r.persistence)?.persistence,
+        ...(!anyOpen && winner !== undefined ? { validToSource: winner.s } : {}),
     };
 }
 /**
@@ -171,7 +183,10 @@ export function toStoreRecord(m, now, ts, anchorMap) {
     // 过不了就**不写键**，交给 `L1Store.assignMissingNames`——判据只留一份，
     // 不在这里养第二套“看起来差不多”的名字清洗。
     const titled = m.title === undefined ? undefined : acceptTitle(m.title);
-    return {
+    // 时间轴派生单独算：validToSource 不进记录形状(它不是 MemoryRecord 字段，随展开
+    // 落库会改 JSONL 形状)，只喂给 stampValidity 盖进 dsh_validity(task_2.5/3.2 写侧标注)。
+    const t = temporalOf(m.metadata);
+    const rec = {
         id: m.record_id,
         content: m.content,
         type: m.type,
@@ -198,8 +213,13 @@ export function toStoreRecord(m, now, ts, anchorMap) {
         // 文件身份键不在这里分：**起名只有一个真源**（`L1Store.assignMissingNames`）。
         // 以前这里自己分一份、库里再分一份，两套判据迟早漂移，而漂移的后果是同一个基底
         // 洗出两个名字（文件跳名）或两个记录抢一个名字（整条写不进去）。
-        ...temporalOf(m.metadata),
+        validFrom: t.validFrom,
+        validTo: t.validTo,
+        persistence: t.persistence,
     };
+    // 写侧标注(task_3.2 派生时机之一):管线盖时源头已知 evidence(LLM 直填/工具路径另算)。
+    stampValidity(rec, now, t.validToSource);
+    return rec;
 }
 function newId(prefix) {
     return `${prefix}_${Date.now()}_${randomBytes(3).toString('hex')}`;
@@ -634,7 +654,10 @@ mergeRekey) {
         const mergedTitle = mergedName === undefined || mergedName.length === 0
             ? acceptTitle(decision.merged_title)
             : mergedName;
-        added.push({
+        // 合并的有效期取并集:起 = 两侧最早;止 = 任一侧未闭合则仍未闭合(undefined)。
+        // validToSource 随胜出侧走(task_2.5)，同样不进记录形状、只喂标注。
+        const mt = mergeTemporal(temporalOf(m.metadata), targets.map((id) => byId.get(id)).filter((r) => r !== undefined));
+        const mergedRec = {
             id: m.record_id,
             content: mergedContent,
             type: decision.merged_type || m.type,
@@ -661,14 +684,19 @@ mergeRekey) {
             repoKeyName: m.repoKeyName,
             repoKeyOwner: m.repoKeyOwner,
             applicability: m.applicability,
-            // 合并的有效期取并集:起 = 两侧最早;止 = 任一侧未闭合则仍未闭合(undefined)。
-            ...mergeTemporal(temporalOf(m.metadata), targets.map((id) => byId.get(id)).filter((r) => r !== undefined)),
-        });
+            validFrom: mt.validFrom,
+            validTo: mt.validTo,
+            persistence: mt.persistence,
+        };
+        // 写侧标注(task_3.2):merge 产物的证据链随胜出侧透传。
+        stampValidity(mergedRec, now, mt.validToSource);
+        added.push(mergedRec);
     }
     await store.appendNew(added);
     if (supersededBy.size > 0) {
-        // **软删**(取代):不是物理删除——主表行保留 + `valid_to` 闭合 + 取代标记,
-        // FTS/向量撤出检索面。于是"合并错了"也能恢复,而不必去 `records/*.jsonl` 手工捞。
+        // **软删**(取代):不是物理删除——主表行保留 + 取代标记(marker 单源，门1 解耦后
+        // 不再闭合 valid_to)，FTS/向量撤出检索面。于是"合并错了"也能恢复,而不必去
+        // `records/*.jsonl` 手工捞。
         // 按取代者分组落盘(一次事务一组),避免逐条开事务。
         const retiredAt = new Date(now).toISOString();
         const byNewRecord = new Map();

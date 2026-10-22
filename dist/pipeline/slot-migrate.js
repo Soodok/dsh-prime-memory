@@ -1,4 +1,5 @@
 import { errDetail } from '../util/filelog.js';
+import { readSupersedeMarker } from '../store/supersede.js';
 /** 判定 + 挑选可迁移槽位（纯读，无副作用；面板预览与反刍执行共用）。 */
 export function pickMigratableSlots(slots, l1) {
     if (l1 === undefined)
@@ -6,9 +7,9 @@ export function pickMigratableSlots(slots, l1) {
     const open = slots.filter((s) => s.status === 'open' && s.pinned === true && s.kind === 'rule');
     if (open.length === 0)
         return [];
-    // 一次批量取全部 refs，避免 N 次查询。
+    // 一次批量取全部 refs，避免 N 次查询。存活 = 无退场 marker（门1 解耦同口径）。
     const allRefs = [...new Set(open.flatMap((s) => s.refs ?? []))];
-    const alive = new Set(l1.getByIds(allRefs).filter((r) => r.validTo === undefined || r.validTo === null).map((r) => r.id));
+    const alive = new Set(l1.getByIds(allRefs).filter((r) => readSupersedeMarker(r.metadata) === undefined).map((r) => r.id));
     const out = [];
     for (const s of open) {
         const carrier = (s.refs ?? []).find((r) => alive.has(r));

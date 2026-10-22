@@ -42,7 +42,7 @@ import { getTraceStore } from './store/trace.js';
 import type { ReceiptQuery, ReceiptsView } from './store/receipts.js';
 import { resolveConflictPair, listConflictPairs } from './conflict-service.js';
 import { sourceAnchorLabels } from './pipeline/anchors.js';
-import { readSupersedeMarker } from './store/supersede.js';
+import { readSupersedeMarker, withSupersedeMarker, isRetired } from './store/supersede.js';
 import { isSnapshotName } from './store/l1-snapshot.js';
 import type { PersonaStore } from './store/persona.js';
 import type { SceneStore } from './store/scenes.js';
@@ -747,7 +747,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       let retired = false;
       let announced = false;
       // 退场**前**的记录快照（带 workspaceId/name）——失效联动要靠它算落点，
-      // 而 `retire` 只改 `valid_to`，不会动这两列，所以取在退场前后等价，取在前更直白。
+      // 而 `retire` 只写 marker，不会动这两列，所以取在退场前后等价，取在前更直白。
       let rec: MemoryRecord | undefined;
       if (p.score === -1) {
         rec = stores.l1.getByIds([id])[0];
@@ -769,9 +769,11 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
         // （面板无消费方），磁盘凭证的对账走 mem-reconcile。
         if (retired && rec !== undefined && cfg.memExport?.enabled === true && stores.mdLedger !== undefined) {
           void disableProjectionFile({
-            // 传退场**后**的快照：渲染出的 frontmatter 才带 `retired: true`，
-            // 凭证自己就能说清它为什么存在。
-            record: { ...rec, validTo: Date.parse(retiredAt) || Date.now() },
+            // 传退场**后**的快照：门1 解耦后 md 层按 marker 判退场，这里补上同样形状的
+            // 取代标记，渲染出的 frontmatter 才带 `retired: true`——凭证自己就能说清它为什么存在。
+            record: withSupersedeMarker(rec.metadata, { at: retiredAt, reason: 'obsolete' }) === rec.metadata
+              ? rec
+              : { ...rec, metadata: withSupersedeMarker(rec.metadata, { at: retiredAt, reason: 'obsolete' }) },
             cfgRoot: cfg.memExport.root,
             dataDir: deps.dataDir,
             ledger: stores.mdLedger,
@@ -1567,6 +1569,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           redistillEnabled: live?.get()?.redistillEnabled === true,
           mdSyncEnabled: live?.get()?.mdSyncEnabled === true,
           memportEnabled: live?.get()?.memportEnabled === true,
+          validityTiering: live?.get()?.validityTiering === true,
           mdExportMaxRecords: live?.get()?.mdExportMaxRecords ?? 0,
           backfillConcurrency: live?.get()?.backfillConcurrency ?? 0,
         }),
@@ -1973,7 +1976,8 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           ...(Array.isArray(r.metadata?.dsh_keywords) ? { keywords: (r.metadata!.dsh_keywords as unknown[]).filter((k): k is string => typeof k === 'string' && k !== '') } : {}),
           ...(Array.isArray(r.metadata?.dsh_usage_scenario) ? { usageScenario: r.metadata!.dsh_usage_scenario as string[] } : {}),
           filePath,
-          retired: r.validTo !== undefined,
+          // 退场判据与库侧同源（门1:marker 单源，valid_to 只是现实有效期）。
+          retired: isRetired(r),
         };
       });
       return { items };
@@ -2053,8 +2057,8 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
       let targets: string[];
       if (explicit.length > 0) {
         // 显式 id 也要**复核**是否真的处于已退场态:防止调用方用一个 id 列表
-        // 把活动记忆绕过软删直接物理抹掉(那等于给了一条硬删后门)。
-        targets = explicit.filter((id) => stores.l1.getByIds([id]).some((r) => r.validTo !== undefined));
+        // 把活动记忆绕过软删直接物理抹掉(那等于给了一条硬删后门)。判据 marker 单源(门1)。
+        targets = explicit.filter((id) => stores.l1.getByIds([id]).some((r) => isRetired(r)));
       } else {
         targets = [];
         for (let offset = 0; ; offset += 200) {
@@ -2070,7 +2074,8 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           id: r.id,
           name: r.name ?? '',
           type: r.type,
-          retiredAt: r.validTo === undefined ? '' : new Date(r.validTo).toISOString(),
+          // 退场时刻:marker.at 优先;旧版 retire 写的 valid_to 作回退(存量行兼容)。
+          retiredAt: readSupersedeMarker(r.metadata)?.at ?? (r.validTo === undefined ? '' : new Date(r.validTo).toISOString()),
         }));
         const resp: CleanupRetiredResponse = {
           dryRun: true,
@@ -2116,7 +2121,7 @@ export async function handleEndpoint(endpoint: string, payload: unknown, deps: E
           id: x.id,
           name: x.name ?? '',
           type: x.type,
-          retiredAt: x.validTo === undefined ? '' : new Date(x.validTo).toISOString(),
+          retiredAt: readSupersedeMarker(x.metadata)?.at ?? (x.validTo === undefined ? '' : new Date(x.validTo).toISOString()),
         })),
       };
       return resp;
@@ -2592,7 +2597,7 @@ export function hitToUiRecord(
   scope?: string;
   /** 归属工作区路径（仅 scope='workspace' 时非空）。 */
   workspaceId?: string;
-  /** 退场判据:`valid_to` 闭合即已退场(软删)。由 `listL1`/`getByIds` 透传。 */
+  /** 退场判据:与库侧同源（门1 解耦后 marker 单源，`isRetired`）。由 `listL1`/`getByIds` 透传。 */
   validTo?: number;
 }, extra?: {
   agingWeight?: number | null;
@@ -2602,7 +2607,8 @@ export function hitToUiRecord(
   /** 人给的**最近一笔**打分(-1..5);成熟度只吃这一笔,不吃均值。 */
   userMark?: number | null;
 }): UiRecord {
-  const retired = r.validTo !== undefined;
+  // 退场判据 marker 单源(门1 解耦,与 `isRetired`/`retiredL1Sql` 同口径)。
+  const retired = isRetired(r);
   const mark = retired ? readSupersedeMarker(r.metadata) : undefined;
   return {
     id: r.id,

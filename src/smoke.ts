@@ -38,7 +38,7 @@ async function exists(p: string): Promise<boolean> {
 async function main(): Promise<void> {
   // ── dist 产物就位 ──
   const dist = path.join(root, 'dist');
-  for (const f of ['index.js', 'index.d.ts', 'client.js', 'embedding-worker.cjs', 'runtime-package-lock.json', 'contract.d.ts', 'store/sqlite.js']) {
+  for (const f of ['index.js', 'index.d.ts', 'client.js', 'embedding-worker.cjs', 'embedding-child.cjs', 'runtime-package-lock.json', 'contract.d.ts', 'store/sqlite.js']) {
     check(`dist/${f} 存在`, await exists(path.join(dist, f)));
   }
 
@@ -49,10 +49,17 @@ async function main(): Promise<void> {
   check('client.js: react external(require 调用存在)', client.includes('require("react")'));
   check('client.js: 无裸 import(纯 CJS 体)', !/^import[\s{"' ]/m.test(client));
 
-  // ── worker 协议头(workerData 消费 + transformers 本地加载) ──
+  // ── worker/child 协议头(workerData/env 消费 + transformers 本地加载) ──
   const worker = await readFile(path.join(dist, 'embedding-worker.cjs'), 'utf-8');
   check('worker: 读取 workerData', worker.includes('workerData'));
   check('worker: transformers 本地加载(禁远程模型)', worker.includes('allowRemoteModels = false'));
+  const child = await readFile(path.join(dist, 'embedding-child.cjs'), 'utf-8');
+  check('child: 读取 env DSH_EMBED_CFG', child.includes('DSH_EMBED_CFG'));
+  check('child: transformers 本地加载(禁远程模型)', child.includes('allowRemoteModels = false'));
+  check('child: 向量序列化为普通数组(settle 经 Array.from)', child.includes('Array.from'));
+  // 主线程侧默认通道必须是子进程(fix #11):local-embedding.js 不得只剩 worker 路径
+  const localEmbed = await readFile(path.join(dist, 'store', 'local-embedding.js'), 'utf-8');
+  check('child: 主线程默认走 RealChildChannel', localEmbed.includes('RealChildChannel') && localEmbed.includes('embedding-child.cjs'));
 
   // ── 包入口可加载 + 导出面(名字/inject/Config schema 形状) ──
   const entry = (await import(pathToFileURL(path.join(dist, 'index.js')).href)) as {

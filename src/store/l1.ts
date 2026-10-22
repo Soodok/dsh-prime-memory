@@ -13,6 +13,7 @@ import { familyForType, isScopeVisible } from '../types.js';
 import type { L1Receipt, ReceiptQuery } from './receipts.js';
 import type { ConflictClaimGroup, ConflictPair, ConflictRejected, ConflictResolution, ConflictType } from './conflicts.js';
 import { isRetired, type SupersedeInfo } from './supersede.js';
+import { stampValidity } from './validity.js';
 import { exportThenPurge, readSnapshotManifest, readSnapshotRecords, restoreL1Snapshot, selectSnapshotTargets, snapshotDirFor, listSnapshots as listSnapshotsIn, type ExportThenPurgeResult, type PurgeOptions, type RestoreResult, type SnapshotRestorePlan, type SnapshotSummary } from './l1-snapshot.js';
 import { EmbedHelper, NoopEmbeddingService, type EmbeddingService } from './embedding.js';
 import { appendJsonl, dayKey, ensureDir, readJsonl } from '../util/io.js';
@@ -478,6 +479,14 @@ export class L1Store {
     return this.db.getL1ByIds(ids);
   }
 
+  /**
+   * 反向取代链(task_4.4,门3):返回"被 newId 取代"的退场记录 id。
+   * 走 MemoryDb 的 LIKE 全扫缝(百~千量级;阈值告警在那边)。
+   */
+  findSupersededTargets(newId: string): string[] {
+    return this.db.findSupersededTargets(newId);
+  }
+
   /** 外部导入幂等 pre-check(轨3-P0):ext_key 命中已存在记录则返回其 id,否则 undefined。 */
   findIdByExtKey(extKey: string): string | undefined {
     return this.db.findRecordIdByExtKey(extKey);
@@ -578,8 +587,13 @@ export class L1Store {
   /** 新记忆落盘:JSONL 按天追加(事实源)+ 检索库 upsert + 向量。 */
   async appendNew(records: MemoryRecord[]): Promise<void> {
     if (records.length === 0) return;
+    // 写侧标注汇流口(task_3.2):所有新写路径(pipeline / memory_add / import / memport /
+    // 重建保留…)都经这里，统一盖 dsh_validity 快照;源头盖过的行(pipeline 带 evidence、
+    // 工具带 llm_inferred)保留其 validToSource，未盖过的补 'unknown'(fail-open)。
+    const stampNow = Date.now();
     for (const r of records) {
       if (!r.family) r.family = familyForType(r.type);
+      stampValidity(r, stampNow);
     }
     // 起名必须在**追加事实源之前**：名字是文件身份键，进了 JSONL 才能跟记录一起重生。
     // 这批还没进库，所以只算名字不落库（persist=false），由下面的 upsert 一并写。
@@ -612,7 +626,9 @@ export class L1Store {
   /** 去重 update/merge 产出的记录:只更新检索库(JSONL 事实源不改写,官方语义)。 */
   async upsert(record: MemoryRecord): Promise<void> {
     if (!record.family) record.family = familyForType(record.type);
-    // merge 分支会继承胜方的 name；两边都没名字时在这里补上，别让新铸的行继续带空名。
+    // 写侧标注汇流口(与 appendNew 同口径):merge 分支会继承胜方的 name；
+    // 两边都没名字时在这里补上，别让新铸的行继续带空名。
+    stampValidity(record, Date.now());
     this.assignMissingNames([record], { persist: false });
     const vec = (await this.helper.batch([record.content]))[0];
     if (!this.db.upsertL1(record, vec)) {
@@ -698,8 +714,9 @@ export class L1Store {
     // **只清理确实处于退场态的记录**。这道复核必须在删除发生的地方(而不是调用方):
     // 否则任何调用方传一个 id 列表就能绕过软删、把活动记忆直接物理抹掉——
     // 那等于给"先导出后清理"留了一条硬删后门。
+    // 门1 解耦:判据与全仓同为 marker 单源 `isRetired`(不再拿 valid_to 当退场凭据)。
     const known = new Map(this.db.getL1ByIds(ids).map((r) => [r.id, r]));
-    const retiredIds = ids.filter((id) => known.get(id)?.validTo !== undefined);
+    const retiredIds = ids.filter((id) => { const r = known.get(id); return r !== undefined && isRetired(r); });
     return exportThenPurge(this.db, this.dataDir, retiredIds, reason, this.logger, new Date(), opts);
   }
 

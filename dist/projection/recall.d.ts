@@ -58,6 +58,13 @@ export interface RecallItemView {
      * 读侧据此把「已被摘要取代的旧召回」与「此刻仍在上下文里的召回」区分开。
      */
     superseded?: true;
+    /**
+     * 时效定性快照(task_3.5,expiry-tiering 门2 展示面)：仅在 `expired`/`expired_suspect`
+     * 两档写键(泡泡如实标"已于 X 失效/疑似失效")；current/historical 等缺席=旧帧兼容。
+     */
+    validity?: import('../store/validity.js').ValidityState;
+    /** 现实有效期(ISO)：与 `validity` 同进同退，只在写 validity 时带上。 */
+    validUntil?: string;
 }
 /** 持久态：本会话的活召回 id 集 + 判脏序号。 */
 export interface RecallProjectionState {
@@ -89,13 +96,13 @@ interface SchemaLike<T> {
 }
 /** state 校验（registry 用它挡掉损坏/过期的 checkpoint 行）。 */
 export declare const stateSchema: SchemaLike<RecallProjectionState>;
-/** view 校验（出网前调用；未知键容忍，同 slots 投影的语义边界）。 */
 export declare const viewSchema: SchemaLike<RecallView>;
 /** 投影需要的 L1 只读面（结构化声明，避免跨模块类型耦合）。
- *  判退场要 `validTo`/`metadata`，故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。
+ *  判退场要 `validTo`/`metadata`，时效定性还要 `persistence`/`validFrom`，
+ *  故直接 Pick 自 MemoryRecord，不在投影里自写时间比较。
  *  `name` 是名称蒸馏产出的短标题，优先作为展示标题。 */
 export interface RecallL1Face {
-    getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validTo' | 'name'>>;
+    getByIds(ids: string[]): Array<Pick<MemoryRecord, 'id' | 'type' | 'content' | 'priority' | 'metadata' | 'validFrom' | 'validTo' | 'persistence' | 'name'>>;
 }
 /** 投影需要的反馈只读面（缺席 = view 不带 rating，旧行为）。 */
 export interface RecallFeedbackFace {

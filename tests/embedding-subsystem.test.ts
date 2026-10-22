@@ -5,7 +5,8 @@
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EmbeddingSourceStore, remoteCeiling, resolveInitialEmbedding, EmbeddingManager, makeLocalServiceFactory } from '../src/store/embedding-source.js';
 import { ModelDownloadQueue, resolveProxyUrl, maskProxyUrl } from '../src/store/download-queue.js';
@@ -257,11 +258,38 @@ describe('runtime installer', () => {
     const dataDir = join(await tmp(), `ri2-${Date.now()}`);
     const { spawnImpl, getCalls } = fakeSpawn(dataDir, [0]);
     const installer = new RuntimeInstaller(dataDir, PINNED_TRANSFORMERS_VERSION, { spawnImpl, lockfileSource: join(dataDir, 'none.json') });
-    // 预置已就位的 package.json
+    // 预置已就位的 package.json + sharp 平台原生件(isReady 兼验 native,fix #11 半装检测)
     await mkdir(join(dataDir, 'runtime', 'node_modules', '@huggingface', 'transformers'), { recursive: true });
     await writeFile(join(dataDir, 'runtime', 'node_modules', '@huggingface', 'transformers', 'package.json'), JSON.stringify({ name: 'x', version: PINNED_TRANSFORMERS_VERSION }));
+    const cand = installer.sharpNativeCandidates()[0];
+    await mkdir(dirname(cand.binding), { recursive: true });
+    await writeFile(cand.binding, 'fake-binding');
+    await mkdir(cand.libvipsDir, { recursive: true });
+    await writeFile(join(cand.libvipsDir, 'libvips-fake.dll'), 'x');
+    expect(await installer.isReady()).toBe(true);
     expect(await installer.ensure()).toBe(true);
     expect(getCalls()).toBe(0);
+  });
+
+  it('isReady=false 当 sharp 原生件缺失(半装状态);删 libvips 库文件即触发重装(fix #11 task_7)', async () => {
+    const dataDir = join(await tmp(), `ri3-${Date.now()}`);
+    const { spawnImpl } = fakeSpawn(dataDir, [0]);
+    const installer = new RuntimeInstaller(dataDir, PINNED_TRANSFORMERS_VERSION, { spawnImpl, lockfileSource: join(dataDir, 'none.json'), logger: noopLogger });
+    // 只有 transformers package.json、无 @img 原生包 → 半装,未就绪
+    await mkdir(join(dataDir, 'runtime', 'node_modules', '@huggingface', 'transformers'), { recursive: true });
+    await writeFile(join(dataDir, 'runtime', 'node_modules', '@huggingface', 'transformers', 'package.json'), JSON.stringify({ name: 'x', version: PINNED_TRANSFORMERS_VERSION }));
+    expect(await installer.isReady()).toBe(false);
+    // 补齐原生件 → 就绪
+    const cand = installer.sharpNativeCandidates()[0];
+    await mkdir(dirname(cand.binding), { recursive: true });
+    await writeFile(cand.binding, 'fake-binding');
+    await mkdir(cand.libvipsDir, { recursive: true });
+    const dll = join(cand.libvipsDir, 'libvips-42.dll');
+    await writeFile(dll, 'x');
+    expect(await installer.isReady()).toBe(true);
+    // 手动删 dll → isReady() === false(触发重装)
+    await rm(dll);
+    expect(await installer.isReady()).toBe(false);
   });
 });
 
@@ -406,10 +434,13 @@ describe('makeLocalServiceFactory', () => {
     const dataDir = await tmp();
     const installer = new RuntimeInstaller(dataDir, PINNED_TRANSFORMERS_VERSION, { logger: noopLogger });
     const downloader = new ModelDownloadQueue(dataDir, { mirror: 'https://hf-mirror.com' });
-    const factory = makeLocalServiceFactory(installer, downloader, noopLogger, 4000);
+    // childPath 指向 resources 真源文件:源码态下 dist 产物不存在,同时顺带验证 fork 通道能起
+    const childPath = fileURLToPath(new URL('../resources/embedding-child.cjs', import.meta.url));
+    const factory = makeLocalServiceFactory(installer, downloader, noopLogger, 4000, childPath);
     expect(factory('no-such-model')).toBeNull();
     const svc = factory('bge-m3');
     expect(svc).not.toBeNull();
+    expect(svc).toBeInstanceOf(LocalEmbeddingService);
     svc?.close();
   });
 });

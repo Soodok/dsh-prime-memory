@@ -1,18 +1,24 @@
 /**
- * 本地嵌入服务(worker 线程化版):transformers.js 的模型加载与 ONNX 推理全部在
- * worker_threads 子线程执行(resources/embedding-worker.cjs),本类只是主线程侧的
- * 协议代理——onnxruntime-node 的 run/loadModel 是主线程同步调用,留在宿主事件循环
- * 会冻结整个 dsh 页面(0.8.6 修复的真实事故)。
+ * 本地嵌入服务(子进程隔离版,fix #11):transformers.js 的模型加载与 ONNX 推理
+ * 全部在 fork 出的独立子进程执行(resources/embedding-child.cjs),本类只是主线程侧
+ * 的协议代理——双重隔离:① onnxruntime-node 的 run/loadModel 是同步调用,留在宿主
+ * 事件循环会冻结整个 dsh 页面(0.8.6 修复的真实事故);② 插件 runtime 的 sharp/libvips
+ * 与宿主 Electron 的 sharp/libvips 同进程加载会撞 libvips-42.dll 名字(OS LoadLibrary
+ * 层冲突)——worker_thread 与主线程同进程,撞名前提仍在(issue #11);子进程自带独立
+ * DLL 表,冲突物理消失。
  *
- * - 懒加载:首次嵌入/warmup 才让 worker 加载模型,close()=terminate 释放线程与
+ * - 懒加载:首次嵌入/warmup 才让子进程加载模型,close()=kill 释放进程与
  *   模型(嵌入源切走/关闭时调用),terminated 后不可复用;
- * - 模型从数据目录 models/<id>/ 本地加载(worker 侧 env.allowRemoteModels=false);
+ * - 模型从数据目录 models/<id>/ 本地加载(子进程侧 env.allowRemoteModels=false);
  * - channel 可注入(测试缝):用假通道验证协议与状态机,不触真模型;
- * - callOpts.timeoutMs 经 Promise.race 钳制(迟到回复按 id 丢弃——推理在
- *   worker 线程无法真正取消,但主线程可以停止等待并降级 FTS);
+ * - useWorker=true 切回旧 worker_threads 通道(回滚逃生门;若宿主侧 DLL 冲突
+ *   将来被根治,可一行切回获得 transfer 零拷贝的微弱性能优势);
+ * - callOpts.timeoutMs 经 Promise.race 钉制(迟到回复按 id 丢弃——推理在
+ *   子进程无法真正取消,但主线程可以停止等待并降级 FTS);
  * - 池化方式来自模型目录(BGE 系 CLS / Gemma 系 MEAN),normalize 交给
  *   pipeline 内建 L2 归一(与远程路径的 sanitizeAndNormalize 语义一致)。
  */
+import { fork, spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -22,7 +28,7 @@ import type { EmbedCallOptions, EmbeddingProviderInfo, EmbeddingService } from '
 
 type LocalState = 'idle' | 'loading' | 'ready' | 'failed' | 'terminated';
 
-/** worker 启动参数(workerData;构造后不可变)。 */
+/** 推理侧启动参数(worker 经 workerData / 子进程经 env DSH_EMBED_CFG;构造后不可变)。 */
 export interface EmbedWorkerData {
   runtimeDir: string;
   modelDir: string;
@@ -53,9 +59,14 @@ export interface EmbedWorkerChannel {
   setOnCrash(cb: (error: string) => void): void;
 }
 
-/** 默认 worker 资产路径:dist/store/ → dist/embedding-worker.cjs(构建期拷入)。 */
+/** 默认 worker 资产路径(旧通道,useWorker 逃生门):dist/store/ → dist/embedding-worker.cjs(构建期拷入)。 */
 function defaultWorkerPath(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'embedding-worker.cjs');
+}
+
+/** 默认子进程资产路径(fix #11 主通道):dist/store/ → dist/embedding-child.cjs(构建期拷入)。 */
+function defaultChildPath(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'embedding-child.cjs');
 }
 
 /** 真实通道:spawn worker_threads + 自增 id 配对 + 崩溃兜底拒绝。 */
@@ -122,12 +133,118 @@ class RealWorkerChannel implements EmbedWorkerChannel {
   }
 }
 
+/**
+ * 真实子进程通道(fix #11 默认):fork 独立进程隔离 sharp/libvips DLL 冲突。
+ * 与 RealWorkerChannel 同协议语义,差异仅在传输层:
+ * - 配置经 env DSH_EMBED_CFG(JSON 字符串,fork env 只收标量);
+ * - 向量经 number[][] 序列化回传(IPC JSON 通道不支持 TypedArray;512d×32 条
+ *   ≈64KB,<5ms,不构成瓶颈),主线程侧收到后重建 Float32Array;
+ * - 终止 Windows 走 taskkill /T /F(同 runtime-installer 模式,防只杀包装进程),
+ *   其余 SIGTERM + 3s 强杀钉底。
+ */
+class RealChildChannel implements EmbedWorkerChannel {
+  private readonly child: ChildProcess;
+  private readonly pending = new Map<number, { resolve: (r: EmbedWorkerReply) => void; reject: (e: Error) => void }>();
+  private nextId = 1;
+  private terminated = false;
+  private crashed: string | undefined;
+  private crashCb: ((error: string) => void) | undefined;
+
+  constructor(childPath: string, cfg: EmbedWorkerData) {
+    this.child = fork(childPath, [], {
+      // execPath 显式沿用当前二进制:宿主 Electron 自带 Node runtime,打包后 PATH 里没有 node
+      execPath: process.execPath,
+      env: { ...process.env, DSH_EMBED_CFG: JSON.stringify(cfg) },
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    });
+    this.child.on('message', (msg: EmbedWorkerReply | { type: 'fatal'; error: string }) => {
+      if (msg && (msg as { type?: string }).type === 'fatal') {
+        this.failAll(`本地嵌入子进程致命错误: ${(msg as { error?: string }).error ?? '未知'}`);
+        return;
+      }
+      const id = (msg as { id?: number }).id;
+      if (typeof id !== 'number') return;
+      const entry = this.pending.get(id);
+      if (!entry) return; // 迟到回复(调用方已超时放弃)
+      this.pending.delete(id);
+      // 子进程侧 vectors 是 number[][](IPC JSON 序列化),本侧重建 Float32Array 保持协议类型不变
+      const reply = msg as EmbedWorkerReply;
+      if (reply.ok && reply.type === 'embedded') {
+        reply.vectors = (reply.vectors as unknown as number[][]).map((v) => new Float32Array(v));
+      }
+      entry.resolve(reply);
+    });
+    // error(fork 启动失败等)与 exit(含 fatal 后自杀、OOM 被杀)都钉底拒绝
+    this.child.on('error', (err) => this.failAll(`本地嵌入子进程错误: ${err.message}`));
+    this.child.on('exit', (code) => {
+      if (!this.terminated) this.failAll(`本地嵌入子进程退出(code=${code})`);
+    });
+  }
+
+  request(call: EmbedWorkerCall): Promise<EmbedWorkerReply> {
+    // 已释放/已崩溃的通道快速拒绝——send 到死进程是静默无回应,调用方会挂到超时
+    if (this.terminated) return Promise.reject(new Error('嵌入子进程已释放'));
+    if (this.crashed) return Promise.reject(new Error(this.crashed));
+    const id = this.nextId++;
+    return new Promise<EmbedWorkerReply>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      // 递送失败(通道已关/子进程已死)走 send 回调拒绝,不留挂死的 pending
+      this.child.send({ ...call, id }, (err) => {
+        if (!err) return;
+        const entry = this.pending.get(id);
+        if (entry) {
+          this.pending.delete(id);
+          entry.reject(new Error(`嵌入子进程 IPC 发送失败: ${err.message}`));
+        }
+      });
+    });
+  }
+
+  terminate(): void {
+    if (this.terminated) return;
+    this.terminated = true;
+    this.failAll('嵌入子进程已释放');
+    if (process.platform === 'win32' && this.child.pid !== undefined) {
+      // 同 runtime-installer 的 taskkill 模式:Windows 上 child.kill() 信号语义弱,
+      // /T 按进程树杀防孤儿;taskkill 自身启动失败回退裸 kill
+      const tk = spawn('taskkill', ['/pid', String(this.child.pid), '/T', '/F'], { windowsHide: true });
+      tk.on('error', () => this.child.kill());
+    } else {
+      this.child.kill('SIGTERM');
+      // 钉底:子进程卡在同步 native 调用时收不到 SIGTERM → 3s 后强杀;自然退出则撤销定时器
+      const force = setTimeout(() => {
+        if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill('SIGKILL');
+      }, 3000);
+      this.child.once('exit', () => clearTimeout(force));
+    }
+  }
+
+  setOnCrash(cb: (error: string) => void): void {
+    this.crashCb = cb;
+    // 构造与回调注册之间发生的崩溃(fork 即失败等)不丢通知
+    if (this.crashed) cb(this.crashed);
+  }
+
+  private failAll(error: string): void {
+    for (const [, entry] of this.pending) entry.reject(new Error(error));
+    this.pending.clear();
+    if (!this.terminated && !this.crashed) {
+      this.crashed = error;
+      this.crashCb?.(error);
+    }
+  }
+}
+
 export interface LocalEmbeddingOptions {
-  /** 数据目录 runtime/(worker 据此 createRequire 加载 transformers)。 */
+  /** 数据目录 runtime/(推理侧据此 createRequire 加载 transformers)。 */
   runtimeDir: string;
-  /** worker 资产路径(默认 dist/embedding-worker.cjs;测试可显式指定)。 */
+  /** 子进程资产路径(默认 dist/embedding-child.cjs;测试可显式指定)。 */
+  childPath?: string;
+  /** 旧 worker 资产路径(仅 useWorker=true 时生效;默认 dist/embedding-worker.cjs)。 */
   workerPath?: string;
-  /** 通道注入缝(测试用;缺省 spawn 真实 worker)。 */
+  /** 回滚逃生门:true 切回 worker_threads 通道(fix #11 前的旧路径)。 */
+  useWorker?: boolean;
+  /** 通道注入缝(测试用;缺省起真实子进程通道)。 */
   channel?: EmbedWorkerChannel;
   logger?: MemoryLogger;
   maxInputChars?: number;
@@ -144,15 +261,18 @@ export class LocalEmbeddingService implements EmbeddingService {
     this.entry = entry;
     this.logger = opts.logger;
     const maxInputChars = opts.maxInputChars && opts.maxInputChars > 0 ? opts.maxInputChars : 5000;
+    const cfgObj: EmbedWorkerData = {
+      runtimeDir: opts.runtimeDir,
+      modelDir,
+      pooling: entry.pooling,
+      dtype: 'q8',
+      maxInputChars,
+    };
     this.channel =
       opts.channel ??
-      new RealWorkerChannel(opts.workerPath ?? defaultWorkerPath(), {
-        runtimeDir: opts.runtimeDir,
-        modelDir,
-        pooling: entry.pooling,
-        dtype: 'q8',
-        maxInputChars,
-      });
+      (opts.useWorker
+        ? new RealWorkerChannel(opts.workerPath ?? defaultWorkerPath(), cfgObj)
+        : new RealChildChannel(opts.childPath ?? defaultChildPath(), cfgObj));
     // 崩溃不自愈(换源/重启恢复):拒绝语义沿 EmbedHelper 降级链走 FTS
     this.channel.setOnCrash((error) => {
       if (this.state === 'terminated') return;
@@ -239,7 +359,7 @@ export class LocalEmbeddingService implements EmbeddingService {
     return reply.vectors;
   }
 
-  /** 释放 worker 线程与模型(嵌入源切走/关闭时调用;幂等)。terminated 后不可
+  /** 释放推理子进程与模型(嵌入源切走/关闭时调用;幂等)。terminated 后不可
    *  再复用——防止插件卸载/切走后残留的重嵌循环把模型重新加载常驻(内存泄漏)。 */
   close(): void {
     this.state = 'terminated';

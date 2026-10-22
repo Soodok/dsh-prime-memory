@@ -34,7 +34,7 @@
  * - score 只用于排序,不是事实置信度;无词法命中返回空,不兜底。
  */
 import { tokenize } from '../util/text.js';
-import { GRAPH_SEARCH_LIMIT_MAX } from './types.js';
+import { GRAPH_HOP_RECORD_CAP, GRAPH_SEARCH_LIMIT_MAX } from './types.js';
 /** 字段权重(检索命中计分;名称最高、关系词最低)。 */
 export const GRAPH_FIELD_WEIGHTS = {
     name: 6,
@@ -60,21 +60,54 @@ const FIELD_ORDER = ['name', 'aliases', 'tags', 'currentState', 'facts', 'relati
 function factValueText(value) {
     return Array.isArray(value) ? value.join(' ') : value;
 }
+/** ISO 字符串区间覆盖判定(字典序=时间序;空串视作未闭合)。 */
+function coversInterval(from, to, asOf) {
+    if (from && from > asOf)
+        return false;
+    if (to && asOf >= to)
+        return false;
+    return true;
+}
+/** fact 在回放时刻是否成立(active 恒成立;superseded 看区间)。archived/disputed 不含。 */
+function factValidAtAsOf(f, asOf) {
+    if (f.status === 'active')
+        return true;
+    if (f.status === 'superseded')
+        return coversInterval(f.validFrom, f.validTo, asOf);
+    return false;
+}
+/** 节点新度序(updatedAt 新→旧,同值按 id 升序——与检索结果排序同式)。 */
+function byNodeRecency(a, b) {
+    return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id < b.id ? -1 : 1;
+}
 /**
  * 图谱命中 → L1 记录 id 序列(§D 第 3 路 RRF 的输入;纯函数,无 I/O)。
  *
  * 图谱是**可重建派生投影**,节点/fact 的 `sourceRecordIds` 是它回链 L1 的唯一凭证
- * (types.ts:6-7)。此处把"节点排名"翻译成"L1 记录排名":
+ * (types.ts:6-7)。此处把"节点排名"翻译成"L1 记录排名",分两段:
  *
- * - **保序**:按命中的 score 降序依次展开来源,先出现的记录 = 更高排名;
- * - **去重**:同一 L1 记录可能被多个节点/fact 引用,只占首次出现的位置
- *   (重复占位会凭空抬高该记录在 RRF 里的权重);
+ * - **直连段**:命中节点自身 + 其 active facts 的来源(task_9 原语义、原顺序);
+ * - **1-hop 段**:命中节点沿 **active 边**的双向邻居(邻居需 active|disputed)的
+ *   节点自身来源,按邻居 updatedAt 新→旧追加,整段新增封顶
+ *   `GRAPH_HOP_RECORD_CAP`——这是图路"关系可达"增量价值的兑现面。
+ *   hop 段只取邻居节点自身来源,不取 fact 来源(hop 是联想不是证据,噪声从紧)。
+ *
+ * 两段共用纪律:
+ * - **保序**:先出现的记录 = 更高排名(直连段恒先于 hop 段);已被直连段占位的
+ *   id 不重复计入、也**不吃 hop 名额**(关联额度不被身份来源挤占);
+ * - **去重**:同一 L1 记录被多个节点/fact 引用,只占首次出现的位置;
  * - **节点自身来源优先于其 fact 来源**:节点的 sourceRecordIds 是它的身份来源,
  *   而单个 fact 的来源可能引向与该查询无关的旁支记录;
  * - **只取 active fact**:superseded 是历史状态,不该把旧记录拉进当前检索结果;
- * - **不查库**:返回的 id 可能已被删除(墓碑边界),由调用方按"取不到的跳过"处理。
+ * - **不查库**:返回的 id 可能已被删除(墓碑边界),由调用方按"取不到的跳过"处理,
+ *   不得补空占位(占位会在 RRF 里凭空加分)。
+ *
+ * edges/nodes 由调用方传入(loadGraph 结果,百~千量级全扫即可;>2k 再考虑预建索引,
+ * 见文件头演进阶梯)。族过滤不在本函数:邻居节点可跨族,兜底在 graphLane 尾部的
+ * 记录级 family/scope 双闸(宁可漏不可串落在记录上)。
  */
-export function graphHitRecordIds(hits) {
+export function expandHitRecordIds(hits, nodes, edges, opts) {
+    const asOf = typeof opts?.asOf === 'string' && opts.asOf.length > 0 ? opts.asOf : undefined;
     const seen = new Set();
     const out = [];
     const take = (id) => {
@@ -83,31 +116,85 @@ export function graphHitRecordIds(hits) {
         seen.add(id);
         out.push(id);
     };
+    // 直连段(节点身份来源在前,有效 facts 在后;task_5.2:asOf 下额外纳入当时成立的 superseded fact)
     for (const h of hits) {
         for (const id of h.node.sourceRecordIds)
             take(id);
         for (const f of h.node.facts) {
-            if (f.status !== 'active')
+            const ok = asOf === undefined ? f.status === 'active' : factValidAtAsOf(f, asOf);
+            if (!ok)
                 continue;
             for (const id of f.sourceRecordIds ?? [])
                 take(id);
         }
     }
+    if (edges.length === 0)
+        return out;
+    // hop 段:可用边的双向邻居 ∉ 命中集,邻居去重,状态需 active|disputed
+    // (task_5.2:asOf 下"当时成立"的 superseded 边也可回链,邻居同理含当时成立的 superseded 节点)
+    const hitNodeIds = new Set(hits.map((h) => h.node.id));
+    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    const edgeUsable = (e) => e.status === 'active' || (asOf !== undefined && e.status === 'superseded' && coversInterval(e.validFrom, e.validTo, asOf));
+    const neighborUsable = (n) => n.status === 'active' || n.status === 'disputed'
+        || (asOf !== undefined && n.status === 'superseded' && coversInterval(n.createdAt, n.updatedAt, asOf));
+    const seenNeighbor = new Set();
+    const neighbors = [];
+    for (const e of edges) {
+        if (!edgeUsable(e))
+            continue;
+        const dirs = [
+            [e.fromNodeId, e.toNodeId],
+            [e.toNodeId, e.fromNodeId],
+        ];
+        for (const [self, other] of dirs) {
+            if (!hitNodeIds.has(self) || hitNodeIds.has(other) || seenNeighbor.has(other))
+                continue;
+            const n = nodeById.get(other);
+            if (!n || !neighborUsable(n))
+                continue;
+            seenNeighbor.add(other);
+            neighbors.push(n);
+        }
+    }
+    neighbors.sort(byNodeRecency);
+    let hopTaken = 0;
+    for (const n of neighbors) {
+        if (hopTaken >= GRAPH_HOP_RECORD_CAP)
+            break;
+        for (const id of n.sourceRecordIds) {
+            if (seen.has(id))
+                continue; // 已被直连段占用:不计入、不吃名额
+            if (hopTaken >= GRAPH_HOP_RECORD_CAP)
+                break;
+            take(id);
+            hopTaken++;
+        }
+    }
     return out;
+}
+/**
+ * 直连段回链(无 hop)——保留 task_9 的原语义形状(既有测试继续钉住);
+ * 生产链路一律走 expandHitRecordIds(向量种子并集 + 1-hop)。
+ */
+export function graphHitRecordIds(hits) {
+    return expandHitRecordIds(hits, [], []);
 }
 /**
  * 图谱节点检索:返回按 score 降序的命中(最多 limit 条;limit 钳制 1~20)。
  * 候选节点 = active | disputed(superseded/archived 不进检索)。
  */
-export function searchGraphNodes(nodes, edges, query, limit) {
+export function searchGraphNodes(nodes, edges, query, limit, opts) {
+    const asOf = typeof opts?.asOf === 'string' && opts.asOf.length > 0 ? opts.asOf : undefined;
     const tokens = [...new Set(tokenize(query))];
     const cappedLimit = Math.min(Math.max(Math.floor(limit) || 5, 1), GRAPH_SEARCH_LIMIT_MAX);
     if (tokens.length === 0)
         return [];
-    // nodeId → active 关系词 token 集(先建邻接表,防逐节点全量扫边)
+    // nodeId → 可用关系词 token 集(先建邻接表,防逐节点全量扫边;
+    // task_5.1:asOf 下纳入"当时成立"的 superseded 边)
     const relationTokensByNode = new Map();
     for (const edge of edges) {
-        if (edge.status !== 'active')
+        if (edge.status !== 'active'
+            && !(asOf !== undefined && edge.status === 'superseded' && coversInterval(edge.validFrom, edge.validTo, asOf)))
             continue;
         let set = relationTokensByNode.get(edge.fromNodeId);
         if (!set) {
@@ -126,6 +213,9 @@ export function searchGraphNodes(nodes, edges, query, limit) {
     }
     const results = [];
     for (const node of nodes) {
+        // 候选状态闸保持 active|disputed:task_5.1 的放宽面在 **fact/边**("纳入 superseded 且
+        // 区间覆盖 T 的 fact/edge")——GraphNode 没有 valid 区间列,节点主体复活无判据；
+        // 历史实体经"当时成立边"的邻居回链(task_5.2)重新可达,不需要翻状态。
         if (node.status !== 'active' && node.status !== 'disputed')
             continue;
         const fieldTokens = {
@@ -134,7 +224,7 @@ export function searchGraphNodes(nodes, edges, query, limit) {
             tags: new Set((node.tags ?? []).flatMap((t) => tokenize(t))),
             currentState: new Set(tokenize(node.currentState)),
             facts: new Set(node.facts
-                .filter((f) => f.status === 'active')
+                .filter((f) => (asOf === undefined ? f.status === 'active' : factValidAtAsOf(f, asOf)))
                 .flatMap((f) => tokenize(`${f.key} ${factValueText(f.value)}`))),
             relations: relationTokensByNode.get(node.id) ?? new Set(),
             type: new Set(tokenize(node.type)),

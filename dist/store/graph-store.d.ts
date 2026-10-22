@@ -1,4 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { buildFullView } from '../graph/preview.js';
+import type { GraphPreviewResult } from '../graph/preview.js';
 import type { GraphEdge, GraphNode, GraphNodeSearchResult, GraphProjectionJob, GraphProjectionResult } from '../graph/types.js';
 import type { MemoryFamily, MemoryLogger, MemoryRecord } from '../types.js';
 /**
@@ -99,6 +101,37 @@ export declare class GraphStore {
      * 宁可漏不可串)。降级/异常返回空数组。
      */
     searchNodes(query: string, limit: number, families?: readonly MemoryFamily[]): GraphNodeSearchResult[];
+    /**
+     * §D 第 3 路存储缝(回链记录 id 序;graphLane 直接消费):词法命中 ∪ 路内向量种子
+     * → 1-hop 边扩展 → 保序去重的 L1 记录 id 序列。
+     *
+     * - **向量种子是路内并集、不是新路**:embedding 由调用方传入(装配层惰性查
+     *   l1.embedText;未就绪/失败传 undefined = 纯词法路,与旧 searchNodes+直连回链
+     *   逐位一致);并集不占 RRF 路数名额,"未接线 = 恰为 2 路"不变量不动;
+     * - **种子序**:词法命中在前、向量种子追加在后(RRF 用 rank,顺序即权重),
+     *   同节点去重;向量种子同样过 visible 族集与 active|disputed 状态闸(宁可漏不可串);
+     * - **1-hop 邻居不按族预筛**:来源记录的跨族由 graphLane 尾部记录级 family/scope
+     *   双闸兜底(与本路既有纪律同源);
+     * - 降级(db 未就绪/空图)返回空数组,不抛。
+     *
+     * 返回记录 id 而非 hits 是刻意的:回链/扩展属于读路径细节,路侧只需排名序列。
+     */
+    searchLaneRecords(query: string, embedding: Float32Array | undefined, limit: number, families?: readonly MemoryFamily[]): readonly string[];
+    /**
+     * 面板图谱预览存储缝(契约 `dsh-memory/graph-preview` 的数据源):
+     * loadGraph 一次 + job 计数(pending/running/failed 未定项与全量分母)传入纯函数。
+     * 降级(db 未就绪)返**全零结构**不抛——预览是展示面,永不拖垮端点。
+     * mode==='full' 时响应附 `full` 轻量块;**缺省时该键缺席**(可选键零漂移纪律,
+     * 不是 undefined 占位——消费方 `'full' in res` 与 JSON 形状双判据都干净)。
+     */
+    buildPreview(seedId?: string, mode?: 'full'): GraphPreviewResult & {
+        full?: ReturnType<typeof buildFullView>;
+    };
+    /**
+     * 清理历史 dead 作业行（纯审计痕迹删除，不影响已重入队的记录）。
+     * olderThanMs: 只删早于 now-olderThanMs 的；缺省删全部 dead。
+     */
+    cleanupDead(olderThanMs?: number): number;
     private newJobId;
     /**
      * 投影入队(按 GRAPH_JOB_BATCH 分片成多个 job;去重下推 SQL):
@@ -106,6 +139,54 @@ export declare class GraphStore {
      * 记录跳过。返回实际新建的 job 数。
      */
     queueGraphProjection(recordIds: readonly string[], priority: number): number;
+    /**
+     * 入队的详细形态(与 `queueGraphProjection` 同一实现,只是把新建 job id 也交出来):
+     * `memory_reproject` 工具面需要 `{queued, jobIds}` 回报,而既有调用方只数 created——
+     * 两个返回形状共享一份去重/分片逻辑,不漂移。
+     */
+    private queueGraphProjectionDetailed;
+    /**
+     * 强制重投(计划 expiry-tiering R10 冻结契约 · 先行刀):
+     * 抹掉 `graph_projected_records` 里这些记录的"已按当前版本投过"凭证,再按
+     * 新蒸馏优先级入队——绕开 `projector_version` 的永久跳过,让"改了 L1 → 图谱跟随"
+     * 有一条不依赖重启/周期 sweep 的纠正通道。
+     *
+     * **不动在途 `graph_job_records` 映射**(与上游 task_7.5 字面的一处刻意偏差,
+     * 理由记入写面计划 findings):claim 在认领时才现读 L1 记录,在途 job 天然投的是
+     * **改后**内容;若把映射一并删掉,同一次调用稍后再来一次就会绕过 PK 去重,
+     * 堆出内容重叠的双 job——保留映射才是"重复调用不堆重 job"的构造性保证。
+     *
+     * 幂等:在途有 job → blocked 集吸收,`created=0`;job 已完成 → 凭证刚被
+     * `complete` 写回,本方法再删再投,是合法的新重投而非堆积。
+     */
+    forceReprojectRecord(recordIds: readonly string[]): {
+        queued: number;
+        jobIds: string[];
+    };
+    /**
+     * 确定性边提案落库面(graph-write-plane R4 兜底支路):把"工具传入的显式边提案"
+     * 当作一次确定性投影输入,经 `applyGraphProjection` **纯函数**校验后在同一事务内
+     * 写回——不是裸 UPDATE graph_edges:validSources 硬校验、同 (from,relation) 换目标
+     * 闭旧边的确定性支路、来源并集封顶,全部复用既有守门代码(R5 不变量由它保证)。
+     *
+     * 提案形态:两端节点按现有 name/type 重提(消歧合并会命中现有节点,不新铸实体),
+     * 边 (from → to, relation) 携调用方给的 sourceRecordIds。claim 同款现读 L1:
+     * allowedRecordIds = 命中的来源记录集,未命中的 id 会被纯函数整条拒掉(返回
+     * ok:false, reason='dropped')——工具面传的"非现存 L1"在这里撞上硬校验,而非静默落库。
+     */
+    applyRelationProposal(opts: {
+        fromNodeId: string;
+        toNodeId: string;
+        relation: string;
+        sourceRecordIds: readonly string[];
+        now?: string;
+    }): {
+        ok: boolean;
+        reason?: string;
+        closedEdgeIds: string[];
+        edgeIds: string[];
+        touchedNodeIds: string[];
+    };
     /**
      * 记录被物理删除后，把两张**索引表**里指向它的行一并抹掉。
      *
@@ -131,13 +212,20 @@ export declare class GraphStore {
      * 校验)→ 写回 touched 行 → job 置 completed + 登记已投影记录 + 放掉 mapping。
      * job 非 running 态(已完成/已 dead/已回收)一律幂等 no-op;任何一步抛错整体
      * 回滚,不留半写。
+     *
+     * 返回 touched 节点中 active/disputed 的那批(写面向量收尾的输入,G-vec 缺陷修):
+     * 调用方只关心"哪些节点刚被写活",向量补算失败不回滚投影——返回值不参与控制流。
      */
-    complete(jobId: string, result: GraphProjectionResult, opts?: CompleteOptions): void;
+    complete(jobId: string, result: GraphProjectionResult, opts?: CompleteOptions): GraphNode[];
     /**
-     * 投影失败收尾:attempts 已在 claim 时 +1——封顶转 dead(放掉 mapping,允许
-     * 重新入队);未封顶转 failed + 指数退避 nextAttemptAt(mapping 保留防重复入队)。
+     * 投影失败收尾:attempts 已在 claim 时 +1——根据错误分类选不同封顶:
+     * - 永久错误(校验/解析):attempts >= GRAPH_JOB_MAX_ATTEMPTS(3) → dead
+     * - 瞬态错误(aborted/timeout/网络):attempts >= GRAPH_JOB_TRANSIENT_MAX_ATTEMPTS(6) → dead
+     * dead 放掉 mapping(允许下次 backfill 重新入队);未封顶转 failed + 指数退避。
      */
-    fail(jobId: string, error: string): void;
+    fail(jobId: string, error: string, opts?: {
+        transient?: boolean;
+    }): void;
     /** 启动回收:上次进程退出时卡在 running 的 job 放回 pending(dispose 缝不永久卡批)。 */
     recoverRunning(): number;
     /** 最近 job 列表(诊断/面板用;未就绪返回空)。 */
@@ -154,6 +242,25 @@ export declare class GraphStore {
      * 之后;按 L1 存活集判定(而非本次删除集合),跨多次删除与历史孤儿一并收敛。
      */
     markSourcesDeleted(deletedIds: readonly string[]): void;
+    /**
+     * 退场传播(计划 expiry-tiering R9 冻结契约 · 先行刀):软删/取代后的图谱
+     * 来源活性重算清扫。
+     *
+     * 与 `markSourcesDeleted` 的分野:那边判"来源 row 是否还活着",对软删(主表行
+     * 一直在)结构性失效;这边判"来源是否全部处于**退场态**"——即
+     * `classifyValidity` ∈ {superseded, retired}。退场判据单源在 validity 层,
+     * 本方不再自写一份 valid_to/marker 比较(写面计划约束 §4)。
+     *
+     * 重算式 sweep(不是逐条事件改写):每次按当前 L1 全量判定候选节点/边,
+     * 双向收敛——
+     * - active/disputed 且来源全部退场(含 row 消失)→ `archived` 墓碑(保留行,
+     *   expand 可见,与物理删传播同落库形态);
+     * - archived 且来源全部复活(row 存在且非退场态)→ 回 `active`(restore 的回药;
+     *   被物理删清空来源的永不满 足此条,不会误复活)。
+     *
+     * `changedIds` 只作早退与诊断日志的口径,不参与判定(判定面 = 全图来源集)。
+     */
+    markSourcesRetired(changedIds: readonly string[]): void;
     /**
      * §C 矛盾冻结:把图谱的 `disputed` 状态**同步**到给定冲突集。
      *

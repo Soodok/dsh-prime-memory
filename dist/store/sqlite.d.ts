@@ -168,20 +168,22 @@ export declare class MemoryDb {
      * **软删**(记忆退场):保留主表行,撤出检索面。
      *
      * 与 `deleteL1Batch` 的差别**只有一处**:不动 `l1_records` 行本身。
-     * `valid_to` 闭合 + `metadata_json` 写取代标记 → 记录仍能被 `listL1` 列出、
-     * 能被 `clearRetireMarker` + upsert 恢复;而 FTS 与向量行照旧删除,于是检索面
-     * (含去重候选召回)自然看不到它 —— **检索 SQL 一行都不用改**,活动记录零漂移
-     * 因此是构造性的,不是比对出来的。
+     * `metadata_json` 写取代标记 → 记录仍能被 `listL1` 列出、能被 `clearRetireMarker`
+     * + upsert 恢复;而 FTS 与向量行照旧删除,于是检索面(含去重候选召回)自然看不到它。
+     *
+     * 门1 解耦(expiry-tiering R1/task_2.3):退场**只写 marker，不再闭合 valid_to**——
+     * valid_to 回归纯现实有效期，退场与否由 marker 单源回答（`isRetired`）。
      *
      * 顺序刻意如此:先打标记(可逆的那一半),再撤检索面,且整体在一个事务里。
      * 反过来先撤索引而打标记失败,记录会落在"检索不到、也没被标记"的状态 ——
      * 既查不出来也恢复不了,是最坏的一种中间态。
      *
-     * **幂等**:已退场(`valid_to` 非空或已有标记)的 id 不再重复写标记,
+     * **幂等**:已退场(带 marker)的 id 不再重复写标记,
      * 保留首次退场的原因与时刻(「谁先取代了它」不该被后一次调用改写)。
      *
-     * **不调** `graphStore.markSourcesDeleted`:那是"来源已物理消失"的传播,
-     * 而软删的记录仍活在主表里 —— 图谱侧的退役语义另计(见计划 findings R-a)。
+     * **不调** `graphStore.markSourcesDeleted`(那是"来源已物理消失"的传播,软删行一直在),
+     * 而是调 `markSourcesRetired`(计划 R9 对偶刀):按"来源是否全部退场态"重算清扫,
+     * 全退场的 active/disputed 节点·边标 archived 墓碑(派生投影由当前事实重算,非事件改写)。
      */
     retireL1Batch(ids: string[], info: SupersedeInfo): number;
     /**
@@ -193,12 +195,14 @@ export declare class MemoryDb {
      * 清掉退场标记(恢复的**前半**)。返回清完标记的记录,供调用方 re-upsert 以重建
      * FTS/向量 —— 那条路径(`upsertL1InTx`)已存在,不在这里重复实现。
      *
-     * 只清 `valid_to` 与标记键,**不碰内容**:恢复不该修改记忆本身。
-     * 返回的 `validTo` 显式置 `undefined`(而非留着旧 epoch),否则 upsert 会
-     * 用 `toIso(旧值)` 把 `valid_to` 又写回去,恢复静默失败。
+     * 门1 解耦(task_2.3 的对偶面):只剥 marker,**不碰 valid_to**——
+     * 行若本就带着真实历史有效期(导入/抽取写入),恢复不该把它抹掉;
+     * 旧版 retire 写进 valid_to 的退场时刻对新行只影响 classify 落到
+     * historical/expired_suspect(仍可检可注入,带标注),由 validity-backfill 逐步纠偏。
+     * 返回的 `validTo` 保持原值——upsert 照原样写回,不会静默改列。
      */
     clearRetireMarker(ids: string[]): MemoryRecord[];
-    /** 已退场记录列表(面板用):`valid_to` 非空即已退场。失败返回空。 */
+    /** 已退场记录列表(面板用):与 `retiredL1Sql()` 同判据(marker 单源)。失败返回空。 */
     listRetiredL1(opts: {
         limit: number;
         offset: number;
@@ -530,7 +534,15 @@ export declare class MemoryDb {
      * 返回扫描行数;存储降级返回 0。
      */
     scanL1Metadata(cb: (recordId: string, metadata: Record<string, unknown> | null) => void): number;
-    /** retired 行计数(退场判定与 listRetiredL1 同口径:valid_to 非空)。失败返回 0。 */
+    /**
+     * 反向取代链查询(task_4.4,门3):"谁被这条记录取代了"——扫 metadata_json 里
+     * 取代标记的 `by` 指向本 id 的行。百~千量级全扫可接受(与 `retiredL1Sql` 同属
+     * LIKE 面);超过阈值时留 warn——真到万级该建索引，不在本计划面里预先造。
+     * **只回退场行**："被取代者"正是带 marker 的旧行(活跃行若 by 指过来是脏数据)；
+     * 模式含闭合引号(`"by":"<id>"`),不会前缀误配更长 id。
+     */
+    findSupersededTargets(newId: string): string[];
+    /** retired 行计数(退场判定与 listRetiredL1 同口径:`retiredL1Sql` marker 单源)。失败返回 0。 */
     retiredL1Count(): number;
     /**
      * Room 计数(**标签自生长分类**):展开 `metadata.tags` 聚合,1 个 slug tag = 1 个 Room。

@@ -30,17 +30,18 @@ const require = createRequire(import.meta.url);
 const TAG = '[memory][sqlite]';
 /**
  * 退场判据的 **SQL 侧同口径表达**（与 `isRetired` / `upsertL1InTx` 里的 `retiredNow` 一一对应）：
- * `valid_to` 非空 **或** `metadata_json` 带退场标记。
+ * `metadata_json` 带退场标记即退场。门1 解耦(expiry-tiering R1)后**不再**看 `valid_to`——
+ * valid_to 回归纯现实有效期，"带合法历史 valid_to 的记录"是可检可注入的有效-历史态，不是退场。
  *
  * 为什么仓内只能有一份：退场记录有**三条检索面写路径绕过 upsert 漏斗**——
  * FTS 重建回灌、增量重嵌入取数、补齐判据计数。任一处漏了就是：
  * ① 退场行被放回检索面（前两处；重嵌入是 30 分钟一轮，比 FTS 重建更易命中）；
  * ② 补齐判据永不收敛（第三处：缺向量的退场行永远算“还差”，却永远不该被补）。
- * 判据分头写，三处迟早各自漂移 —— 故集中成这一个函数。
+ * 判据分头写，三处迟早各自漂移 —— 故集中成这一个函数（与 `supersede.isRetired` 是同口径一对）。
  */
 function retiredL1Sql(alias) {
     const p = alias ? `${alias}.` : '';
-    return `COALESCE(${p}valid_to, '') <> '' OR ${p}metadata_json LIKE '%"${SUPERSEDE_METADATA_KEY}"%'`;
+    return `${p}metadata_json LIKE '%"${SUPERSEDE_METADATA_KEY}"%'`;
 }
 // 成本账本(token_cost 表族)独立职责,此处 re-export 不断裂既有引用;
 // MemoryDb 的四个公开方法为一行委托。
@@ -669,6 +670,24 @@ export class MemoryDb {
             catch {
                 /* 戳写失败只影响下次启动多一次重建,不阻断 */
             }
+            // ── 门1 解耦一次性回灌(task_6.1):旧版拿 `valid_to<>''` 当退场判据,合法历史/
+            // 过期 valid_to 的记录被**静默遮蔽**(FTS/向量行都没建)。判据已改成 marker 单源,
+            // 但存量 FTS 不会自动复活那些行——升版后首启强制一次全量回灌(新判据下真退场的
+            // 行由 backfillL1Fts 自身的 retiredL1Sql 筛子跳过,日志报回灌/跳过数)。
+            // 幂等靠 stamp:跑过即不再重复(它是一次性修复,不是启动常项)。
+            if (this.readMetaString('gate1.retire-decoupled.v1') === null) {
+                try {
+                    // 先清空再回灌:backfillL1Fts 的重灌语义假定目标表干净(它只在 DROP 重建后被调过),
+                    // 直接在已有行的 FTS 上叠加会双插(同 id 命中两次)。
+                    this.db.exec('DELETE FROM l1_fts');
+                    this.backfillL1Fts();
+                    this.writeMetaString('gate1.retire-decoupled.v1', new Date().toISOString());
+                    this.logger?.info(`${TAG} 门1 解耦回灌完成:误遮蔽的历史记忆已回到检索面;向量面由增量重嵌自动补齐,或在设置页手动「语义检索重建」加速(不跑也只是补齐慢,不丢)`);
+                }
+                catch (err) {
+                    this.logger?.warn(`${TAG} 门1 解耦回灌失败(下次启动重试): ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
             this.ftsAvailable = true;
         }
         catch (err) {
@@ -995,11 +1014,13 @@ export class MemoryDb {
         // 全扫(批量写整体 O(N²))。只有主表已有该行(覆盖/合并)才可能有旧 FTS 行需要删。
         // 同批重复 id 也能正确处理:首条插入后,第二条的点查在同一事务内已见新行。
         const ftsExisted = this.ftsAvailable ? this.stmtL1Exists.get(record.id) !== undefined : false;
-        // **退场不变量必须在写入漏斗上强制**:已退场的记录(valid_to 闭合或带取代标记)
+        // **退场不变量必须在写入漏斗上强制**:已退场(带取代标记)的记录
         // 永不出现在检索面。只靠 `retireL1Batch` 保证是不够的——快照恢复 / 重建 /
         // 旧版导入都会经这里写回记录,若照常重建 FTS/向量行,一条带退场标记的记录
-        // 会**悄悄回到检索结果里**(而检索侧刻意不看 valid_to,正是为了零漂移)。
-        const retiredNow = record.validTo !== undefined || readSupersedeMarker(record.metadata) !== undefined;
+        // 会**悄悄回到检索结果里**(而检索 SQL 侧刻意不看 valid_to,正是为了零漂移)。
+        // 门1 解耦:判据与 `isRetired`/`retiredL1Sql` 同为 marker 单源——合法历史 valid_to
+        // 的行从这里正常进入检索面(旧口径的误遮蔽面由升版回灌收敛,task_6.1)。
+        const retiredNow = readSupersedeMarker(record.metadata) !== undefined;
         this.stmtUpsertL1.run(record.id, record.content, type, priority, sceneName, record.sessionId ?? 'default', record.version ?? 0, ts.str, ts.start, ts.end, toIso(record.createdAt), toIso(record.updatedAt), JSON.stringify(record.metadata ?? {}), family, toIso(record.validFrom), toIso(record.validTo), normPersistence(record.persistence) ?? '', scope, workspaceId, record.repoKeyName ?? '', record.repoKeyOwner ?? '', normApplicability(record.applicability), record.extKey ?? '', 
         // 文件身份键。存什么由调用方定（`deriveName` 已按 `sanitizeFilename` 纪律截断/洗字符），
         // 这里只做 undefined → '' 的绑定兜底，与同一行其他可选列同口径。
@@ -1052,27 +1073,29 @@ export class MemoryDb {
      * **软删**(记忆退场):保留主表行,撤出检索面。
      *
      * 与 `deleteL1Batch` 的差别**只有一处**:不动 `l1_records` 行本身。
-     * `valid_to` 闭合 + `metadata_json` 写取代标记 → 记录仍能被 `listL1` 列出、
-     * 能被 `clearRetireMarker` + upsert 恢复;而 FTS 与向量行照旧删除,于是检索面
-     * (含去重候选召回)自然看不到它 —— **检索 SQL 一行都不用改**,活动记录零漂移
-     * 因此是构造性的,不是比对出来的。
+     * `metadata_json` 写取代标记 → 记录仍能被 `listL1` 列出、能被 `clearRetireMarker`
+     * + upsert 恢复;而 FTS 与向量行照旧删除,于是检索面(含去重候选召回)自然看不到它。
+     *
+     * 门1 解耦(expiry-tiering R1/task_2.3):退场**只写 marker，不再闭合 valid_to**——
+     * valid_to 回归纯现实有效期，退场与否由 marker 单源回答（`isRetired`）。
      *
      * 顺序刻意如此:先打标记(可逆的那一半),再撤检索面,且整体在一个事务里。
      * 反过来先撤索引而打标记失败,记录会落在"检索不到、也没被标记"的状态 ——
      * 既查不出来也恢复不了,是最坏的一种中间态。
      *
-     * **幂等**:已退场(`valid_to` 非空或已有标记)的 id 不再重复写标记,
+     * **幂等**:已退场(带 marker)的 id 不再重复写标记,
      * 保留首次退场的原因与时刻(「谁先取代了它」不该被后一次调用改写)。
      *
-     * **不调** `graphStore.markSourcesDeleted`:那是"来源已物理消失"的传播,
-     * 而软删的记录仍活在主表里 —— 图谱侧的退役语义另计(见计划 findings R-a)。
+     * **不调** `graphStore.markSourcesDeleted`(那是"来源已物理消失"的传播,软删行一直在),
+     * 而是调 `markSourcesRetired`(计划 R9 对偶刀):按"来源是否全部退场态"重算清扫,
+     * 全退场的 active/disputed 节点·边标 archived 墓碑(派生投影由当前事实重算,非事件改写)。
      */
     retireL1Batch(ids, info) {
         if (this.degraded || ids.length === 0)
             return 0;
         try {
             const existing = new Map(this.getL1ByIds(ids).map((r) => [r.id, r]));
-            const update = this.db.prepare('UPDATE l1_records SET valid_to = ?, metadata_json = ? WHERE record_id = ?');
+            const update = this.db.prepare('UPDATE l1_records SET metadata_json = ? WHERE record_id = ?');
             const retired = [];
             this.withTransaction(() => {
                 for (const id of ids) {
@@ -1080,12 +1103,16 @@ export class MemoryDb {
                     // 不存在的 id 静默跳过;已退场的跳过以保幂等
                     if (!rec || isRetired(rec))
                         continue;
-                    update.run(info.at, JSON.stringify(withSupersedeMarker(rec.metadata, info)), id);
+                    update.run(JSON.stringify(withSupersedeMarker(rec.metadata, info)), id);
                     retired.push(id);
                 }
                 if (retired.length > 0)
                     this.detachL1FromRetrieval(retired);
             });
+            // 图谱退场传播在事务外(与 deleteL1Batch 同形态):清扫失败只 warn,
+            // 不回滚已经成立的软删——库侧结果先成立,图谱是旁路投影。
+            if (retired.length > 0)
+                this.graphStore.markSourcesRetired(retired);
             return retired.length;
         }
         catch (err) {
@@ -1111,25 +1138,32 @@ export class MemoryDb {
      * 清掉退场标记(恢复的**前半**)。返回清完标记的记录,供调用方 re-upsert 以重建
      * FTS/向量 —— 那条路径(`upsertL1InTx`)已存在,不在这里重复实现。
      *
-     * 只清 `valid_to` 与标记键,**不碰内容**:恢复不该修改记忆本身。
-     * 返回的 `validTo` 显式置 `undefined`(而非留着旧 epoch),否则 upsert 会
-     * 用 `toIso(旧值)` 把 `valid_to` 又写回去,恢复静默失败。
+     * 门1 解耦(task_2.3 的对偶面):只剥 marker,**不碰 valid_to**——
+     * 行若本就带着真实历史有效期(导入/抽取写入),恢复不该把它抹掉;
+     * 旧版 retire 写进 valid_to 的退场时刻对新行只影响 classify 落到
+     * historical/expired_suspect(仍可检可注入,带标注),由 validity-backfill 逐步纠偏。
+     * 返回的 `validTo` 保持原值——upsert 照原样写回,不会静默改列。
      */
     clearRetireMarker(ids) {
         if (this.degraded || ids.length === 0)
             return [];
         try {
             const existing = this.getL1ByIds(ids);
-            const update = this.db.prepare('UPDATE l1_records SET valid_to = ?, metadata_json = ? WHERE record_id = ?');
+            const update = this.db.prepare('UPDATE l1_records SET metadata_json = ? WHERE record_id = ?');
             const restored = [];
             this.withTransaction(() => {
                 for (const rec of existing) {
                     const metadata = stripSupersedeMarker(rec.metadata);
                     if (isRetired(rec))
-                        update.run('', JSON.stringify(metadata), rec.id);
-                    restored.push({ ...rec, metadata, validTo: undefined });
+                        update.run(JSON.stringify(metadata), rec.id);
+                    restored.push({ ...rec, metadata });
                 }
             });
+            // 复活回药(R9 对偶刀的读侧):退场标记已清 → 同源重算清扫会把"来源全部复活"
+            // 的 archived 节点/边拉回 active(与 retireL1Batch 的传播共用 sweep,方向由当前事实定)。
+            if (restored.length > 0) {
+                this.graphStore.markSourcesRetired(restored.map((r) => r.id));
+            }
             return restored;
         }
         catch (err) {
@@ -1137,17 +1171,17 @@ export class MemoryDb {
             return [];
         }
     }
-    /** 已退场记录列表(面板用):`valid_to` 非空即已退场。失败返回空。 */
+    /** 已退场记录列表(面板用):与 `retiredL1Sql()` 同判据(marker 单源)。失败返回空。 */
     listRetiredL1(opts) {
         if (this.degraded)
             return { items: [], total: 0 };
         try {
             const totalRow = this.db
-                .prepare("SELECT COUNT(*) AS n FROM l1_records WHERE COALESCE(valid_to, '') <> ''")
+                .prepare(`SELECT COUNT(*) AS n FROM l1_records WHERE ${retiredL1Sql()}`)
                 .get();
             const rows = this.db
                 .prepare(`SELECT record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family, valid_from, valid_to, persistence, scope, workspace_id, repo_key_name, repo_key_owner, applicability, name
-           FROM l1_records WHERE COALESCE(valid_to, '') <> '' ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
+           FROM l1_records WHERE ${retiredL1Sql()} ORDER BY updated_time DESC LIMIT ? OFFSET ?`)
                 .all(opts.limit, opts.offset);
             return { items: rows.map(rowToRecord), total: Number(totalRow?.n ?? 0) };
         }
@@ -1175,11 +1209,15 @@ export class MemoryDb {
             // 文件身份键(md 投射相):同款形状探测。没这一列的旧库读侧归一 undefined，
             // 不报错——投射器把空 name 回落到 `mem-<id8>`，而不是把整条取记录路径弄挂。
             const nameCol = table === 'l1_records' && this.hasColumn('l1_records', 'name') ? ', name' : '';
+            // 外部导入幂等键(轨3-P0):同款形状探测。此前读缝只写不回读——"血缘字段随
+            // memory_update 带走"需要它;缺列旧库读侧归一 undefined(fail-open)。
+            const extCol = table === 'l1_records' && this.hasColumn('l1_records', 'ext_key') ? ', ext_key' : '';
             const metaCols = 'record_id, content, type, priority, scene_name, version, timestamp_str, created_time, updated_time, metadata_json, family' +
                 temporal +
                 scopeCols +
                 repoCols +
-                nameCol;
+                nameCol +
+                extCol;
             stmt =
                 action === 'delete'
                     ? this.db.prepare(`DELETE FROM ${table} WHERE record_id IN (${ph})`)
@@ -1920,13 +1958,13 @@ export class MemoryDb {
                 // json_valid 守卫口径;与 l1RoomCounts() 计数互补(rooms 计数 + 孤儿数 = 全量)。
                 where.push(`NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END, '$.tags'))`);
             }
-            // 退场筛查(三态,见 opts.retired 注释):与 listRetiredL1 同一判据,保证
-            // 「仅退场」视图与「已退场」区看到同一批行。
+            // 退场筛查(三态,见 opts.retired 注释):与 listRetiredL1 同一 `retiredL1Sql` 判据,
+            // 保证「仅退场」视图与「已退场」区看到同一批行(门1 解耦后同为 marker 单源)。
             if (opts.retired === false) {
-                where.push("COALESCE(valid_to, '') = ''");
+                where.push(`NOT (${retiredL1Sql()})`);
             }
             else if (opts.retired === true) {
-                where.push("COALESCE(valid_to, '') <> ''");
+                where.push(retiredL1Sql());
             }
             const whereSql = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
             const totalRow = this.db.prepare(`SELECT COUNT(*) AS n FROM l1_records${whereSql}`).get(...params);
@@ -1988,13 +2026,38 @@ export class MemoryDb {
             return 0;
         }
     }
-    /** retired 行计数(退场判定与 listRetiredL1 同口径:valid_to 非空)。失败返回 0。 */
+    /**
+     * 反向取代链查询(task_4.4,门3):"谁被这条记录取代了"——扫 metadata_json 里
+     * 取代标记的 `by` 指向本 id 的行。百~千量级全扫可接受(与 `retiredL1Sql` 同属
+     * LIKE 面);超过阈值时留 warn——真到万级该建索引，不在本计划面里预先造。
+     * **只回退场行**："被取代者"正是带 marker 的旧行(活跃行若 by 指过来是脏数据)；
+     * 模式含闭合引号(`"by":"<id>"`),不会前缀误配更长 id。
+     */
+    findSupersededTargets(newId) {
+        if (this.degraded || !newId)
+            return [];
+        const like = `%"by":${JSON.stringify(newId)}%`;
+        try {
+            const rows = this.db
+                .prepare(`SELECT record_id FROM l1_records WHERE metadata_json LIKE ? AND ${retiredL1Sql()}`)
+                .all(like);
+            if (rows.length > 2000) {
+                this.logger?.warn(`${TAG} 反向取代链命中 ${rows.length} 条:超过全扫舒适区，考虑为 dsh_superseded.by 建索引`);
+            }
+            return rows.map((r) => r.record_id);
+        }
+        catch (err) {
+            this.logger?.warn(`${TAG} 反向取代链查询失败(返回空): ${err instanceof Error ? err.message : String(err)}`);
+            return [];
+        }
+    }
+    /** retired 行计数(退场判定与 listRetiredL1 同口径:`retiredL1Sql` marker 单源)。失败返回 0。 */
     retiredL1Count() {
         if (this.degraded)
             return 0;
         try {
             const row = this.db
-                .prepare("SELECT COUNT(*) AS n FROM l1_records WHERE COALESCE(valid_to, '') <> ''")
+                .prepare(`SELECT COUNT(*) AS n FROM l1_records WHERE ${retiredL1Sql()}`)
                 .get();
             return Number(row?.n ?? 0);
         }
@@ -2733,6 +2796,9 @@ function rowToRecord(row) {
         // 文件身份键回读：空串归一 undefined（“还没名字”与“名字是空串”不是一种意思），
         // 缺列的旧库也是 undefined。读侧同样 fail-open。
         name: row.name || undefined,
+        // 外部导入幂等键回读:空串 = 内部记录(不参与幂等),归一 undefined——
+        // memory_update 靠它把导入身份带进新版本,丢了它同来源重导会静默重复累积。
+        extKey: row.ext_key || undefined,
     };
 }
 /**

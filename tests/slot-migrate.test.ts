@@ -41,7 +41,7 @@ function storeOf(slots: Slot[]): SlotMigrateStoreFace & { closed: Array<{ id: st
 const l1With = (alive: string[], retired: string[] = []): SlotMigrateL1Face => ({
   getByIds: (ids) => [
     ...alive.filter((id) => ids.includes(id)).map((id) => ({ id })),
-    ...retired.filter((id) => ids.includes(id)).map((id) => ({ id, validTo: 1_760_000_000_000 })),
+    ...retired.filter((id) => ids.includes(id)).map((id) => ({ id, metadata: { dsh_superseded: { at: '2026-10-01T00:00:00.000Z', reason: 'manual' } } })), // 门1:退场凭 marker
   ],
 });
 

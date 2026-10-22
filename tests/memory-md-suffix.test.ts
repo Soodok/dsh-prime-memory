@@ -25,6 +25,17 @@ afterAll(async () => {
 
 const RETIRED_AT = Date.parse('2026-10-12T09:00:00Z');
 
+/**
+ * 门1 解耦(expiry-tiering R1):md 层的退场判据改 marker 单源(`isRetiredRecord` 与
+ * `isRetired`/`retiredL1Sql` 同口径)。fixture 造"已退场"行必须带 marker——
+ * 只塞 validTo 的新世界形状不算退场。validTo 仍留着:顺带回归验证"两者共存不串道"。
+ */
+const retiredLike = (r: MemoryRecord): MemoryRecord => ({
+  ...r,
+  validTo: RETIRED_AT,
+  metadata: { ...(r.metadata ?? {}), dsh_superseded: { at: new Date(RETIRED_AT).toISOString(), reason: 'manual' } },
+});
+
 function rec(id: string, content: string, extra: Partial<MemoryRecord> = {}): MemoryRecord {
   const t = Date.parse('2026-10-12T00:00:00Z');
   return { id, content, type: 'work_fact', priority: 60, scene_name: 's', timestamps: [t], createdAt: t, updatedAt: t, ...extra };
@@ -69,7 +80,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
     const live = rec('a1', '被批量软删的记忆', { name: 'batch-retired', workspaceId: c.ws });
     await exportThen([live], c);
     const abs = wsFile(c, 'batch-retired');
-    const rep = await converge([{ ...live, validTo: RETIRED_AT }], c);
+    const rep = await converge([retiredLike(live)], c);
     expect(rep.renamed).toBe(1);
     expect(existsSync(abs)).toBe(false);
     // name 无感：只加后缀，干部分一个字都不动
@@ -85,7 +96,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
     await exportThen([live], c);
     const abs = singleRootFile(c, 'no-owner');
     expect(existsSync(abs)).toBe(true);
-    const rep = await converge([{ ...live, validTo: RETIRED_AT }], c);
+    const rep = await converge([retiredLike(live)], c);
     expect(rep.renamed).toBe(1);
     expect(existsSync(abs)).toBe(false);
     expect(existsSync(`${abs}.disable`)).toBe(true);
@@ -98,7 +109,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
     const abs = wsFile(c, 'hand-edited');
     const edited = '---\nid: "a3"\n---\n\n原始正文\n\n人手补了一段结论\n';
     await writeFile(abs, edited, 'utf8');
-    const rep = await converge([{ ...live, validTo: RETIRED_AT }], c);
+    const rep = await converge([retiredLike(live)], c);
     expect(rep.edited).toBe(1);
     expect(rep.renamed).toBe(1);
     const now = await readFile(`${abs}.disable`, 'utf8');
@@ -111,7 +122,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
     const live = rec('a4', '先退再恢复的记忆', { name: 'revive-me', workspaceId: c.ws });
     await exportThen([live], c);
     const abs = wsFile(c, 'revive-me');
-    await converge([{ ...live, validTo: RETIRED_AT }], c);
+    await converge([retiredLike(live)], c);
     expect(existsSync(`${abs}.disable`)).toBe(true);
     const rep = await converge([live], c);
     expect(rep.revived).toBe(1);
@@ -135,11 +146,12 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
 
   it('两份都在 → 保守不动，只报 both（删哪份都是不可逆判断）', async () => {
     const c = await ctx();
-    const r = rec('a6', '改名中途崩过的记忆', { name: 'both-exist', workspaceId: c.ws, validTo: RETIRED_AT });
+    const r = rec('a6', '改名中途崩过的记忆', { name: 'both-exist', workspaceId: c.ws });
+    const retiredA6 = retiredLike(r);
     const abs = wsFile(c, 'both-exist');
     await putFile(abs, 'x');
     await putFile(`${abs}.disable`, 'y');
-    const rep = await converge([r], c);
+    const rep = await converge([retiredA6], c);
     expect(rep.both).toBe(1);
     expect(rep.renamed).toBe(0);
     expect(existsSync(abs)).toBe(true);
@@ -148,7 +160,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
 
   it('盘上什么都没有 → absent，不凭空造文件', async () => {
     const c = await ctx();
-    const r = rec('a7', '从没导出过就被退场的记忆', { name: 'never-exported', workspaceId: c.ws, validTo: RETIRED_AT });
+    const r = retiredLike(rec('a7', '从没导出过就被退场的记忆', { name: 'never-exported', workspaceId: c.ws }));
     const rep = await converge([r], c);
     expect(rep.absent).toBe(1);
     expect(rep.renamed).toBe(0);
@@ -162,7 +174,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
       rec('b2', '第二条', { name: 'idem-2' }),
     ];
     await exportThen(list, c);
-    const retired = list.map((r) => ({ ...r, validTo: RETIRED_AT }));
+    const retired = list.map(retiredLike);
     const first = await converge(retired, c);
     expect(first.renamed).toBe(2);
     const second = await converge(retired, c);
@@ -181,7 +193,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
     let flushes = 0;
     const orig = c.ledger.flush.bind(c.ledger);
     c.ledger.flush = async () => { flushes += 1; return orig(); };
-    const rep = await converge(list.map((r) => ({ ...r, validTo: RETIRED_AT })), c, { maxRecords: 2000 });
+    const rep = await converge(list.map(retiredLike), c, { maxRecords: 2000 });
     expect(rep.renamed).toBe(300);
     expect(rep.capped).toBe(false);
     expect(flushes).toBeLessThanOrEqual(1);
@@ -195,7 +207,7 @@ describe('后缀不变式收敛（状态层，与退场路径无关）', () => {
     const c = await ctx();
     const list = Array.from({ length: 5 }, (_, i) => rec(`c${i}`, `记录 ${i}`, { name: `cap-${i}`, workspaceId: c.ws }));
     await exportThen(list, c);
-    const retired = list.map((r) => ({ ...r, validTo: RETIRED_AT }));
+    const retired = list.map(retiredLike);
     const rep = await converge(retired, c, { maxRecords: 2 });
     expect(rep.renamed).toBe(2);
     expect(rep.capped).toBe(true);
@@ -215,7 +227,7 @@ describe('单点失效联动的不对称修复（写得出也要收得回）', (
     const abs = singleRootFile(c, 'single-root-owned');
     expect(existsSync(abs)).toBe(true);
     const outcome = await disableProjectionFile({
-      record: { ...live, validTo: RETIRED_AT },
+      record: retiredLike(live),
       cfgRoot: undefined,
       dataDir: c.dataDir,
       ledger: c.ledger,
@@ -227,7 +239,7 @@ describe('单点失效联动的不对称修复（写得出也要收得回）', (
 
   it('无归属且盘上没这份 → 仍返回 no-workspace，不凭空造（原红线保留）', async () => {
     const c = await ctx();
-    const r = rec('s2', '无归属也没导出过', { name: 'single-root-ghost', validTo: RETIRED_AT });
+    const r = retiredLike(rec('s2', '无归属也没导出过', { name: 'single-root-ghost' }));
     expect(await disableProjectionFile({ record: r, cfgRoot: undefined, dataDir: c.dataDir, ledger: c.ledger })).toBe('no-workspace');
     await expect(stat(resolve(c.dataDir, 'memories'))).rejects.toThrow();
   });

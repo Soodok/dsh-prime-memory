@@ -28,6 +28,7 @@ import { trace } from '../store/trace.js';
 import type { MemoryConfig } from '../config.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import type { L1Store } from '../store/l1.js';
+import { filterInjectCandidates } from '../store/validity.js';
 import type { PersonaStore } from '../store/persona.js';
 import { RecallDedupeStore } from '../store/recall-dedupe.js';
 import type { SessionRecalledStore } from '../store/session-recalled.js';
@@ -619,6 +620,29 @@ export function registerRecall(
               scoped = kept;
             }
           }
+          // ── 门2 被动注入硬当前态(expiry-tiering task_3.3/3.4,灰度闸**默认关**):
+          // 开时按 classifyValidity 现算态剔除 `expired`(仍在索引可检,只是不再自动
+          // 浮现进模型上下文);`expired_suspect` 保留并在注入行带"疑似失效"标注;
+          // superseded/retired 由门1 索引层结构性进不到候选(不在本层重复过滤)。
+          // 判据单源 `stateOfRecord`,本层不再写一份 valid_to/marker 比较(计划 §4 约束)。
+          // 关时不进分支零 getByIds——注入逐字与改前一致(零漂移)。
+          let suspectIds = new Set<string>();
+          const tieringOn = cfg.validity?.tieringEnabled === true || live.get().validityTiering === true;
+          if (tieringOn && scoped.length > 0) {
+            const nowV = Date.now();
+            const byIdV = new Map(stores.l1.getByIds(scoped.map((h) => h.id)).map((r) => [r.id, r]));
+            // 主体收敛在 validity.filterInjectCandidates(纯函数可单测,task_3.6)——
+            // 这里只做数据装配与日志,不内联第二份判据。
+            const filtered = filterInjectCandidates(scoped, (id) => byIdV.get(id), nowV);
+            suspectIds = filtered.suspectIds;
+            if (filtered.exited > 0) {
+              logger.warn(`[memory] 门2 防御性拦截退场态候选 ${filtered.exited} 条(门1 应已挡住,出现即泄漏信号)`);
+            }
+            if (filtered.kept.length !== scoped.length) {
+              logger.info(`[memory] 门2 时效过滤:剔除 expired ${scoped.length - filtered.kept.length - filtered.exited} 条(agent=${payload.agent.id})`);
+            }
+            scoped = filtered.kept;
+          }
           // 召回去重:同会话已注入过的记录不再重复注入(模型上下文已持有,省 token)。
           // 纯过滤——剩几条注几条,全量压制(0 条新鲜命中)是正确状态而非未命中。
           // §E:压缩后增强轮跳过压制(压缩把已注入内容逐出了模型上下文)。
@@ -648,7 +672,12 @@ export function registerRecall(
             return decision;
           }
           const lines = applyRecallBudget(
-            fresh.map((h) => `- [${h.scene_name ? `${h.type}|${h.scene_name}` : h.type}] ${h.content}`),
+            fresh.map((h) =>
+              `- [${h.scene_name ? `${h.type}|${h.scene_name}` : h.type}] ${h.content}` +
+              // 门2 task_3.4:疑而不隐——valid_to 来源不可信的行保留注入但带标注,
+              // 人/模型自行裁量。灰度关时 suspectIds 恒空,行形状逐字不变。
+              (suspectIds.has(h.id) ? '（疑似失效:有效期来源不可信）' : ''),
+            ),
             { maxCharsPerMemory: cfg.recall.maxCharsPerMemory, maxTotalRecallChars: cfg.recall.maxTotalRecallChars },
           );
           if (lines.length === 0) {

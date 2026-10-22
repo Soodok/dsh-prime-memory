@@ -9,8 +9,8 @@
 import { existsSync, mkdirSync, promises as fs, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { familyForType, isScopeVisible } from '../types.js';
-import { graphHitRecordIds } from '../graph/search.js';
 import { isRetired } from './supersede.js';
+import { stampValidity } from './validity.js';
 import { exportThenPurge, readSnapshotManifest, readSnapshotRecords, restoreL1Snapshot, selectSnapshotTargets, snapshotDirFor, listSnapshots as listSnapshotsIn } from './l1-snapshot.js';
 import { EmbedHelper, NoopEmbeddingService } from './embedding.js';
 import { appendJsonl, dayKey, ensureDir, readJsonl } from '../util/io.js';
@@ -393,6 +393,13 @@ export class L1Store {
     getByIds(ids) {
         return this.db.getL1ByIds(ids);
     }
+    /**
+     * 反向取代链(task_4.4,门3):返回"被 newId 取代"的退场记录 id。
+     * 走 MemoryDb 的 LIKE 全扫缝(百~千量级;阈值告警在那边)。
+     */
+    findSupersededTargets(newId) {
+        return this.db.findSupersededTargets(newId);
+    }
     /** 外部导入幂等 pre-check(轨3-P0):ext_key 命中已存在记录则返回其 id,否则 undefined。 */
     findIdByExtKey(extKey) {
         return this.db.findRecordIdByExtKey(extKey);
@@ -474,9 +481,14 @@ export class L1Store {
     async appendNew(records) {
         if (records.length === 0)
             return;
+        // 写侧标注汇流口(task_3.2):所有新写路径(pipeline / memory_add / import / memport /
+        // 重建保留…)都经这里，统一盖 dsh_validity 快照;源头盖过的行(pipeline 带 evidence、
+        // 工具带 llm_inferred)保留其 validToSource，未盖过的补 'unknown'(fail-open)。
+        const stampNow = Date.now();
         for (const r of records) {
             if (!r.family)
                 r.family = familyForType(r.type);
+            stampValidity(r, stampNow);
         }
         // 起名必须在**追加事实源之前**：名字是文件身份键，进了 JSONL 才能跟记录一起重生。
         // 这批还没进库，所以只算名字不落库（persist=false），由下面的 upsert 一并写。
@@ -507,7 +519,9 @@ export class L1Store {
     async upsert(record) {
         if (!record.family)
             record.family = familyForType(record.type);
-        // merge 分支会继承胜方的 name；两边都没名字时在这里补上，别让新铸的行继续带空名。
+        // 写侧标注汇流口(与 appendNew 同口径):merge 分支会继承胜方的 name；
+        // 两边都没名字时在这里补上，别让新铸的行继续带空名。
+        stampValidity(record, Date.now());
         this.assignMissingNames([record], { persist: false });
         const vec = (await this.helper.batch([record.content]))[0];
         if (!this.db.upsertL1(record, vec)) {
@@ -585,8 +599,9 @@ export class L1Store {
         // **只清理确实处于退场态的记录**。这道复核必须在删除发生的地方(而不是调用方):
         // 否则任何调用方传一个 id 列表就能绕过软删、把活动记忆直接物理抹掉——
         // 那等于给"先导出后清理"留了一条硬删后门。
+        // 门1 解耦:判据与全仓同为 marker 单源 `isRetired`(不再拿 valid_to 当退场凭据)。
         const known = new Map(this.db.getL1ByIds(ids).map((r) => [r.id, r]));
-        const retiredIds = ids.filter((id) => known.get(id)?.validTo !== undefined);
+        const retiredIds = ids.filter((id) => { const r = known.get(id); return r !== undefined && isRetired(r); });
         return exportThenPurge(this.db, this.dataDir, retiredIds, reason, this.logger, new Date(), opts);
     }
     // ───────────────────────────────────────────────────────────────────────────
@@ -735,14 +750,35 @@ export class L1Store {
         const vecList = vecRaw ? this.db.searchL1Vector(vecRaw, candidateK, opts?.family, opts?.workspaceId) : [];
         // 第 3 路(图谱)仅在接线时**结构性存在**:未接线不占路数名额,故既有调用方
         // 仍走 2 路、得分与改动前逐位一致(见 findings.md §12.1 的路数语义)
-        const lanes = [ftsList, vecList];
+        const lanes = [['fts', ftsList], ['vec', vecList]];
         if (this.graphLaneProvider)
-            lanes.push(this.graphLane(query, candidateK, opts?.family, opts?.workspaceId));
+            lanes.push(['graph', await this.graphLane(query, candidateK, opts?.family, opts?.workspaceId)]);
         // 第 4 路(时效)在衰减开启时**结构性存在**;关掉衰减 = 该路不存在
         if (this.decayHalfLifeDays > 0)
-            lanes.push(this.recencyLane([...ftsList, ...vecList]));
-        const merged = rrfMerge(lanes, (h) => h.id);
-        return this.postProcess(this.applyDecay(merged.map(({ rrfScore, ...h }) => ({ ...h, score: normalizeRrf(rrfScore, lanes.length) }))), opts?.type, limit);
+            lanes.push(['recency', this.recencyLane([...ftsList, ...vecList])]);
+        const laneLists = lanes.map(([, list]) => list);
+        // 路归因(与融合并行,不改 rrfMerge 本体):id → 命中路集合,按路构造序
+        // 去重追加(fts→vec→graph→recency,确定性输出)。命中对象在下方 map 里
+        // 新建(不往变回路的列表元素上写),挂 lanes 后随 postProcess/applyDecay 透传。
+        const lanesById = new Map();
+        for (const [name, list] of lanes) {
+            for (const h of list) {
+                const arr = lanesById.get(h.id);
+                if (arr) {
+                    if (!arr.includes(name))
+                        arr.push(name);
+                }
+                else {
+                    lanesById.set(h.id, [name]);
+                }
+            }
+        }
+        const merged = rrfMerge(laneLists, (h) => h.id);
+        return this.postProcess(this.applyDecay(merged.map(({ rrfScore, ...h }) => ({
+            ...h,
+            lanes: lanesById.get(h.id),
+            score: normalizeRrf(rrfScore, laneLists.length),
+        }))), opts?.type, limit);
     }
     /**
      * §D 第 4 路(时效路,hybrid 专用):把候选池按 `applyDecayWeight` 加权后的
@@ -770,36 +806,37 @@ export class L1Store {
         return this.applyDecay(deduped);
     }
     /**
-     * §D 第 3 路(图谱路径,hybrid 专用):图谱命中 → `sourceRecordIds` 回链 →
-     * L1 记录,作为第 3 条**已排序**列表参与 RRF。
+     * §D 第 3 路(图谱路径,hybrid 专用):provider 给出回链记录 id 序(路内向量种子
+     * 并集 + 1-hop 边扩展在 provider 内完成),本缝只做点查回形 + family/scope 双闸,
+     * 作为第 3 条**已排序**列表参与 RRF。
      *
      * 为什么值得:图谱是按实体/关系组织的**可重建派生投影**,能召回词法与向量
      * 都命不中的记录(同义表述、关系可达)——这正是本路相对双路的增量。
      *
      * 三条边界:
      * - **异常降级**:图谱是派生投影,不得因它失败而拖垮主检索 → 记 warn、返回空路,
-     *   融合退回双路(路数随之降为 2,分数回到既有量纲);
-     * - **族隔离**:图谱节点已按族过滤,但其来源记录可能跨族 → 这里再按 `family`
-     *   过滤一次。宁可漏不可串(与档位隔离同源,§A 的 P0 关注点);
+     *   融合退回双路(路数随之降为 2,分数回到既有量纲);await 在 try 内——
+     *   provider 的 Promise reject 与同步 throw 同路径降级;
+     * - **族隔离**:图谱节点已按族过滤(含向量种子),但 1-hop 邻居与来源记录可能跨族
+     *   → 这里再按 `family` 过滤一次。宁可漏不可串(与档位隔离同源,§A 的 P0 关注点);
      * - **墓碑边界**:图谱行可能回链到已被删除的 L1 记录 → 取不到就跳过,
      *   不补空占位(占位会在 RRF 里凭空加分)。
      */
-    graphLane(query, limit, family, workspaceId) {
+    async graphLane(query, limit, family, workspaceId) {
         const provider = this.graphLaneProvider;
         if (!provider)
             return [];
-        let hits;
+        let ids;
         try {
-            hits = provider(query, limit, family);
+            ids = await provider(query, limit, family);
         }
         catch (err) {
             this.logger?.warn(`[memory] 图谱路检索失败,本轮退回双路: ${err instanceof Error ? err.message : String(err)}`);
             return [];
         }
-        const ids = graphHitRecordIds(hits);
         if (ids.length === 0)
             return [];
-        const byId = new Map(this.db.getL1ByIds(ids).map((r) => [r.id, r]));
+        const byId = new Map(this.db.getL1ByIds([...ids]).map((r) => [r.id, r]));
         const out = [];
         for (const id of ids) {
             const r = byId.get(id);

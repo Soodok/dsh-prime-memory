@@ -21,6 +21,7 @@ import { memoryTypeDirs, UNCLASSIFIED_DIR } from '../memory-types.js';
 import { deriveName } from '../util/md-name.js';
 import { normalizeContentMd } from '../util/md-normalize.js';
 import { sanitizeFilename } from './scenes.js';
+import { readSupersedeMarker } from './supersede.js';
 import type { MemoryLogger, MemoryRecord } from '../types.js';
 
 /**
@@ -157,15 +158,15 @@ function warnMissingWorkspace(logger: MemoryLogger | undefined, ws: string): voi
 }
 
 /**
- * 退场判据：与库侧同口径（`sqlite.ts` 的“`valid_to` 非空即退场”，与
- * `retiredL1Count`/`listRetiredL1` 一致）。
+ * 退场判据：与库侧同口径（门1 解耦后**只认 marker**，与 `supersede.isRetired`/
+ * `retiredL1Sql` 一致；valid_to 回归现实有效期，不再拿它判退场）。
  *
  * 为什么住在本文件：导出（要不要把文件放回非退场路径）与失效联动（后缀该不该带）
  * 两侧都得用同一个判据，否则“列表说它退了、文件却没后缀”会回来。放 `memory-md-disable.ts`
  * 会让 `memory-md-export.ts` 反向 import 它形成循环（那边已经 import 这边）。
  */
-export function isRetiredRecord(r: Pick<MemoryRecord, 'validTo'>): boolean {
-  return typeof r.validTo === 'number' && r.validTo > 0;
+export function isRetiredRecord(r: Pick<MemoryRecord, 'metadata'>): boolean {
+  return readSupersedeMarker(r.metadata) !== undefined;
 }
 
 /**
@@ -268,7 +269,8 @@ export function renderRecord(r: MdRecordInput): { relPath: string; text: string 
   // 「换了 id、正文没动」也误报被改。
   lines.push(fmLine('hash', contentHash(r.content)));
   // 退场标记只在真退场时写：不留 `retired: false` 这种噪声键（键集越稳，人越不容易改错）。
-  if (r.validTo !== undefined) lines.push(fmLine('retired', true));
+  // 判据走本文件的 `isRetiredRecord`（门1 解耦后只认 marker，与库侧同口径）。
+  if (isRetiredRecord(r)) lines.push(fmLine('retired', true));
   lines.push('---', '');
   // 正文过一道版式归一（P4.2）：无结构存量文本出口就是标准形状。归一是**幂等**的，
   // 所以不会把账本 `fileDigest` 每轮推得变一下（不幂等 = 反向同步永远判“文件被改过”）。

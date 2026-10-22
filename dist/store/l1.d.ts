@@ -1,5 +1,4 @@
 import type { L1Hit, MemoryFamily, MemoryLogger, MemoryRecord, RoomCount } from '../types.js';
-import type { GraphNodeSearchResult } from '../graph/types.js';
 import type { L1Receipt, ReceiptQuery } from './receipts.js';
 import type { ConflictClaimGroup, ConflictPair, ConflictRejected, ConflictResolution, ConflictType } from './conflicts.js';
 import { type SupersedeInfo } from './supersede.js';
@@ -9,11 +8,13 @@ import { type L1MetaLite, type MemoryDb } from './sqlite.js';
 import type { L1FileSyncHook } from './memory-md-sync.js';
 export type RecallStrategy = 'keyword' | 'embedding' | 'hybrid';
 /**
- * 图谱路提供者(§D 第 3 路):按查询返回图谱命中(已按 score 降序)。
+ * 图谱路提供者(§D 第 3 路):按查询返回图谱回链的 L1 记录 id 有序列
+ * (向量种子并集与 1-hop 边扩展在 provider 内完成,见 graph-store.searchLaneRecords)。
  * 抽成注入式而非直接读 `db.graphStore`,是为了给 hybrid 融合留一个可替换的测试缝,
- * 并让「未接线 = 恰为 2 路」成为默认行为(既有调用方零行为变化)。
+ * 并让「未接线 = 恰为 2 路」成为默认行为(既有调用方零行为变化)。允许返回 Promise
+ * 是给向量种子的 embed 查询(装配层惰性取嵌入源);异常由 graphLane 吞并降级。
  */
-export type GraphLaneProvider = (query: string, limit: number, family?: MemoryFamily) => readonly GraphNodeSearchResult[];
+export type GraphLaneProvider = (query: string, limit: number, family?: MemoryFamily) => readonly string[] | Promise<readonly string[]>;
 export interface L1SearchOptions {
     /** 按记忆类型精确过滤(后置过滤,官方做法)。 */
     type?: string;
@@ -251,6 +252,11 @@ export declare class L1Store {
     };
     /** 按 id 精确取记录(去重决策的版本号查询用,避免全表扫描)。 */
     getByIds(ids: string[]): MemoryRecord[];
+    /**
+     * 反向取代链(task_4.4,门3):返回"被 newId 取代"的退场记录 id。
+     * 走 MemoryDb 的 LIKE 全扫缝(百~千量级;阈值告警在那边)。
+     */
+    findSupersededTargets(newId: string): string[];
     /** 外部导入幂等 pre-check(轨3-P0):ext_key 命中已存在记录则返回其 id,否则 undefined。 */
     findIdByExtKey(extKey: string): string | undefined;
     /**
@@ -424,17 +430,19 @@ export declare class L1Store {
      */
     private recencyLane;
     /**
-     * §D 第 3 路(图谱路径,hybrid 专用):图谱命中 → `sourceRecordIds` 回链 →
-     * L1 记录,作为第 3 条**已排序**列表参与 RRF。
+     * §D 第 3 路(图谱路径,hybrid 专用):provider 给出回链记录 id 序(路内向量种子
+     * 并集 + 1-hop 边扩展在 provider 内完成),本缝只做点查回形 + family/scope 双闸,
+     * 作为第 3 条**已排序**列表参与 RRF。
      *
      * 为什么值得:图谱是按实体/关系组织的**可重建派生投影**,能召回词法与向量
      * 都命不中的记录(同义表述、关系可达)——这正是本路相对双路的增量。
      *
      * 三条边界:
      * - **异常降级**:图谱是派生投影,不得因它失败而拖垮主检索 → 记 warn、返回空路,
-     *   融合退回双路(路数随之降为 2,分数回到既有量纲);
-     * - **族隔离**:图谱节点已按族过滤,但其来源记录可能跨族 → 这里再按 `family`
-     *   过滤一次。宁可漏不可串(与档位隔离同源,§A 的 P0 关注点);
+     *   融合退回双路(路数随之降为 2,分数回到既有量纲);await 在 try 内——
+     *   provider 的 Promise reject 与同步 throw 同路径降级;
+     * - **族隔离**:图谱节点已按族过滤(含向量种子),但 1-hop 邻居与来源记录可能跨族
+     *   → 这里再按 `family` 过滤一次。宁可漏不可串(与档位隔离同源,§A 的 P0 关注点);
      * - **墓碑边界**:图谱行可能回链到已被删除的 L1 记录 → 取不到就跳过,
      *   不补空占位(占位会在 RRF 里凭空加分)。
      */

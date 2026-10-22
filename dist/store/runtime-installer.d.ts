@@ -36,8 +36,20 @@ export declare class RuntimeInstaller {
     private pkgJsonPath;
     /** 已就位版本(读 package.json;未安装返回 null)。 */
     installedVersion(): Promise<string | null>;
-    /** 是否就绪(版本精确匹配目标)。 */
+    /** 是否就绪(版本精确匹配目标 + sharp 平台原生件就位)。 */
     isReady(): Promise<boolean>;
+    /**
+     * 当前平台的 sharp 原生件候选路径(测试注入缝与单测共用):
+     * 绑定 .node 在 @img/sharp-<os>-<arch>/lib/,libvips 在 @img/sharp-libvips-<os>-<arch>/lib/。
+     * linux 有 glibc/musl 双候选;libvips 库文件名含版本串(仅 win 的 libvips-42.dll 稳定),
+     * 故统一按 lib 目录内存在 libvips* 文件判定,不钉文件名。
+     */
+    sharpNativeCandidates(): Array<{
+        binding: string;
+        libvipsDir: string;
+    }>;
+    /** 任一候选同时具备绑定 .node 与 libvips 库文件 → true(ENOENT/读取失败均计缺失)。 */
+    private sharpNativePresent;
     /**
      * 确保运行时就位:版本匹配直接就绪;否则安装(忙时并 await 同一次任务)。
      * 返回是否就绪(失败/取消返回 false 并在 progress.error 说明原因)。

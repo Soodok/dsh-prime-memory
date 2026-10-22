@@ -1,5 +1,40 @@
 # 更新日志（Changelog）
 
+## [0.26.6] — 2026-10-22
+
+### 新增
+
+- **图谱确定性写面（计划 graph-write-plane）**：写面从"add/delete/import"补齐"改、重投、迁"三语义。
+  - `memory_update`（高权限）：修订一条既有记忆——就地产新版本（version+1，新 id），旧版经退场汇流口
+    `superseded` 软删（可恢复），随后对 [旧,新] 强制重投让图谱边跟随；extKey 不随血缘走（幂等索引由旧行占位）。
+  - `memory_reproject`（需 `graph.enabled`）：抹掉"已按当前版本投影"凭证、按高优先级重新入队——绕开
+    `projector_version` 永久跳过；幂等（在途任务不堆重）。手加/导入的记忆长期不出现在图谱里的纠正通道。
+  - `memory_migrate_relation`（高权限）：源导式关系迁移——硬校验来源全部"现存未退场"（判据单源
+    `classifyValidity`）→ 显式边提案经 `applyGraphProjection` 纯函数校验落库（同 (起点,关系) 换目标自动闭旧边
+    出新边）→ 新增承载新关系的 L1 源记录留可回溯根据（metadata `proposal_source='tool'` + 决策凭证）。
+    全程不提供、也不会提供绕过投影直写 `graph_*` 表的入口（零无源事实不变量）。
+  - **非蒸馏写入自动入投影队**：`memory_add`/`memory_import` 与蒸馏产出同优先级（`GRAPH_PRIORITY_NEW`）进队——
+    闭合"只有蒸馏才投影"的旁路缺口（手加记录 projected=None 的真根因）。图谱向量路缺陷同步修复：
+    嵌入启用时投影收尾为落库的 active 节点补写 `graph_node_vec`（旧版本该调用生产零落点、全库 0 行）。
+- **记忆时效三档与工具反查（计划 expiry-tiering，ADR-0022）**：退场方式/有效性定性/持续性/现实有效期
+  四轴正交，六态（current/historical/expired/expired_suspect/superseded/retired）判据单源 `classifyValidity`（查询期谓词，
+  不落库翻态）；`dsh_validity` metadata 标注落写侧汇流口（证据链 activity_*→evidence、工具直填→llm_inferred、
+  兜底→unknown）。门2 灰度闸 `validity.tieringEnabled`（默认关）：开时被动注入剔 `expired`、`expired_suspect`
+  保留带"疑似失效"标注，召回卡显示 `validity`/`validUntil`。门3：`memory_search` 新增 `include_expired` /
+  `as_of`（有效期回放，不复活退场）/ `follow_supersede`（顺/逆取代链）三参数，全缺省时输出与改前逐字一致。
+  存量标注由零 LLM 的 `validity-backfill` 低频补齐（启动 3 分钟首轮、6h 续跑；改过的记录顺手重投图谱保鲜）。
+
+### 修复
+
+- **门1 解耦：合法历史 valid_to 不再被静默遮蔽**（bugfix，不受灰度门控）：退场判据全仓改为只认取代标记
+  （`retiredL1Sql`/`isRetired`/md 投射层同口径一对）；`retire()` 不再闭合 valid_to，它回归纯现实有效期。
+  升版后首启自动做一次 FTS 全量回灌收敛误遮蔽历史（`gate1.retire-decoupled.v1` 戳幂等，日志报回灌/跳过数；
+  向量面由增量重嵌自动补齐或设置页手动重建加速）；面板"已退场"区/删除线/计数随之只认真退场行。
+- **退场→图谱退役传播补腿（R9）**：软删/取代后按"来源是否全部退场态"重算清扫——全退场的 active/disputed
+  节点·边标 archived 墓碑（保留行 expand 可见），来源全部复活（restore）则拉回 active；多源支撑的节点不误杀。
+- **md 同步退场收敛**：`.disable` 回灌的"已退场"判据换 marker 单源，修复同批翻转波及的"第二轮重复计数、
+  永不收敛 same"。
+
 ## 0.26.2 (2026-10-18)
 
 - hosts: 追加 0.2.1-rc.2 声明面枚举（34/34 @deepseek-ai/* 宿主 peer 逐包 npm 实测 rc.2 在版；本插件不触 ctx.web provider 与 conversation.input.model.label 槽，代码零改动，纯元数据发版；农场 rc.2 格挂账待命）
@@ -21,6 +56,10 @@
   - **建议状态(`longtask-hint-get`)以纯端点提供**:判定 = 上下文占用达 `contextThresholdPct` 或 todo 漂移达 `driftThreshold`(部署配置可调);配合 `longtask-compress-tail` 作手动压缩入口。
   - **撤下浮动球 UI(`client/src/longtask-fab.ts`;beta.1 起曾随包发布)**:悬浮建议面板的归属本在 context-compression 侧(「建议启动压缩」是其领域),pm 属误载——2026-10-02 用户裁定撤下。撤下不违座位契约(settings.section 恰一个 + 输入栏 pill,body 单例不占座位),但全应用级 overlay 会与其他插件的悬浮 UI 抢占屏幕角落;长任务开关与手动压缩入口待长任务定版时落记忆设置分节。
   - **`session-mode-set` 的 `mode` 转为可选**:与 `longTask` 二选一必传——纯切长任务开关不再被迫发送档位(旧客户端恒传 mode,行为不变)。响应 `mode` 改回当前生效值。
+
+### 修复
+
+- **嵌入推理子进程隔离,根治 libvips DLL 撞名(`fix #11`)**:旧路径把 transformers 推理放在 worker_threads 子线程,与宿主 Electron 同进程——插件 runtime 的 sharp/libvips 与宿主 sharp/libvips 同名不同路径时在 OS LoadLibrary 层冲突(切大模型 bge-small→bge-m3 时崩溃)。现在默认改走 `child_process.fork()` 独立子进程(`resources/embedding-child.cjs`,主线程侧 `RealChildChannel` 协议代理),DLL 表物理隔离;配置经 env `DSH_EMBED_CFG` 传递,向量经 number[][] 序列化回传(512d×32 条 ≈64KB,<5ms,实测 batch32 含序列化 91ms、单条中位数 5ms),零拷贝 transfer 降级为可忽略开销。旧 `RealWorkerChannel` 与 `embedding-worker.cjs` 保留一版作回滚逃生门(`opts.useWorker=true`,下版删);`RuntimeInstaller.isReady()` 兼验 sharp 平台原生件就位(--ignore-scripts 半装状态检出即触发重装)。真机 worker↔child 32 对向量 cosine=1.0(IEEE754 float32 往返无损)。用户无感知,非 breaking。
 
 ## [0.26.1] — 2026-10-15
 

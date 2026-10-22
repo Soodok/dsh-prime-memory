@@ -1,4 +1,5 @@
 import { isRetired } from '../store/supersede.js';
+import { stateOfRecord } from '../store/validity.js';
 export const MEMORY_RECALL_KEY = 'memoryRecall';
 /** view 最多透出条数（最近在上；超出部分只计入 count，防 wire 体量失控）。 */
 export const RECALL_VIEW_CAP = 20;
@@ -43,6 +44,7 @@ export const stateSchema = {
     },
 };
 /** view 校验（出网前调用；未知键容忍，同 slots 投影的语义边界）。 */
+const VALIDITY_STATES_VIEW = ['current', 'historical', 'expired', 'expired_suspect', 'superseded', 'retired'];
 export const viewSchema = {
     parse: (value) => {
         const what = 'memoryRecall.view';
@@ -73,6 +75,12 @@ export const viewSchema = {
                 invalid(at, 'retired 只能是 true 或缺席');
             if (item.superseded !== undefined && item.superseded !== true)
                 invalid(at, 'superseded 只能是 true 或缺席');
+            // 时效标注(task_3.5)：缺席=旧帧容忍；有则必须六态枚举内，validUntil 必字符串。
+            if (item.validity !== undefined && VALIDITY_STATES_VIEW.indexOf(item.validity) < 0) {
+                invalid(at, 'validity 必须是六态之一或缺席');
+            }
+            if (item.validUntil !== undefined)
+                requireString(item.validUntil, at, 'validUntil');
         });
         return value;
     },
@@ -150,6 +158,11 @@ function makeView(state, l1, feedback) {
             ? r.metadata?.dsh_usage_scenario
             : undefined;
         const rating = feedback?.lastOf(id);
+        // 时效标注(task_3.5)：只对"过时两档"写键——current/historical 不必让人看见时效噪声；
+        // 旧帧无此键，读侧缺席即活跃。判定现算（stateOfRecord），不吃落库快照；
+        // 未退场行才会真判过时两档（退场行由 retired 键表达，validity 不再叠加）。
+        const vState = isRetired(r) ? undefined : stateOfRecord(r, Date.now());
+        const showValidity = vState === 'expired' || vState === 'expired_suspect';
         items.push({
             id: r.id,
             type: r.type,
@@ -162,6 +175,7 @@ function makeView(state, l1, feedback) {
             ...(isRetired(r) ? { retired: true } : {}),
             // 已被摘要取代：正文已不在上下文里。与 retired 正交，两者可同时在。
             ...(superseded.has(id) ? { superseded: true } : {}),
+            ...(showValidity ? { validity: vState, validUntil: r.validTo === undefined ? '' : new Date(r.validTo).toISOString() } : {}),
         });
     }
     const next = { rev: state.rev, sessionId: state.sessionId, count: state.ids.length, items };

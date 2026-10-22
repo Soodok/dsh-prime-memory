@@ -183,7 +183,7 @@ export declare function hitToUiRecord(r: {
     scope?: string;
     /** 归属工作区路径（仅 scope='workspace' 时非空）。 */
     workspaceId?: string;
-    /** 退场判据:`valid_to` 闭合即已退场(软删)。由 `listL1`/`getByIds` 透传。 */
+    /** 退场判据:与库侧同源（门1 解耦后 marker 单源，`isRetired`）。由 `listL1`/`getByIds` 透传。 */
     validTo?: number;
 }, extra?: {
     agingWeight?: number | null;

@@ -4,10 +4,12 @@ export const GRAPH_NODE_TYPE_SET = new Set(GRAPH_NODE_TYPES);
 /** 记录生命周期四态(节点/fact/边通用)。 */
 export const GRAPH_STATUSES = ['active', 'superseded', 'disputed', 'archived'];
 export const GRAPH_STATUS_SET = new Set(GRAPH_STATUSES);
+/** 因果边四词单源(投影提示词枚举、校验与面板预览加权共用——防两处词表漂移)。 */
+export const GRAPH_CAUSAL_RELATIONS = ['导致', '因为', '修复了', '取代'];
 /** 规范中文关系词(提示词给枚举;校验不做白名单——关系是开放词表,只做长度钳制)。
- *  后四个为因果边(导致/因为/修复了/取代)——让"前因后果"跨记录成链;仅当 graph.enabled 时
+ *  尾部即因果集 GRAPH_CAUSAL_RELATIONS——让"前因后果"跨记录成链;仅当 graph.enabled 时
  *  才参与投影(整块图谱默认关,不碰非图谱用户的蒸馏产物)。 */
-export const GRAPH_RELATION_WORDS = ['使用', '属于', '创建', '参与', '贡献', '依赖', '位于', '相关', '导致', '因为', '修复了', '取代'];
+export const GRAPH_RELATION_WORDS = ['使用', '属于', '创建', '参与', '贡献', '依赖', '位于', '相关', ...GRAPH_CAUSAL_RELATIONS];
 /** 提案字段上限(校验侧截断/丢弃与提示词内插共用同一组数字)。 */
 export const GRAPH_CAP = {
     /** 提案内临时引用(ref)长度。 */

@@ -22,8 +22,11 @@ import type { GraphStore } from '../store/graph-store.js';
 import type { DrscClient } from '../clients/drsc.js';
 import { drscRoleOf } from '../clients/drsc.js';
 import type { L1Store } from '../store/l1.js';
-import { RECEIPTS_QUERY_LIMIT_MAX, dimensionOf, toReceiptView } from '../store/receipts.js';
+import { RECEIPTS_QUERY_LIMIT_MAX, dimensionOf, toReceiptView, buildReceipts, newRunId } from '../store/receipts.js';
 import type { ReceiptQuery } from '../store/receipts.js';
+import { persistReceiptsSafely } from '../store/receipts.js';
+import { classifyValidity, isExitedState, passesValidityGate, stampValidity, stateOfRecord, stripValidity, validToSourceOf } from '../store/validity.js';
+import { isRetired, readSupersedeMarker, stripSupersedeMarker } from '../store/supersede.js';
 import { listConflictPairs, renderConflictResolution, renderConflicts, resolveConflictPair } from '../conflict-service.js';
 import type { ConflictsView } from '../conflict-service.js';
 import type { PersonaStore } from '../store/persona.js';
@@ -93,6 +96,16 @@ export interface ToolSealRegistry {
   reg(group: string, make: () => () => void): void;
 }
 
+/**
+ * 确定性写面的钩子(graph-write-plane R2/R3,由 index.ts 注入 runner 的公开方法):
+ * 工具面不直接握 runner,只拿这两个闭包——入队钩子与强制重投;缺席时写面工具
+ * 显式拒答(不开静默半功能:模型看到"已写入图谱会跟随"而实际没入队,比拒答更糟)。
+ */
+export interface GraphWriteHooks {
+  enqueueGraph: (recordIds: readonly string[]) => void;
+  reprojectGraph: (recordIds: readonly string[]) => { queued: number; jobIds: string[] };
+}
+
 export function registerMemoryTools(
   ctx: Context,
   cfg: MemoryConfig,
@@ -114,6 +127,8 @@ export function registerMemoryTools(
   ruminate?: RuminateController,
   /** Room 注册表(分类管理 beta.4;缺省 = memory_room_admin 返回未装配提示)。 */
   roomRegistry?: RoomRegistryStore,
+  /** 图谱写面钩子(确定性写面计划;缺省 = update/reproject/migrate 的图谱跟随不可用)。 */
+  graphWrite?: GraphWriteHooks,
 ): ToolSealRegistry {
   if (!cfg.tools) return { reg: () => {} };
 
@@ -242,11 +257,15 @@ export function registerMemoryTools(
     defineTool({
       name: 'memory_search',
       description:
-        '搜索结构化记忆(L1 原子记忆)。返回与查询相关的记忆片段:用户偏好、历史事件、项目事实、任务、规则、工作方法等。',
+        '搜索结构化记忆(L1 原子记忆)。返回与查询相关的记忆片段:用户偏好、历史事件、项目事实、任务、规则、工作方法等。' +
+        '默认只给仍然有效的记忆;可显式反查:include_expired 放行已过期项,as_of 按有效期回放历史时刻,follow_supersede 顺取代链取后继/反查被取代者。',
       parameters: {
         query: { type: 'string', required: true, description: '搜索查询文本(自然语言)' },
         limit: { type: 'number', description: '最大返回条数(默认 5)' },
         type: { type: 'string', description: `按记忆类型过滤(词表 ${typeEnumSep('/')})` },
+        include_expired: { type: 'boolean', description: '放行当前已过期(valid_to 可信地闭合)的记忆;缺省 false' },
+        as_of: { type: 'string', description: '有效期回放(ISO 8601):返回该时刻成立的记忆;退场的不复活' },
+        follow_supersede: { type: 'number', description: '顺取代链向前取 N 代后继(0..5,缺省 0);同时反查每条命中的"被谁取代"链' },
       },
       output: {
         schema: {
@@ -262,6 +281,19 @@ export function registerMemoryTools(
                   type: { type: 'string' },
                   scene_name: { type: 'string' },
                   score: { type: 'number' },
+                  // 门3 反查字段(task_4.5):仅在任一参数(include_expired/as_of/follow_supersede)
+                  // 显式给出时才写键;默认路径全部缺席(输出与改前逐字一致)。
+                  state: { type: 'string', description: '有效性六态(current/historical/expired/expired_suspect/…)' },
+                  valid_from: { type: 'string', description: '有效期起(ISO)' },
+                  valid_to: { type: 'string', description: '有效期止(ISO;未闭合缺席)' },
+                  valid_to_source: { type: 'string', description: 'valid_to 证据等级(evidence/llm_inferred/fallback_now/unknown)' },
+                  superseded_by: { type: 'string', description: '取代链上直接后继 id' },
+                  supersede_chain: { type: 'array', items: { type: 'string' }, description: '向后代展开的后继 id 链(follow_supersede 时)' },
+                  superseded_by_me: { type: 'array', items: { type: 'string' }, description: '反查:活跃记录中被本条取代的 id 链(follow_supersede 时)' },
+                  reason: { type: 'string', description: '退场/取代原因(marker.reason,仅退场行)' },
+                  verdict: { type: 'string', description: '冲突裁决结论(仅 reason=conflict)' },
+                  pair_id: { type: 'string', description: '冲突对 id(仅 reason=conflict)' },
+                  conflict_type: { type: 'string', description: '冲突类型轴(仅 reason=conflict)' },
                 },
                 additionalProperties: false,
               },
@@ -297,14 +329,78 @@ export function registerMemoryTools(
             crossRepoMultiplier: cfg.recall.scopeFence?.crossRepoMultiplier ?? 0.2,
           });
         }
+        // ── 门3 时效反查(expiry-tiering task_4.2~4.5):出口按可见性谓词过滤。──
+        // 默认(三参数全缺省)剔可信 expired——与门1 前"索引天然遮蔽 expired"的输出
+        // 逐字等价(门1/门3 配套的意义;谓词单源在 validity.passesValidityGate)。
+        const asOfRaw = typeof args.as_of === 'string' ? Date.parse(args.as_of) : Number.NaN;
+        const asOf = Number.isFinite(asOfRaw) && asOfRaw > 0 ? asOfRaw : undefined;
+        const follow = Math.min(Math.max(Number(args.follow_supersede) || 0, 0), 5);
+        const explicit = args.include_expired === true || asOf !== undefined || follow > 0;
+        const nowMs = Date.now();
+        const recById = new Map(stores.l1.getByIds(items.map((h) => h.id)).map((r) => [r.id, r]));
+        const kept = items.filter((h) => {
+          const r = recById.get(h.id);
+          // 行缺失 fail-open(索引/主表短暂不一致时宁给结果不丢行)。
+          if (!r) return true;
+          return passesValidityGate(r, nowMs, { includeExpired: args.include_expired === true, asOf });
+        });
+        if (!explicit) {
+          return {
+            items: kept.map((h) => ({
+              id: h.id,
+              content: h.content,
+              type: h.type,
+              scene_name: h.scene_name,
+              score: Math.round(h.score * 100) / 100,
+            })),
+          };
+        }
+        // 显式反查时附带状态字段(task_4.5):面板/模型据此看清"为什么这条在这里"。
         return {
-          items: items.map((h) => ({
-            id: h.id,
-            content: h.content,
-            type: h.type,
-            scene_name: h.scene_name,
-            score: Math.round(h.score * 100) / 100,
-          })),
+          items: kept.map((h) => {
+            const r = recById.get(h.id);
+            const mark = r ? readSupersedeMarker(r.metadata) : undefined;
+            const row: Record<string, unknown> = {
+              id: h.id,
+              content: h.content,
+              type: h.type,
+              scene_name: h.scene_name,
+              score: Math.round(h.score * 100) / 100,
+            };
+            if (!r) return row;
+            row.state = stateOfRecord(r, nowMs);
+            if (r.validFrom !== undefined) row.valid_from = new Date(r.validFrom).toISOString();
+            if (r.validTo !== undefined) row.valid_to = new Date(r.validTo).toISOString();
+            row.valid_to_source = validToSourceOf(r.metadata);
+            // task_4.3 正向取代链:直接后继(marker.by)→ 按 id 取回,深度 follow 循环;
+            // 退场中继也算一环(链尾可能还在退场行上,读侧自己判活)。
+            if (follow > 0) {
+              const chain: string[] = [];
+              // 后继入口的 marker 在被取代的**旧行**上;命中行自身未被取代时无链。
+              // seen 集防脏数据成环(by 互指)把循环绞死——链语义本身就该是无环的。
+              const seenChain = new Set<string>();
+              let next = mark?.by;
+              while (next !== undefined && chain.length < follow && !seenChain.has(next)) {
+                seenChain.add(next);
+                chain.push(next);
+                const nr = stores.l1.getByIds([next])[0];
+                if (!nr) break;
+                next = readSupersedeMarker(nr.metadata)?.by;
+              }
+              if (mark?.by) row.superseded_by = mark.by;
+              if (chain.length > 0) row.supersede_chain = chain;
+              // task_4.4 反向链:"谁取代了谁"——活跃行里 by 指向本 id 的(全扫 LIKE,百~千量级)。
+              const back = stores.l1.findSupersededTargets(r.id);
+              if (back.length > 0) row.superseded_by_me = back;
+            }
+            if (mark) {
+              row.reason = mark.reason;
+              if (mark.verdict) row.verdict = mark.verdict;
+              if (mark.pairId) row.pair_id = mark.pairId;
+              if (mark.conflictType) row.conflict_type = mark.conflictType;
+            }
+            return row;
+          }),
         };
       },
     }),
@@ -659,7 +755,8 @@ export function registerMemoryTools(
     if (item.conflict === true) metadata.conflict = true;
     if (item.rewritten === true) metadata.rewritten = true;
     const priority = Number(item.priority);
-    return {
+    // valid_to 由模型/调用方经工具面直填 → 证据等级 `llm_inferred`(task_2.5 的 LLM 直填分支)。
+    const rec: MemoryRecord = {
       id: newMemId(),
       content,
       type,
@@ -679,6 +776,8 @@ export function registerMemoryTools(
       ...(persistence !== undefined ? { persistence } : {}),
       ...(sourceId && sourceId.trim() ? { extKey: computeExtKey(sourceId.trim(), item, content) } : {}),
     };
+    stampValidity(rec, now, rec.validTo !== undefined ? 'llm_inferred' : undefined);
+    return rec;
   }
 
   /** 时间轴/溯源字段的可选入参(两个写工具共用同一形状)。 */
@@ -742,6 +841,9 @@ export function registerMemoryTools(
         applyManualRedaction(record, cfg, logger);
         await stores.l1.appendNew([record]);
         // 新增的投射落盘由 `appendNew` 里的 store 钩子承接（写删对称，这里不双写）。
+        // 写面 R2:非蒸馏写入也进投影队(与 distill 同源同优先级),闭合
+        // "只有蒸馏才投影"的旁路缺口——用户手加记录长期 projected=None 的真根因。
+        graphWrite?.enqueueGraph([record.id]);
         logger.info(
           `[memory] 高权限写入记忆(${record.type}${record.metadata?.hall ? '/' + String(record.metadata.hall) : ''},时间轴 ${record.persistence ?? '?'}):${record.content.slice(0, 120)}`,
         );
@@ -876,6 +978,8 @@ export function registerMemoryTools(
           records.push(record);
         });
         if (records.length > 0) await stores.l1.appendNew(records); // 同上：批量导入也由钩子上盘
+        // 写面 R2:批量导入同样进投影队(同一钩子,不另一套优先级/去重)。
+        if (records.length > 0) graphWrite?.enqueueGraph(records.map((r) => r.id));
         logger.info(
           `[memory] 批量导入 ${records.length} 条(幂等跳过 ${deduped} 条,场景 ${scene}${sourceId ? `,来源 ${sourceId}` : ''})`,
         );
@@ -956,6 +1060,90 @@ export function registerMemoryTools(
         logger.info(`[memory] 高权限退场(软删)记忆 ${n} 条(${ids.join('，')})`);
         // 投射文件跟随不在这里点火：`l1.retire()` 是汇流口，钩子在那里（`store/memory-md-sync.ts`）。
         return { deleted: n, ids };
+      },
+    }),
+  ));
+
+  // memory_update:一等"改一条 L1"工具(graph-write-plane R1/G-update)。
+  //
+  // 形态是"新版本 + 旧版本 supersede 退场",不是物理覆写:JSONL 事实源 append-only,
+  // 旧行经退场汇流口软删(可 restore),退场传播顺带把"只靠旧源支撑"的图谱边标墓碑,
+  // 再对 [旧,新] 强制重投让边跟随——全程复用既有原语,不新造退场通道。
+  reg('mutate', () => ctx.tools.register(
+    defineTool({
+      name: 'memory_update',
+      description:
+        '修订一条既有记忆(L1):就地产新版本,旧版本自动退场(软删,可在记忆列表恢复),图谱跟随重投。需高权限模式开启。' +
+        '与 memory_add 的区分:改"已知 record_id 的那条"用它;新事实才用 add。不是物理删除——旧行保留。',
+      parameters: {
+        record_id: { type: 'string', required: true, description: '要修订的记忆 record_id(memory_search 返回的 id)' },
+        content: { type: 'string', required: true, description: '修订后的完整内容(一句话事实,语义完整)' },
+        ...writeFields,
+        scene: { type: 'string', description: '归属场景名(缺省沿用旧记录)' },
+        priority: { type: 'number', description: '优先级 0-100(缺省沿用旧记录)' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: '新版本记录 id' },
+            retired_id: { type: 'string', description: '被取代退场的旧 id' },
+            notice: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        render: (_args, value) => [
+          { type: 'text', text: value.notice ?? `已修订记忆,新版本 ${value.id ?? ''}(旧版 ${value.retired_id ?? ''} 已退场可恢复)` },
+        ],
+      },
+      execute: async (args) => {
+        if (!live.get().memoryMutate) return { notice: MUTATE_OFF_NOTICE };
+        const oldId = String(args.record_id ?? '').trim();
+        const content = String(args.content ?? '').trim();
+        if (!oldId || !content) return { notice: 'record_id 与 content 都必填,未修订' };
+        const old = stores.l1.getByIds([oldId])[0];
+        if (!old) return { notice: `记录 ${oldId} 不存在,未修订(可先用 memory_search 定位 id)` };
+        // 已退场的行不该被"修订复活"——那是 restore 的语义,两条路径不串。
+        if (isRetired(old)) return { notice: `记录 ${oldId} 已退场(软删态),请先在记忆列表恢复后再修订` };
+        // 旧值 → WriteItem 的回映(未被覆盖的字段原样带走);再经 buildRecord 同一装配,
+        // 时间轴/族判定/降级台账与 add/import 完全同源,不再第二套写法。
+        const item: WriteItem = {
+          content,
+          type: typeof args.type === 'string' && args.type.trim() ? args.type : old.type,
+          hall: typeof args.hall === 'string' ? args.hall : (typeof old.metadata?.hall === 'string' ? old.metadata.hall : undefined),
+          persistence: typeof args.persistence === 'string' ? args.persistence : old.persistence,
+          valid_from: typeof args.valid_from === 'string' ? args.valid_from : (old.validFrom ? new Date(old.validFrom).toISOString() : undefined),
+          valid_to: typeof args.valid_to === 'string' ? args.valid_to : (old.validTo ? new Date(old.validTo).toISOString() : undefined),
+          created_at: new Date(old.createdAt).toISOString(), // 记录时间保持旧值(血缘延续),updated_at 缺省=当下
+          origin: typeof args.origin === 'string' && args.origin.trim() ? args.origin : (typeof old.metadata?.origin === 'string' ? old.metadata.origin : undefined),
+          conflict: typeof args.conflict === 'boolean' ? args.conflict : (old.metadata?.conflict === true ? true : undefined),
+          rewritten: typeof args.rewritten === 'boolean' ? args.rewritten : undefined,
+          priority: typeof args.priority === 'number' ? args.priority : old.priority,
+          dedupe_key: undefined,
+        };
+        const scene =
+          typeof args.scene === 'string' && args.scene.trim() ? args.scene.trim().slice(0, 120) : old.scene_name;
+        const now = Date.now();
+        const newRecord = buildRecord(item, scene, now, old.workspaceId || undefined);
+        newRecord.version = (old.version ?? 0) + 1;
+        // extKey **不**随血缘走(刻意为之):l1_records 对非空 ext_key 建了**部分唯一索引**,
+        // 旧行退场后仍长期占位——新行同键会直接撞 UNIQUE 静默丢写。幂等预检
+        // (findIdByExtKey)命中退场旧行即跳过重导,重复累积已经被挡住;若旧行将来
+        // 被物理 purge,同来源重导会重新落一条——那是"恢复默认"而非"静默重复",可接受。
+        // 旧 metadata 的其他键(锚点/翼等溯源信息)原样带走;退场/有效性两把保留键
+        // 属于旧行的状态,不带进新行(新行未退场,状态由当前事实重算)。
+        const carried = stripValidity(stripSupersedeMarker(old.metadata ?? {}));
+        newRecord.metadata = { ...carried, ...newRecord.metadata };
+        applyManualRedaction(newRecord, cfg, logger);
+        // 依照 spec:先退场旧行(汇流口会触发图谱退役传播),再写新行进投影队。
+        const retiredN = stores.l1.retire([oldId], { at: new Date(now).toISOString(), reason: 'superseded', by: newRecord.id });
+        if (retiredN === 0) return { notice: `记录 ${oldId} 退场失败(并发已处理或不可用),未写入新版` };
+        await stores.l1.appendNew([newRecord]);
+        // 图谱跟随:入队 + 强制重投 [旧,新](旧源的边标墓碑,新源的边重投产出)。
+        graphWrite?.enqueueGraph([oldId, newRecord.id]);
+        graphWrite?.reprojectGraph([oldId, newRecord.id]);
+        logger.info(`[memory] 高权限修订记忆:v${newRecord.version} ${newRecord.id} ← ${oldId}(${newRecord.content.slice(0, 120)})`);
+        return { id: newRecord.id, retired_id: oldId };
       },
     }),
   ));
@@ -1080,6 +1268,203 @@ export function registerMemoryTools(
         }
         lines.push('', `来源记忆: ${node.sourceRecordIds.join('、') || '(无)'}`);
         return { node: lines.join('\n') };
+      },
+    }),
+  ));
+
+  // memory_reproject:强制重投入口(graph-write-plane R3/G-reproject 工具化)。
+  // 纠正通道:改完 L1 想让图谱跟随,走"删凭证 + 高优入队",不再需要人肉 SQL。
+  reg('graph', () => ctx.tools.register(
+    defineTool({
+      name: 'memory_reproject',
+      description:
+        '强制把指定 L1 记录重新投影进知识图谱:抹掉"已投影"凭证、按高优先级入队,让图谱跟随最新内容。' +
+        '幂等(在途任务不堆重);不直写图表——节点/边仍由确定性投影管线产出。手加/导入的记忆长期不出现在图谱里时,用它补投影。',
+      parameters: {
+        record_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          required: true,
+          description: '待重投的 record_id 列表(上限 500;不存在的 id 会被跳过并回报)',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: {
+            queued: { type: 'number', description: '实际新建的投影作业数' },
+            job_ids: { type: 'array', items: { type: 'string' } },
+            skipped_ids: { type: 'array', items: { type: 'string' }, description: '不在 L1 主表里的 id' },
+            notice: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        render: (_args, value) => [
+          {
+            type: 'text',
+            text:
+              value.notice ??
+              `已入队 ${value.queued ?? 0} 个重投作业${value.skipped_ids?.length ? `(跳过不存在 ${value.skipped_ids.length} 条)` : ''}`,
+          },
+        ],
+      },
+      execute: async (args) => {
+        const graph = stores.graph;
+        if (!graph || !cfg.graph?.enabled) return { queued: 0, job_ids: [], skipped_ids: [], notice: GRAPH_OFF_NOTICE };
+        if (!graphWrite) return { queued: 0, job_ids: [], skipped_ids: [], notice: '图谱写面未接线(runner 未装配),无法入队。' };
+        const ids = [...new Set((Array.isArray(args.record_ids) ? args.record_ids : [])
+          .map((x) => String(x ?? '').trim())
+          .filter((x) => x.length > 0 && x.length <= 200))].slice(0, 500);
+        if (ids.length === 0) return { queued: 0, job_ids: [], skipped_ids: [], notice: 'record_ids 为空,未入队' };
+        // 预筛"不存在的 id":给不存在 id 入队只会堆一条"来源已全部删除"的 dead job,
+        // 噪声且掩盖真问题;存在性在此判,重投本身仍由 forceReprojectRecord 的 PK 去重兜。
+        const alive = new Set(stores.l1.getByIds(ids).map((r) => r.id));
+        const kept = ids.filter((id) => alive.has(id));
+        const skipped = ids.filter((id) => !alive.has(id));
+        if (kept.length === 0) return { queued: 0, job_ids: [], skipped_ids: skipped, notice: '所给 id 均不在 L1 主表,未入队' };
+        const r = graphWrite.reprojectGraph(kept);
+        logger.info(`[memory] 强制重投:${kept.length} 条记录 → ${r.queued} 个作业(跳过不存在 ${skipped.length} 条)`);
+        return { queued: r.queued, job_ids: r.jobIds, skipped_ids: skipped };
+      },
+    }),
+  ));
+
+  // memory_migrate_relation:迁移关系·源导(graph-write-plane R4/G-writeplane)。
+  //
+  // 两步语义:① 确定性兜底——显式边提案经 `applyRelationProposal`(即
+  // applyGraphProjection 纯函数 + validSources 硬校验)落库,同 (from,relation) 换目标
+  // 闭旧边、出新边;② 源导主路——新增一条承载新关系的 L1 源记录(可回溯的根据),
+  // 只对它重投。刻意**不**把旧源记录拉进重投批:旧源文本仍描述旧关系,重投会把刚迁移
+  // 的边翻回去("内容即真相");要连旧文本一起改,配合 memory_update 逐条修订。
+  // 全程无裸 SQL:不新增、也不可能经由本工具绕过投影直写 graph 表(R5)。
+  reg('mutate', () => ctx.tools.register(
+    defineTool({
+      name: 'memory_migrate_relation',
+      description:
+        '把图谱实体的关系从旧目标迁移到新目标(源导):校验来源记忆均存在且未退场 → 确定性闭旧边/出新边 → 新增一条承载新关系的 L1 源记录并触发重投。' +
+        '需高权限模式开启。本工具绝不直写图表(所有边变动经确定性投影校验落库)。',
+      parameters: {
+        from_node_id: { type: 'string', required: true, description: '起点实体节点 id(memory_search_graph 可得)' },
+        relation: { type: 'string', required: true, description: '关系词(如 owns/works_at/caused)' },
+        old_to_node_id: { type: 'string', required: true, description: '旧目标节点 id(将被闭边;先 expand 确认边存在)' },
+        new_to_node_id: { type: 'string', required: true, description: '新目标节点 id' },
+        source_record_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          required: true,
+          description: '承载该关系变更的来源记忆 id 列表(非空且均现存未退场——零无源事实不变量)',
+        },
+        content: { type: 'string', description: '源记录文本(缺省自动拼"<起点> <关系> <新目标>")' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: {
+            carrier_id: { type: 'string', description: '新增的源记录 id(关系变更的可回溯根据)' },
+            edge_ids: { type: 'array', items: { type: 'string' }, description: '落库的 active 边 id' },
+            closed_edge_ids: { type: 'array', items: { type: 'string' }, description: '被确定性闭合(superseded)的旧边 id' },
+            queued: { type: 'number', description: '为源记录入队的重投作业数' },
+            notice: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        render: (_args, value) => [
+          {
+            type: 'text',
+            text:
+              value.notice ??
+              `关系已迁移:${value.closed_edge_ids?.length ?? 0} 条旧边闭合,${value.edge_ids?.length ?? 0} 条新边 active;源记录 ${value.carrier_id ?? ''}`,
+          },
+        ],
+      },
+      execute: async (args) => {
+        if (!live.get().memoryMutate) return { notice: MUTATE_OFF_NOTICE };
+        const graph = stores.graph;
+        if (!graph || !cfg.graph?.enabled) return { notice: GRAPH_OFF_NOTICE };
+        if (!graphWrite) return { notice: '图谱写面未接线(runner 未装配),无法迁移。' };
+        const fromId = String(args.from_node_id ?? '').trim();
+        const toId = String(args.new_to_node_id ?? '').trim();
+        const oldToId = String(args.old_to_node_id ?? '').trim();
+        const relation = String(args.relation ?? '').trim().slice(0, 60);
+        const sources = [...new Set((Array.isArray(args.source_record_ids) ? args.source_record_ids : [])
+          .map((x) => String(x ?? '').trim())
+          .filter((x) => x.length > 0 && x.length <= 200))].slice(0, 20);
+        if (!fromId || !toId || !oldToId || !relation) return { notice: '节点 id 与 relation 均为必填,未迁移' };
+        if (fromId === toId) return { notice: '起点与新目标同节点,自环边不允许' };
+        if (sources.length === 0) return { notice: 'source_record_ids 为空——图谱不变量"零无源事实",拒绝迁移' };
+        const fromNode = graph.getNode(fromId);
+        const toNode = graph.getNode(toId);
+        const oldToNode = graph.getNode(oldToId);
+        if (!fromNode || !toNode || !oldToNode) return { notice: '三节点中有不存在的(先用 memory_search_graph 取 id)' };
+        // R5 硬校验:来源必须全部存在于 L1 且未退场——判据单源 classifyValidity,
+        // 不因"是工具传入"而豁免(这正是本计划要根治的自证债,不能开倒车)。
+        const nowMs = Date.now();
+        const recs = stores.l1.getByIds(sources);
+        const byId = new Map(recs.map((r) => [r.id, r]));
+        const bad: string[] = [];
+        for (const id of sources) {
+          const r = byId.get(id);
+          if (!r || isExitedState(classifyValidity({
+            marker: readSupersedeMarker(r.metadata),
+            persistence: r.persistence,
+            validTo: r.validTo,
+            validToSource: validToSourceOf(r.metadata),
+            now: nowMs,
+          }))) bad.push(id);
+        }
+        if (bad.length > 0) return { notice: `来源不满足"现存未退场"不变量,拒绝迁移:${bad.join('、')}` };
+        // ① 确定性兜底:显式边提案过纯函数校验落库(旧边闭、新边出);
+        //    提案失败则整个迁移中止,不留下"源写了、边没迁"的半状态。
+        const proposal = graph.applyRelationProposal({
+          fromNodeId: fromId,
+          toNodeId: toId,
+          relation,
+          sourceRecordIds: sources,
+        });
+        if (!proposal.ok) {
+          return { notice: `确定性边提案被拒(${proposal.reason ?? '未知'}),未迁移—— 来源需均命中现存 L1 且形状合法` };
+        }
+        // ② 源导主路:承载新关系的 L1 源记录(可回溯根据),沿用首条来源的类型/族装配。
+        const first = byId.get(sources[0])!;
+        const carrierContent =
+          String(args.content ?? '').trim() || `${fromNode.name} ${relation} ${toNode.name}`;
+        const carrier = buildRecord(
+          {
+            content: carrierContent,
+            type: first.type,
+            persistence: first.persistence,
+            origin: 'memory_migrate_relation',
+          },
+          first.scene_name || '__manual__',
+          nowMs,
+          first.workspaceId || undefined,
+        );
+        // 审计(task_4.4):提案来源=tool 落在源记录 metadata 上,与 LLM 投影可区分;
+        // 凭证另行落 l1_receipts(kind=update,candidate 集=来源),memory_receipts 可查。
+        carrier.metadata = {
+          ...carrier.metadata,
+          dsh_relation_migration: {
+            from: fromId,
+            relation,
+            to: toId,
+            old_to: oldToId,
+            closed_edge_ids: proposal.closedEdgeIds,
+            proposal_source: 'tool',
+            at: new Date(nowMs).toISOString(),
+          },
+        };
+        applyManualRedaction(carrier, cfg, logger);
+        await stores.l1.appendNew([carrier]);
+        // 只对载体记录入队+重投(见块注释:不拉旧源,避免文本回翻)。
+        graphWrite.enqueueGraph([carrier.id]);
+        const r = graphWrite.reprojectGraph([carrier.id]);
+        persistReceiptsSafely((rows) => stores.l1.recordReceipts(rows), buildReceipts(newRunId(), new Date(nowMs).toISOString(), [
+          { recordId: carrier.id, candidateIds: sources, action: 'update' },
+        ]), logger);
+        logger.info(
+          `[memory] 关系迁移(源导):${fromId} -[${relation}]-> ${toId}(闭旧边 ${proposal.closedEdgeIds.length} 条,源 ${carrier.id})`,
+        );
+        return { carrier_id: carrier.id, edge_ids: proposal.edgeIds, closed_edge_ids: proposal.closedEdgeIds, queued: r.queued };
       },
     }),
   ));
