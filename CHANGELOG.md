@@ -1,5 +1,31 @@
 # 更新日志（Changelog）
 
+## [0.26.9] — 2026-10-23
+
+> 本版汇总自 0.26.6 起的「蒸馏分块分载与调度健壮性」工作（计划 distill-load-balance，[ADR-0023](./docs/adr/0023-distill-load-balance-and-secondary-route.md)）。0.26.7/0.26.8 仅本地装机、未发布，版本号并入此条。
+
+### 新增
+
+- **抽取块级容错 + 部分消费（R1′）**：`runExtraction` 每个抽取块独立 try/catch——单块超时/JSON 崩只丢该块并留待重试、下轮重投，成功块照常进去重+落库。旧行为是任一块崩整批抛穿、整片退回待重试（"114 条永不清零"的主因之一）。全块失败仍等价旧"整抛"（不误当零产出成功）。
+- **L2 场景整合分块（R1）**：`runSceneConsolidation` 按字符预算（24k 硬顶）切块逐块整合，单块路径与改前逐字一致（零漂移）；多块时跨块合并判断为近似（诚实降级）。治"大库整族 backlog 单调用必超时"。
+- **二线大容量兜底（R3）**：`llm.secondary{provider,model,reasoningEffort,triggerChars}`——单次调用输入 ≥ `triggerChars`（默认 20000）才前置二线，肥调用走能吞大输入的二线、小调用走一线。未配则不启用、绝不静默改选任意模型。
+- **fail-closed 显式路由（R4）**：`llm.requireExplicitRoute`（默认 false 灰度）开启后，一线+二线+回退链皆空 → 抛 `NoDistillRouteError`、蒸馏顺延并告警、**不记退避**，不再蹭宿主 `agentDefaultModel`（区分"没配"与"模型慢"）。
+- **路由健康学习（R9，本版已接线）**：`RouteHealthStore`（`distill-route-health.json` sidecar，读 fail-open、只降不升、陈旧过期）记某路由跑通的最小块长，`runExtraction` 读它收紧 perChunk、成功块回记，跨进程免重付退避风暴。
+- **面板可调蒸馏超时（R10）**：设置 → 记忆 → 蒸馏参数 → **蒸馏超时(ms)**（`distillTimeoutMs`，运行时 volatile 覆盖 `llm.timeoutMs`，即时生效）。仅治"慢但未被网关掐"的路由；供应商网关侧固定掐断（如某些免费路由 60s）抬此值无效，须换路由。
+- **整轮抽取墙钟预算 + 模型上限（R5）**：`llm.extractTimeBudgetMs`（默认 0=不限）超预算把剩余块留待重试下轮续，防一个慢模型独占后台串行泵；`llm.modelMaxInputChars`（默认 0=未声明）声明模型真实输入上限，perChunk 取 `min(24k, 本值−42k)`。
+- **反刍豁免退避（R6）/ live flush 队列去重（R7）**：反刍与 rebuild 同为用户显式动作，越过抽取退避；同一 `(session,mode)` 未消费的 force-flush 任务去重，治"一次长阻塞→积压排空刷屏"。
+
+### 变更
+
+- **默认输入闸门 `llm.maxInputChars` 700000 → 200000（schema 上限 1000000 → 256000）**：旧默认是远超本地/免费模型窗口的盲值；新默认让 `callLLM` 那道"最后截断闸门"符合本地模型可参与区间。注意 L1 抽取/L2 分块另有 24k 硬顶，不受此值影响；改默认主要防"下一批大调用噎住本地模型"，不改变分块大小。
+- **`engines.dsh` 去重**：package.json 尾部误加的重复 `|| 0.2.1-rc.1 || 0.2.1-rc.2` 已删，与 dsh.plugin.json 及各 peer 串逐字同串（跨宿主 6 条 RC 线兼容面不变）。
+
+### 已知限制 / 预留
+
+- **去重批容错与 checkpoint 续跑（R1″）未做**：去重阶段某批崩仍是整轮抛穿（整片保留 + 下轮从抽取重跑，无数据丢失但重付抽取成本）。当前治法是为去重/大输入换一条不被网关掐的路由（如二线）。
+- **L3 分块（R2）/ sinceL2 连续失败停攒（R8）未做**：persona 单文档整合分块伤连贯性、收益低于风险；L2 分块后慢性重面积压已缓解。
+- **`llm.chunkShrinkFactor` / `chunkShrinkMaxSteps` / `adaptiveChunk` 为预留配置，当前版本未接线生效**（同轮内超时 ×0.6 缩块尚未实现）——设了不影响行为，请勿依赖。
+
 ## [0.26.6] — 2026-10-22
 
 ### 新增
