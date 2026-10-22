@@ -44,6 +44,27 @@ import { familyForType, normPersistence, normScope, resolveRecordFamily, resolve
 import { normApplicability, resolveRepoScope } from '../repo-scope.js';
 import { routeWorkspace } from '../workspace-route.js';
 
+/**
+ * L1 抽取单块字符硬顶(修复 #10 分批过大)
+ *
+ * `cfg.llm.maxInputChars` 的语义是「单次 LLM 调用输入闸门」(默认 700k),被复用为
+ * 分块预算时算出 658k/块——一次输出须在同一 JSON 数组写完全部抽出记忆,块越大字符串越多,
+ * 任一处长中文里未转义 ASCII `"` 即整批 parse 失败、该块记忆全丢;慢模型更直接撞 120s 超时。
+ * 砍到 24k 后输出 ≈2–4k tokens,仍远低于 LAYER_MAX_TOKENS_EXTRACT(16k),不会引入截断,
+ * 单块失败半径从「几百条」缩到「几十条」。代价是多几次小调用,但每次 5–15s 完成。
+ */
+const MAX_EXTRACT_CHUNK_CHARS = 24_000;
+
+/**
+ * L1 去重单批发起上限(与抽取同精神)
+ *
+ * 旧版一次将整批 extracted[] 丢给 formatBatchConflictPrompt 发单次 LLM 调用,候选召回默认
+ * 每新记忆 10 个 → batch=100 时 prompt 轻松上 500k 字符,同样命中 #10 的失败面。按
+ * 固定条数切块(同族内不跨子集),失败半径缩到 ≤20 条,且每块上下文仍足够。
+ * 上限 20 为工程默认,后续可提到配置。
+ */
+const MAX_DEDUP_BATCH_SIZE = 20;
+
 /** 时间轴三元组(抽取产出 → 记录字段)。 */
 type Temporal = Pick<MemoryRecord, 'validFrom' | 'validTo' | 'persistence'>;
 
@@ -383,7 +404,8 @@ export async function runExtraction(
   // ── Step 1: 抽取(输入按 llm.maxInputChars 预算分块,情境链式衔接,不丢消息) ──
   const backgroundMsgs = background.slice(-cfg.extract.backgroundMessages);
   // 预留:背景消息(≤10 条 ×4000 字)+ prompt 脚手架
-  const perChunk = Math.max(20_000, cfg.llm.maxInputChars - 42_000);
+  // 硬顶 24k(见 MAX_EXTRACT_CHUNK_CHARS 注释);若配置更小则跟随配置
+  const perChunk = Math.min(MAX_EXTRACT_CHUNK_CHARS, Math.max(20_000, cfg.llm.maxInputChars - 42_000));
   const chunks = chunkByCharBudget(pending, perChunk);
   if (chunks.length > 1) {
     logger.info(
@@ -481,19 +503,31 @@ export async function runExtraction(
       candidates: await store.searchCandidates(m.content, cfg.extract.candidatePool, m.family, wsFilter),
     })),
   );
-  const dedupPrompt = formatBatchConflictPrompt(matches, {
-    conflictFreeze: cfg.conflictFreeze.enabled,
-  });
-  const dedupRaw = await callLLM(ctx, cfg, {
-    system: getConflictDetectionSystemPrompt(mode, { conflictFreeze: cfg.conflictFreeze.enabled, title: cfg.naming?.enabled === true }),
-    user: dedupPrompt,
-    maxTokens: resolveLayerTokens(cfg, 'dedup'),
-    layer: 'l1-dedup',
-    logger,
-  });
-  const decisions = parseJsonLogged<DedupDecision[]>(dedupRaw, 'L1 去重判定', logger);
+  // 按固定条数切块发送,失败半径与上下文同时可控(#10 去重侧同精)
+  const dedupBatches: Array<typeof matches> = [];
+  for (let i = 0; i < matches.length; i += MAX_DEDUP_BATCH_SIZE) {
+    dedupBatches.push(matches.slice(i, i + MAX_DEDUP_BATCH_SIZE));
+  }
+  if (dedupBatches.length > 1) {
+    logger.info(`[memory] L1 去重分为 ${dedupBatches.length} 批发送(每批 ≤${MAX_DEDUP_BATCH_SIZE} 条候选记忆)`);
+  }
+  const decisionsFlat: DedupDecision[] = [];
+  for (const [bi, batch] of dedupBatches.entries()) {
+    const batchPrompt = formatBatchConflictPrompt(batch, {
+      conflictFreeze: cfg.conflictFreeze.enabled,
+    });
+    const batchRaw = await callLLM(ctx, cfg, {
+      system: getConflictDetectionSystemPrompt(mode, { conflictFreeze: cfg.conflictFreeze.enabled, title: cfg.naming?.enabled === true }),
+      user: batchPrompt,
+      maxTokens: resolveLayerTokens(cfg, 'dedup'),
+      layer: 'l1-dedup',
+      logger,
+    });
+    const batchDecisions = parseJsonLogged<DedupDecision[]>(batchRaw, `L1 去重判定${dedupBatches.length > 1 ? `(批 ${bi + 1}/${dedupBatches.length})` : ''}`, logger);
+    if (Array.isArray(batchDecisions)) decisionsFlat.push(...batchDecisions);
+  }
   const byRecord = new Map<string, DedupDecision>();
-  for (const d of Array.isArray(decisions) ? decisions : []) {
+  for (const d of decisionsFlat) {
     if (d && typeof d.record_id === 'string') byRecord.set(d.record_id, d);
   }
 

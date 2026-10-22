@@ -1,5 +1,6 @@
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
 import { errDetail } from './util/filelog.js';
+import { parseJsonTolerant } from './util/json-repair.js';
 import { recordDistillCall } from './llm-usage.js';
 import { recordCostCall } from './token-cost.js';
 // ── 分层输出预算(规格 C 节):结构化蒸馏用不到总闸级预算,逐层设护栏;
@@ -499,35 +500,26 @@ async function callRoute(ctx, cfg, opts, route) {
     opts.logger?.info(`[memory] LLM 调用 ${provider}/${model}:输入 ${user.length} 字符 → 输出 ${out.length} 字符(${((Date.now() - startedAt) / 1000).toFixed(1)}s,finish=${finishKind || '无'})`);
     return out;
 }
-/** 带诊断日志的 parseJson:解析失败时记录原始输出摘录(模型输出异常排查的关键信息)。 */
+/** 带诊断日志的 parseJson:解析失败时记录原始输出摘录(模型输出异常排查的关键信息);修复/救援命中时 warn 一行。 */
 export function parseJsonLogged(raw, what, logger) {
     try {
-        return parseJson(raw);
+        const { value, level, notes } = parseJsonTolerant(raw);
+        if (level !== 'strict') {
+            logger?.warn(`[memory] ${what} JSON 已容错处理(${level}: ${notes.join('、') || '无动作'}),原文 ${raw.length} 字符`);
+        }
+        return value;
     }
     catch (err) {
         logger?.error(`[memory] ${what} JSON 解析失败(${errDetail(err)}),原始输出前 400 字符: ${raw.slice(0, 400)}`);
         throw new Error(`${what} 输出无法解析为 JSON`);
     }
 }
-/** 容错地解析 LLM 输出的 JSON(剥掉可能的 ```json 围栏)。 */
+/**
+ * 容错地解析 LLM 输出的 JSON。
+ *
+ * 旧版行为：剥 ```json``` 围栏 + 切到首个 `[`/`{` 到末尾 `]`/`}`,一次 JSON.parse。
+ * 新版同路径 + 三级容错(strict → repaired → salvaged),内部实现见 util/json-repair.ts。
+ */
 export function parseJson(raw) {
-    let s = raw.trim();
-    if (s.startsWith('```')) {
-        s = s.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
-    }
-    const start = s.indexOf('[');
-    const brace = s.indexOf('{');
-    let begin;
-    if (start === -1)
-        begin = brace;
-    else if (brace === -1)
-        begin = start;
-    else
-        begin = Math.min(start, brace);
-    if (begin > 0)
-        s = s.slice(begin);
-    const end = s.lastIndexOf(']') > s.lastIndexOf('}') ? s.lastIndexOf(']') + 1 : s.lastIndexOf('}') + 1;
-    if (end > 0)
-        s = s.slice(0, end);
-    return JSON.parse(s);
+    return parseJsonTolerant(raw).value;
 }

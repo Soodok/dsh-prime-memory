@@ -12,6 +12,7 @@ import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
 import type { MemoryConfig } from './config.js';
 import type { MemoryLogger } from './types.js';
 import { errDetail } from './util/filelog.js';
+import { parseJsonTolerant } from './util/json-repair.js';
 import { recordDistillCall, type DistillLayer } from './llm-usage.js';
 import { recordCostCall } from './token-cost.js';
 
@@ -629,10 +630,16 @@ async function callRoute(ctx: Context, cfg: MemoryConfig, opts: LlmCallOptions, 
   return out;
 }
 
-/** 带诊断日志的 parseJson:解析失败时记录原始输出摘录(模型输出异常排查的关键信息)。 */
+/** 带诊断日志的 parseJson:解析失败时记录原始输出摘录(模型输出异常排查的关键信息);修复/救援命中时 warn 一行。 */
 export function parseJsonLogged<T>(raw: string, what: string, logger?: MemoryLogger): T {
   try {
-    return parseJson<T>(raw);
+    const { value, level, notes } = parseJsonTolerant<T>(raw);
+    if (level !== 'strict') {
+      logger?.warn(
+        `[memory] ${what} JSON 已容错处理(${level}: ${notes.join('、') || '无动作'}),原文 ${raw.length} 字符`,
+      );
+    }
+    return value;
   } catch (err) {
     logger?.error(
       `[memory] ${what} JSON 解析失败(${errDetail(err)}),原始输出前 400 字符: ${raw.slice(0, 400)}`,
@@ -641,20 +648,12 @@ export function parseJsonLogged<T>(raw: string, what: string, logger?: MemoryLog
   }
 }
 
-/** 容错地解析 LLM 输出的 JSON(剥掉可能的 ```json 围栏)。 */
+/**
+ * 容错地解析 LLM 输出的 JSON。
+ *
+ * 旧版行为：剥 ```json``` 围栏 + 切到首个 `[`/`{` 到末尾 `]`/`}`,一次 JSON.parse。
+ * 新版同路径 + 三级容错(strict → repaired → salvaged),内部实现见 util/json-repair.ts。
+ */
 export function parseJson<T>(raw: string): T {
-  let s = raw.trim();
-  if (s.startsWith('```')) {
-    s = s.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
-  }
-  const start = s.indexOf('[');
-  const brace = s.indexOf('{');
-  let begin: number;
-  if (start === -1) begin = brace;
-  else if (brace === -1) begin = start;
-  else begin = Math.min(start, brace);
-  if (begin > 0) s = s.slice(begin);
-  const end = s.lastIndexOf(']') > s.lastIndexOf('}') ? s.lastIndexOf(']') + 1 : s.lastIndexOf('}') + 1;
-  if (end > 0) s = s.slice(0, end);
-  return JSON.parse(s) as T;
+  return parseJsonTolerant<T>(raw).value;
 }

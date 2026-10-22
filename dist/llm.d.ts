@@ -156,7 +156,12 @@ export declare function planDistillEffort(ctx: Context, provider: string, model:
  * 适配器异常地没有发 block-end 时兜底。两者都累计会把输出翻倍。
  */
 export declare function callLLM(ctx: Context, cfg: MemoryConfig, opts: LlmCallOptions): Promise<string>;
-/** 带诊断日志的 parseJson:解析失败时记录原始输出摘录(模型输出异常排查的关键信息)。 */
+/** 带诊断日志的 parseJson:解析失败时记录原始输出摘录(模型输出异常排查的关键信息);修复/救援命中时 warn 一行。 */
 export declare function parseJsonLogged<T>(raw: string, what: string, logger?: MemoryLogger): T;
-/** 容错地解析 LLM 输出的 JSON(剥掉可能的 ```json 围栏)。 */
+/**
+ * 容错地解析 LLM 输出的 JSON。
+ *
+ * 旧版行为：剥 ```json``` 围栏 + 切到首个 `[`/`{` 到末尾 `]`/`}`,一次 JSON.parse。
+ * 新版同路径 + 三级容错(strict → repaired → salvaged),内部实现见 util/json-repair.ts。
+ */
 export declare function parseJson<T>(raw: string): T;
