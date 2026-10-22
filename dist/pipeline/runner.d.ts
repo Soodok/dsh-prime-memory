@@ -22,6 +22,7 @@ import type { SceneStore } from '../store/scenes.js';
 import type { StateStore } from '../store/state.js';
 import type { ConversationMessage, ExtractMode, MemoryFamily, MemoryLogger } from '../types.js';
 import type { FamilyStates } from './l1.js';
+import type { RouteHealthStore } from '../store/route-health.js';
 export interface MemoryStores {
     /**
      * DRSC 客户端(T8.4 读切):蒸馏背景窗的历史供给面(op=session&tail&redact=1)。
@@ -44,6 +45,8 @@ export interface MemoryStores {
     feedback?: {
         rekey(oldId: string, newId: string): boolean;
     };
+    /** R9 路由健康学习（可选）：未传则 runExtraction 不启用自适应块长学习。 */
+    routeHealth?: RouteHealthStore;
 }
 /** 管线任务(优先级调度:live > graph > rebuild)。 */
 export interface PipelineTask {
@@ -97,6 +100,8 @@ export declare class MemoryRunner {
     private extractFailures;
     /** 图谱泵在队列中的占位标志(同一时刻至多一个 graph 任务;护栏四件套之一)。 */
     private graphPumpQueued;
+    /** R7：已入队、尚未消费的 force-flush 键集（`session:mode`），同键不重复入队（治积压刷屏）。 */
+    private flushQueued;
     private readonly pendingFile;
     /** 分族 checkpoint(init 后可用;重建收尾也从这里读活引用)。 */
     states: FamilyStates;
@@ -132,6 +137,7 @@ export declare class MemoryRunner {
      *  onTurnDone 在该任务真正跑完后回调,携带本轮新增记录数(供反刍统计真实产出)。 */
     enqueue(sessionId: string, messages: ConversationMessage[], mode: ExtractMode, opts?: {
         force?: boolean;
+        bypassBackoff?: boolean;
         onTurnDone?: (records: number) => void;
     }): void;
     /** 重建任务入队(低优先级:让位于正常轮次;由 RebuildController 分块驱动)。 */

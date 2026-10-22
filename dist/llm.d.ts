@@ -71,11 +71,25 @@ export declare const HIGH_EFFORT_TIERS: readonly ["high", "xhigh", "max"];
  * 预算致正文 0 字符)——effort 为 high/xhigh/max 时分层预算 ×4。
  */
 export declare function layerMaxTokens(base: number, reasoningEffort: string): number;
+/** 无可用蒸馏路由(显式一线/二线/链皆缺且 requireExplicitRoute=true)：
+ *  runner 据此 skip+顺延、不记退避——区别于"模型慢/超时"(那才退避)。R4。 */
+export declare class NoDistillRouteError extends Error {
+    constructor(msg?: string);
+}
 /** 解析蒸馏用的 provider/model:配置优先,其次当前默认选择。 */
 export declare function resolveModelRoute(ctx: Context, cfg: MemoryConfig): Promise<{
     provider: string;
     model: string;
 }>;
+/**
+ * 二线(大容量兜底)选路(R3)：单次调用输入字符 ≥ triggerChars 且二线已配 → 返回二线路由，
+ * 否则 null（走一线/链）。二线未配（provider/model 任一空）→ 永不命中，不隐式改选任意模型。
+ */
+export declare function pickSecondary(cfg: MemoryConfig, inputChars: number): {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+} | null;
 /** 回退链条目(配置形态;reasoningEffort 为该路由的档位覆盖,'' = 跟随全局)。 */
 export interface FallbackRouteEntry {
     provider: string;

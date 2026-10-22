@@ -56,11 +56,15 @@ export function BudgetInputs(props: {
   const ib = data.inputBudget || { current: 0, fallback: 0, effective: 0 };
   const curIn = ib.current || 0;
   const effIn = ib.effective || ib.fallback || 0;
+  // R10 蒸馏超时(ms)：tb.current 运行时覆盖 / tb.fallback 静态 llm.timeoutMs
+  const tb = data.timeoutBudget || { current: 0, fallback: 0, effective: 0 };
+  const curTo = tb.current || 0;
+  const effTo = tb.effective || tb.fallback || 0;
 
   /** 输入框显示值：草稿优先，否则现值（0 显示为空 = 跟随默认/配置）。 */
   const shown = (key: string): string => {
     if (draft && draft[key] !== undefined) return draft[key]!;
-    const c = key === 'input' ? curIn : cur[key] || 0;
+    const c = key === 'input' ? curIn : key === 'timeout' ? curTo : cur[key] || 0;
     return c > 0 ? String(c) : '';
   };
 
@@ -76,13 +80,15 @@ export function BudgetInputs(props: {
       const key = keys[i]!;
       const raw = (draft[key] !== undefined ? draft[key] : shown(key)).trim();
       const n = raw === '' ? 0 : Number(raw);
-      const max = key === 'input' ? 1000000 : 1000000;
-      const min = key === 'input' ? (raw === '' ? 0 : 1000) : 0;
+      const max = key === 'timeout' ? 600000 : key === 'input' ? 256000 : 1000000;
+      const min = key === 'input' || key === 'timeout' ? (raw === '' ? 0 : 1000) : 0;
       if (!Number.isInteger(n) || n < min || n > max) {
         onError(
           key === 'input'
-            ? '输入预算须为 0 或 1000~1000000 的整数（留空或 0 = 跟随配置）'
-            : '输出预算须为 0~1000000 的整数（留空或 0 = 跟随默认）',
+            ? '输入预算须为 0 或 1000~256000 的整数（留空或 0 = 跟随配置）'
+            : key === 'timeout'
+              ? '蒸馏超时须为 0 或 1000~600000 的整数（留空或 0 = 跟随配置）'
+              : '输出预算须为 0~1000000 的整数（留空或 0 = 跟随默认）',
         );
         setDraft(null);
         return;
@@ -151,6 +157,23 @@ export function BudgetInputs(props: {
     );
   };
 
+  /** R10 蒸馏超时单键提交（distillTimeoutMs）。 */
+  const commitTimeout = () => {
+    commitPart(
+      ['timeout'],
+      (v) => ({ distillTimeoutMs: v.timeout }),
+      (prev, v) => ({
+        ...prev,
+        settings: { ...prev.settings, distillTimeoutMs: v.timeout! },
+        timeoutBudget: {
+          ...(prev.timeoutBudget || { current: 0, fallback: 0, effective: 0 }),
+          current: v.timeout!,
+          effective: v.timeout! > 0 ? v.timeout! : tb.fallback || 0,
+        },
+      }),
+    );
+  };
+
   /** keys 中是否有未提交差异（true 才触发 blur/Enter 提交）。 */
   const dirty = (keys: string[]) => {
     if (!draft) return false;
@@ -158,7 +181,9 @@ export function BudgetInputs(props: {
       const key = keys[i]!;
       const want = (draft[key] !== undefined ? draft[key] : '').trim();
       const was =
-        key === 'input' ? (curIn > 0 ? String(curIn) : '') : (cur[key] || 0) > 0 ? String(cur[key]) : '';
+        key === 'input' ? (curIn > 0 ? String(curIn) : '')
+        : key === 'timeout' ? (curTo > 0 ? String(curTo) : '')
+        : (cur[key] || 0) > 0 ? String(cur[key]) : '';
       if (want !== was) return true;
     }
     return false;
@@ -257,6 +282,30 @@ export function BudgetInputs(props: {
                 commitInput,
               )}
               <span style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)' }}>字符</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showInput ? (
+        <div style={{ marginTop: 12 }}>
+          <div
+            style={S.switchLabel}
+            title={'单次蒸馏调用超时(ms)：治"慢但未被网关掐"的路由需更大超时窗；留空或 0 = 跟随配置（当前生效 ' + (effTo || '?') + 'ms，来自 llm.timeoutMs）。注：供应商网关侧固定掐断（如某些路由 60s）抬此值无效，须换路由'}
+          >
+            蒸馏超时
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+            <div style={rowStyle}>
+              <span style={{ width: 68, flexShrink: 0, fontSize: 12, color: 'var(--dsh-mem-text-2)' }}>超时</span>
+              {inputBox(
+                'timeout',
+                '超时',
+                '单次蒸馏调用超时(ms)（留空 = 跟随配置 ' + (tb.fallback || '?') + '）',
+                110,
+                tb.fallback,
+                commitTimeout,
+              )}
+              <span style={{ fontSize: 11, color: 'var(--dsh-mem-text-3)' }}>ms</span>
             </div>
           </div>
         </div>

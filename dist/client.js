@@ -37811,9 +37811,12 @@ var __create = Object.create;
 		  const ib = data.inputBudget || { current: 0, fallback: 0, effective: 0 };
 		  const curIn = ib.current || 0;
 		  const effIn = ib.effective || ib.fallback || 0;
+		  const tb = data.timeoutBudget || { current: 0, fallback: 0, effective: 0 };
+		  const curTo = tb.current || 0;
+		  const effTo = tb.effective || tb.fallback || 0;
 		  const shown = (key) => {
 		    if (draft && draft[key] !== void 0) return draft[key];
-		    const c = key === "input" ? curIn : cur[key] || 0;
+		    const c = key === "input" ? curIn : key === "timeout" ? curTo : cur[key] || 0;
 		    return c > 0 ? String(c) : "";
 		  };
 		  const commitPart = (keys, buildPayload, applyView) => {
@@ -37823,11 +37826,11 @@ var __create = Object.create;
 		      const key = keys[i];
 		      const raw = (draft[key] !== void 0 ? draft[key] : shown(key)).trim();
 		      const n = raw === "" ? 0 : Number(raw);
-		      const max = key === "input" ? 1e6 : 1e6;
-		      const min = key === "input" ? raw === "" ? 0 : 1e3 : 0;
+		      const max = key === "timeout" ? 6e5 : key === "input" ? 256e3 : 1e6;
+		      const min = key === "input" || key === "timeout" ? raw === "" ? 0 : 1e3 : 0;
 		      if (!Number.isInteger(n) || n < min || n > max) {
 		        onError(
-		          key === "input" ? "输入预算须为 0 或 1000~1000000 的整数（留空或 0 = 跟随配置）" : "输出预算须为 0~1000000 的整数（留空或 0 = 跟随默认）"
+		          key === "input" ? "输入预算须为 0 或 1000~256000 的整数（留空或 0 = 跟随配置）" : key === "timeout" ? "蒸馏超时须为 0 或 1000~600000 的整数（留空或 0 = 跟随配置）" : "输出预算须为 0~1000000 的整数（留空或 0 = 跟随默认）"
 		        );
 		        setDraft(null);
 		        return;
@@ -37888,12 +37891,27 @@ var __create = Object.create;
 		      }
 		    );
 		  };
+		  const commitTimeout = () => {
+		    commitPart(
+		      ["timeout"],
+		      (v) => ({ distillTimeoutMs: v.timeout }),
+		      (prev, v) => ({
+		        ...prev,
+		        settings: { ...prev.settings, distillTimeoutMs: v.timeout },
+		        timeoutBudget: {
+		          ...prev.timeoutBudget || { current: 0, fallback: 0, effective: 0 },
+		          current: v.timeout,
+		          effective: v.timeout > 0 ? v.timeout : tb.fallback || 0
+		        }
+		      })
+		    );
+		  };
 		  const dirty = (keys) => {
 		    if (!draft) return false;
 		    for (let i = 0; i < keys.length; i++) {
 		      const key = keys[i];
 		      const want = (draft[key] !== void 0 ? draft[key] : "").trim();
-		      const was = key === "input" ? curIn > 0 ? String(curIn) : "" : (cur[key] || 0) > 0 ? String(cur[key]) : "";
+		      const was = key === "input" ? curIn > 0 ? String(curIn) : "" : key === "timeout" ? curTo > 0 ? String(curTo) : "" : (cur[key] || 0) > 0 ? String(cur[key]) : "";
 		      if (want !== was) return true;
 		    }
 		    return false;
@@ -37974,6 +37992,28 @@ var __create = Object.create;
 		          commitInput
 		        ),
 		        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: "字符" })
+		      ] }) })
+		    ] }) : null,
+		    showInput ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { style: { marginTop: 12 }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+		        "div",
+		        {
+		          style: S.switchLabel,
+		          title: '单次蒸馏调用超时(ms)：治"慢但未被网关掐"的路由需更大超时窗；留空或 0 = 跟随配置（当前生效 ' + (effTo || "?") + "ms，来自 llm.timeoutMs）。注：供应商网关侧固定掐断（如某些路由 60s）抬此值无效，须换路由",
+		          children: "蒸馏超时"
+		        }
+		      ),
+		      /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }, children: /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { style: rowStyle, children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { style: { width: 68, flexShrink: 0, fontSize: 12, color: "var(--dsh-mem-text-2)" }, children: "超时" }),
+		        inputBox(
+		          "timeout",
+		          "超时",
+		          "单次蒸馏调用超时(ms)（留空 = 跟随配置 " + (tb.fallback || "?") + "）",
+		          110,
+		          tb.fallback,
+		          commitTimeout
+		        ),
+		        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { style: { fontSize: 11, color: "var(--dsh-mem-text-3)" }, children: "ms" })
 		      ] }) })
 		    ] }) : null
 		  ] });

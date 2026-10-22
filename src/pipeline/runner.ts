@@ -15,6 +15,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { resolveDataDir, type MemoryConfig } from '../config.js';
 import type { LiveSettingsHandle } from '../settings.js';
 import { GRAPH_PRIORITY_NEW } from '../graph/types.js';
+import { NoDistillRouteError } from '../llm.js';
 import { startValidityBackfill } from '../validity-backfill.js';
 import type { DrscClient } from '../clients/drsc.js';
 import { drscRowToConversationMessage } from '../clients/drsc.js';
@@ -53,6 +54,7 @@ import { buildAnchorMap } from './anchors.js';
 import { runGraphProjection } from './graph.js';
 import { runSceneConsolidation } from './l2.js';
 import { runPersona } from './l3.js';
+import type { RouteHealthStore } from '../store/route-health.js';
 
 export interface MemoryStores {
   /**
@@ -72,6 +74,8 @@ export interface MemoryStores {
    */
   usage?: { rekey(oldId: string, newId: string): boolean };
   feedback?: { rekey(oldId: string, newId: string): boolean };
+  /** R9 路由健康学习（可选）：未传则 runExtraction 不启用自适应块长学习。 */
+  routeHealth?: RouteHealthStore;
 }
 
 /** 管线任务(优先级调度:live > graph > rebuild)。 */
@@ -154,6 +158,8 @@ export function effectiveCfg(cfg: MemoryConfig, live?: LiveSettingsHandle): Memo
       : null;
   const layerChains = layerPick && Object.keys(layerPick).length ? layerPick : null;
   const maxInput = s && s.distillMaxInputChars > 0 ? s.distillMaxInputChars : null;
+  // R10 蒸馏超时运行时覆盖：>0 才注入 llm.timeoutMs，否则跟随静态配置
+  const timeoutOv = s && s.distillTimeoutMs > 0 ? s.distillTimeoutMs : null;
   // 旧档位键的全局接管(含给静态回退条目盖章):仅非链模式保留(旧存量值兼容)
   const fallbacksTakeover = !chainMode && eff && cfg.llm?.fallbacks?.length
     ? cfg.llm.fallbacks.map((f) => ({ ...f, reasoningEffort: eff }))
@@ -240,6 +246,7 @@ export function effectiveCfg(cfg: MemoryConfig, live?: LiveSettingsHandle): Memo
       ...(override ?? {}),
       ...(budgets ? { budgets } : {}),
       ...(maxInput ? { maxInputChars: maxInput } : {}),
+      ...(timeoutOv ? { timeoutMs: timeoutOv } : {}),
       ...(fallbacksTakeover ? { fallbacks: fallbacksTakeover } : {}),
       ...(chainEffort ? { primaryEffort: chainEffort } : {}),
       ...(chainFallbacks ? { fallbacks: chainFallbacks } : {}),
@@ -279,6 +286,8 @@ export class MemoryRunner {
   private extractFailures = new Map<string, { streak: number; nextAt: number }>();
   /** 图谱泵在队列中的占位标志(同一时刻至多一个 graph 任务;护栏四件套之一)。 */
   private graphPumpQueued = false;
+  /** R7：已入队、尚未消费的 force-flush 键集（`session:mode`），同键不重复入队（治积压刷屏）。 */
+  private flushQueued = new Set<string>();
   private readonly pendingFile: string;
   /** 分族 checkpoint(init 后可用;重建收尾也从这里读活引用)。 */
   states!: FamilyStates;
@@ -439,11 +448,23 @@ export class MemoryRunner {
     sessionId: string,
     messages: ConversationMessage[],
     mode: ExtractMode,
-    opts?: { force?: boolean; onTurnDone?: (records: number) => void },
+    opts?: { force?: boolean; bypassBackoff?: boolean; onTurnDone?: (records: number) => void },
   ): void {
+    // R7：闲置/反刍/换档触发的 force-flush（空消息 + force）按 (session,mode) 去重，
+    // 同键未消费前不重复入队（一次长阻塞不再积压几十个 no-op 排空刷屏）。
+    const isFlush = opts?.force === true && messages.length === 0;
+    const fkey = isFlush ? `${sessionId}:${mode}` : '';
+    if (isFlush && this.flushQueued.has(fkey)) return;
+    if (isFlush) this.flushQueued.add(fkey);
     this.pushTask({
       kind: 'live',
-      run: () => this.runTurn(sessionId, messages, mode, opts),
+      run: async () => {
+        try {
+          return await this.runTurn(sessionId, messages, mode, opts);
+        } finally {
+          if (isFlush) this.flushQueued.delete(fkey); // 无论成败都释占，避免键泄漏永久屏蔽后续 flush
+        }
+      },
       ...(opts?.onTurnDone ? { onDone: (r) => opts.onTurnDone?.(typeof r === 'number' ? r : 0) } : {}),
     });
   }
@@ -705,7 +726,7 @@ export class MemoryRunner {
     sessionId: string,
     messages: ConversationMessage[],
     mode: ExtractMode,
-    opts?: { noBufferCap?: boolean; force?: boolean },
+    opts?: { noBufferCap?: boolean; force?: boolean; bypassBackoff?: boolean },
   ): Promise<number> {
     const turnStart = Date.now();
     this.logger.info(
@@ -734,7 +755,7 @@ export class MemoryRunner {
       const effective = effectiveExtractThreshold(this.warmup[mode], cfg.extract.minMessages);
       const sliceLen = bucket.reduce((n, m) => (m.sessionId === sessionId ? n + 1 : n), 0);
       // 抽取失败退避:重建轮(noBufferCap,用户显式动作、有自己的失败/取消 UI)豁免
-      const backedOff = !opts?.noBufferCap && this.inExtractBackoff(sessionId);
+      const backedOff = !opts?.noBufferCap && !opts?.bypassBackoff && this.inExtractBackoff(sessionId);
       if ((opts?.force || sliceLen >= effective) && !backedOff) {
         newRecords = await this.extractSessionSlice(sessionId, mode, cfg, effective, opts);
         // 新记录入投影队列(优先级恒高于存量补投影)并拉起图谱泵;入队本身廉价,
@@ -911,9 +932,13 @@ export class MemoryRunner {
           this.stores.usage?.rekey(oldId, newId);
           this.stores.feedback?.rekey(oldId, newId);
         },
+        this.stores.routeHealth,
       );
+      // R9: 本轮学到的跑通块长落盘（best-effort，失败不阻蒸馏）
+      await this.stores.routeHealth?.save().catch(() => {});
       if (!result.skipped) {
-        this.pending[mode] = rest;
+        // R1′ 部分消费：成功块出桶、抽取失败块留桶下轮重投（rest ∪ failedMessages）
+        this.pending[mode] = [...rest, ...((result.failedMessages ?? []) as PendingMessage[])];
         // 重建轮(force)不是有机对话,不推进爬坡
         if (!opts?.force) this.warmup[mode] = advanceWarmupThreshold(this.warmup[mode], cfg.extract.minMessages);
         // 会话产出记账(成功消费即记——零产出也算"蒸馏过",lastAt 推进)
@@ -964,6 +989,12 @@ export class MemoryRunner {
         ok: false,
         errorKind: err instanceof Error ? err.name : 'error',
       });
+      // R4:无可用蒸馏路由=配置缺失、非模型慢——不进退避(否则把"没配"误当故障反复退避)，只顺延。
+      if (err instanceof NoDistillRouteError) {
+        this.logger.warn(`[memory] 无可用蒸馏路由,本轮蒸馏顺延、不记退避(session=${sessionId},mode=${mode})`);
+        await this.persistPending(opts?.noBufferCap).catch(() => {});
+        return [];
+      }
       // 指数退避:压制闲置兜底/补跑在 LLM 故障期间的连环重试(成功消费时清零)
       const streak = (this.extractFailures.get(sessionId)?.streak ?? 0) + 1;
       const delayMs = extractionBackoffMs(streak);

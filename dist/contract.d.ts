@@ -77,7 +77,10 @@ export interface MemoryLiveSettings {
     /** 输入预算运行时覆盖(字符,≈token):单次蒸馏调用的输入上限,L1 按此分块、
      *  超限截断;0 = 跟随静态配置 llm.maxInputChars。 */
     distillMaxInputChars: number;
-    /** 运行时按层路由链:层键 l1/l2/l3 各一条完整链;非空即完整接管该层解析
+    /** R10 蒸馏调用超时运行时覆盖(ms)：0 = 跟随静态配置 llm.timeoutMs；>0 = 覆盖。
+     *  治"慢但未被网关掐"的路由需更大超时窗（注：供应商网关侧固定掐断抬此值无效，须换路由）。 */
+    distillTimeoutMs: number;
+    /** 运行时按层路由链：层键 l1/l2/l3 各一条完整链；非空即完整接管该层解析
      *  (压过静态 layerRoutes,层内第一优先级);空数组 = 该层跟随(静态层链 → 全局解析逐级兜底)。
      *  写入经 settings-set 逐层校验(头行必须显式)。 */
     distillLayerChains: Record<LayerRouteKey, DistillChainEntry[]>;
@@ -805,6 +808,12 @@ export interface SettingsGetResponse {
         fallback: number;
         effective: number;
     };
+    /** R10 蒸馏超时(ms)：current 运行时覆盖(0=跟随) / fallback 静态 llm.timeoutMs / effective 生效值。 */
+    timeoutBudget: {
+        current: number;
+        fallback: number;
+        effective: number;
+    };
 }
 /** dsh-memory/settings-set(patch 语义:只带要改的键)。 */
 export interface SettingsSetRequest {
@@ -826,6 +835,8 @@ export interface SettingsSetRequest {
         graph: number;
     };
     distillMaxInputChars?: number;
+    /** R10 蒸馏超时运行时覆盖(ms)：0 = 跟随配置。 */
+    distillTimeoutMs?: number;
     /** md 投射/后缀收敛的单次动作护栏覆盖:0 = 跟随部署 `cfg.memExport.maxRecords`。 */
     mdExportMaxRecords?: number;
     /** 蒸馏通道运行时覆盖:'' = 跟随部署 config;'host' = 复用宿主;'direct' = 插件原生直连。 */

@@ -29,3 +29,5 @@ export const PENDING_FILE_VERSION = 1;
 export const RECONCILE_STATE_FILE_VERSION = 1;
 /** `mem-md-ledger.json`（md 投射指纹账本，N9；派生态，删了可重建）。*/
 export const MEM_MD_LEDGER_FILE_VERSION = 1;
+/** `distill-route-health.json`（蒸馏路由健康学习值，R9；运行时派生，删了可重学）。*/
+export const ROUTE_HEALTH_FILE_VERSION = 1;

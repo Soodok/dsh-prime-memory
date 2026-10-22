@@ -1,8 +1,15 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { MemoryConfig } from '../config.js';
+import type { RouteHealthStore } from '../store/route-health.js';
 import type { L1Store } from '../store/l1.js';
 import type { MemoryState } from '../store/state.js';
 import type { ConversationAnchor, ConversationMessage, ExtractedMemory, ExtractMode, MemoryFamily, MemoryLogger, MemoryRecord, MemoryScope } from '../types.js';
+/**
+ * L2 场景整合单块字符硬顶（R1）：与抽取同精神——旧版一次把整族 backlog 塞单调用，
+ * 库越大越必撞超时（实测 work-L2 >60s abort）。砍到 24k 后逐块整合，失败半径从
+ * “整族 backlog”缩到“一块”。默认对齐 MAX_EXTRACT_CHUNK_CHARS。
+ */
+export declare const MAX_SCENE_CHUNK_CHARS = 24000;
 export interface ExtractionResult {
     stored: number;
     skipped: boolean;
@@ -12,6 +19,8 @@ export interface ExtractionResult {
     runId?: string;
     /** §F 追踪捎带:六值决策词表聚合;早退分支缺省。 */
     byKind?: Record<string, number>;
+    /** R1′ 抽取块级失败的消息：调用方应留桶下轮重投(部分消费，不整批回滚)。 */
+    failedMessages?: ConversationMessage[];
 }
 /** 分族 checkpoint 桶(活引用,改动由调用方 save 落盘)。 */
 export type FamilyStates = Record<MemoryFamily, MemoryState>;
@@ -55,7 +64,9 @@ export declare function toStoreRecord(m: PendingMemory, now: number, ts: number,
  * 按字符预算把消息切成多块(保持顺序,单条超预算独占一块,由 callLLM 兜底截断)。
  * 每条消息按 content 长度 + 64 字符脚手架开销(id/时间戳行)计。
  */
-export declare function chunkByCharBudget(messages: ConversationMessage[], budgetChars: number): ConversationMessage[][];
+export declare function chunkByCharBudget<T extends {
+    content: string;
+}>(messages: readonly T[], budgetChars: number): T[][];
 export declare function runExtraction(ctx: Context, cfg: MemoryConfig, store: L1Store, states: FamilyStates, pending: ConversationMessage[], background: ConversationMessage[], logger: MemoryLogger, mode: ExtractMode, 
 /**
  * §E 当前工作区标识(由调用方经 `sessionWorkspaceIdOf` 解析;拿不到传 undefined)。
@@ -74,4 +85,6 @@ anchorMap?: ReadonlyMap<string, ConversationAnchor>,
  * 另两个 sidecar 里，而 merge 每次新铸 id——不搬就等于每次合并把这条记忆的
  * `used`/人工打分清零，它会被当成“没用过”而沉底。缺省不搬（行为与改动前一致）。
  */
-mergeRekey?: (oldId: string, newId: string) => void): Promise<ExtractionResult>;
+mergeRekey?: (oldId: string, newId: string) => void, 
+/** R9 路由健康学习（可选）：读已学到的跑通块长收紧 perChunk，成功块回记。未传=不启用。 */
+routeHealth?: RouteHealthStore): Promise<ExtractionResult>;

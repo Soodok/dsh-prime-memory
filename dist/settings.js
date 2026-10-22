@@ -70,6 +70,7 @@ const ALWAYS_ON = {
     distillChain: [],
     distillBudgets: { extract: 0, dedup: 0, l2: 0, l3: 0, graph: 0 },
     distillMaxInputChars: 0,
+    distillTimeoutMs: 0,
     distillLayerChains: { l1: [], l2: [], l3: [] },
     distillMode: '',
     directBaseURL: '',
@@ -309,6 +310,8 @@ function resolveSettings(value) {
             graph: num(rawBudgets.graph),
         },
         distillMaxInputChars: num(v.distillMaxInputChars),
+        // R10 蒸馏超时运行时覆盖：钳 0~600000（与 live schema 同上限）；0 = 跟随部署 llm.timeoutMs
+        distillTimeoutMs: Math.min(600_000, Math.max(0, num(v.distillTimeoutMs))),
         // 蒸馏通道:mode 白名单(非法归 '' = 跟随部署);端点与密钥截断防御但保留原始内容
         distillMode: v.distillMode === 'host' || v.distillMode === 'direct' ? v.distillMode : '',
         directBaseURL: typeof v.directBaseURL === 'string' ? v.directBaseURL.slice(0, 2000) : '',

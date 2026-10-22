@@ -61,6 +61,10 @@ export interface MemoryConfig {
         backgroundMessages: number;
         /** 去重候选池大小(每条新记忆的相似候选数)。 */
         candidatePool: number;
+        /** L1 去重批连续失败上限:达此值则 fail-loud + park,不再无限重放同肥调用。R1″。 */
+        dedupRetryCap?: number;
+        /** 抽取结果 checkpoint 落盘:去重/落库失败后下轮从去重续跑、不重抽已成功块。R1″。 */
+        extractCheckpoint?: boolean;
     };
     l2: {
         enabled: boolean;
@@ -70,6 +74,8 @@ export interface MemoryConfig {
         maxScenes: number;
         /** L2 prompt 里附带的相似场景全文数量上限。 */
         sceneContextLimit: number;
+        /** L2 场景整合连续失败上限:达此值停攒该族 + fail-loud,避免同肥调用每轮重放。R8。 */
+        consecutiveFailCap?: number;
     };
     l3: {
         enabled: boolean;
@@ -390,6 +396,31 @@ export interface MemoryConfig {
         maxInputChars: number;
         /** 单次蒸馏调用超时(ms)。 */
         timeoutMs: number;
+        /** R5 整轮抽取墙钟预算(ms)：多块抽取累计超此预算即把剩余块留 pending 下轮续，
+         *  防一个慢模型独占串行泵十几分钟。0 = 不限（旧行为）。 */
+        extractTimeBudgetMs?: number;
+        /** 二线蒸馏模型(大容量兜底):仅当单次调用输入字符 ≥ triggerChars 才启用;
+         *  provider/model 任一为空 = 该档不可用(不隐式改选默认模型)。R3。 */
+        secondary?: {
+            provider: string;
+            model: string;
+            reasoningEffort?: string;
+            triggerChars: number;
+        };
+        /** 蒸馏模型真实输入上限(字符):perChunk 初值天花板;0/未声明 = 回退旧口径
+         *  min(24k, maxInputChars-42k)。R5/R11。 */
+        modelMaxInputChars?: number;
+        /** 自适应分块:超时/报错后块大小按此因子缩减(默认 0.6=减四成)。R5。 */
+        chunkShrinkFactor?: number;
+        /** 块缩减最大重试步数(触底=单条或达此步数即止)。R5。 */
+        chunkShrinkMaxSteps?: number;
+        /** 自适应分块总开关:关=固定 perChunk(零漂移)。R5。 */
+        adaptiveChunk?: {
+            enabled: boolean;
+        };
+        /** 蒸馏须显式配路由:true 时一线+二线+链皆空 → 抛 NoDistillRouteError(不蹭默认模型)。
+         *  灰度默认 false(不破坏"留空跟默认模型"的存量用户)。R4。 */
+        requireExplicitRoute?: boolean;
         /** 分层输出预算运行时覆盖(设置页 distillBudgets 经 effectiveCfg 注入;
          *  0/缺省 = 用内置默认。非静态 schema——预算无部署上限语义)。 */
         budgets?: Partial<{

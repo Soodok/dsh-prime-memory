@@ -72,6 +72,10 @@ export interface MemoryConfig {
     backgroundMessages: number;
     /** 去重候选池大小(每条新记忆的相似候选数)。 */
     candidatePool: number;
+    /** L1 去重批连续失败上限:达此值则 fail-loud + park,不再无限重放同肥调用。R1″。 */
+    dedupRetryCap?: number;
+    /** 抽取结果 checkpoint 落盘:去重/落库失败后下轮从去重续跑、不重抽已成功块。R1″。 */
+    extractCheckpoint?: boolean;
   };
   l2: {
     enabled: boolean;
@@ -81,6 +85,8 @@ export interface MemoryConfig {
     maxScenes: number;
     /** L2 prompt 里附带的相似场景全文数量上限。 */
     sceneContextLimit: number;
+    /** L2 场景整合连续失败上限:达此值停攒该族 + fail-loud,避免同肥调用每轮重放。R8。 */
+    consecutiveFailCap?: number;
   };
   l3: {
     enabled: boolean;
@@ -401,6 +407,24 @@ export interface MemoryConfig {
     maxInputChars: number;
     /** 单次蒸馏调用超时(ms)。 */
     timeoutMs: number;
+    /** R5 整轮抽取墙钟预算(ms)：多块抽取累计超此预算即把剩余块留 pending 下轮续，
+     *  防一个慢模型独占串行泵十几分钟。0 = 不限（旧行为）。 */
+    extractTimeBudgetMs?: number;
+    /** 二线蒸馏模型(大容量兜底):仅当单次调用输入字符 ≥ triggerChars 才启用;
+     *  provider/model 任一为空 = 该档不可用(不隐式改选默认模型)。R3。 */
+    secondary?: { provider: string; model: string; reasoningEffort?: string; triggerChars: number };
+    /** 蒸馏模型真实输入上限(字符):perChunk 初值天花板;0/未声明 = 回退旧口径
+     *  min(24k, maxInputChars-42k)。R5/R11。 */
+    modelMaxInputChars?: number;
+    /** 自适应分块:超时/报错后块大小按此因子缩减(默认 0.6=减四成)。R5。 */
+    chunkShrinkFactor?: number;
+    /** 块缩减最大重试步数(触底=单条或达此步数即止)。R5。 */
+    chunkShrinkMaxSteps?: number;
+    /** 自适应分块总开关:关=固定 perChunk(零漂移)。R5。 */
+    adaptiveChunk?: { enabled: boolean };
+    /** 蒸馏须显式配路由:true 时一线+二线+链皆空 → 抛 NoDistillRouteError(不蹭默认模型)。
+     *  灰度默认 false(不破坏"留空跟默认模型"的存量用户)。R4。 */
+    requireExplicitRoute?: boolean;
     /** 分层输出预算运行时覆盖(设置页 distillBudgets 经 effectiveCfg 注入;
      *  0/缺省 = 用内置默认。非静态 schema——预算无部署上限语义)。 */
     budgets?: Partial<{ extract: number; dedup: number; l2: number; l3: number; graph: number }>;
@@ -486,7 +510,9 @@ export function liveSettingsSchema(): VolatileRef<MemoryLiveSettings> {
       // 图谱投影输出预算(投影 job 单批 ≤8 条记录,默认 8000)
       graph: budget(),
     }).default({ extract: 0, dedup: 0, l2: 0, l3: 0, graph: 0 }),
-    distillMaxInputChars: Schema.number().min(0).max(1_000_000).default(0),
+    distillMaxInputChars: Schema.number().min(0).max(256_000).default(0),
+    // R10 蒸馏超时运行时覆盖(ms):0 = 跟随静态 llm.timeoutMs;上限与部署 schema 同(600s)
+    distillTimeoutMs: Schema.number().min(0).max(600_000).default(0),
     // 蒸馏通道运行时覆盖:'' = 跟随部署 config / 'host' = 复用宿主 / 'direct' = 原生直连
     distillMode: Schema.union(['', 'host', 'direct']).default(''),
     directBaseURL: Schema.string().default(''),
@@ -588,12 +614,15 @@ export const memorySchema: ConfigSchema = Schema.object({
     idleSeconds: Schema.number().min(0).max(86_400).default(300),
     backgroundMessages: Schema.number().min(0).max(50).default(10),
     candidatePool: Schema.number().min(1).max(20).default(5),
+    dedupRetryCap: Schema.number().min(1).max(20).default(5),
+    extractCheckpoint: Schema.boolean().default(true),
   }),
   l2: Schema.object({
     enabled: Schema.boolean().default(true),
     minNewMemories: Schema.number().min(1).max(100).default(5),
     maxScenes: Schema.number().min(1).max(100).default(12),
     sceneContextLimit: Schema.number().min(0).max(20).default(3),
+    consecutiveFailCap: Schema.number().min(1).max(20).default(3),
   }),
   l3: Schema.object({
     enabled: Schema.boolean().default(true),
@@ -805,9 +834,26 @@ export const memorySchema: ConfigSchema = Schema.object({
     // 旧默认 'off' 在非 deepseek 模型上必炸(400/本地拒绝)
     reasoningEffort: Schema.union([...EFFORT_CHOICES]).default(''),
     temperature: Schema.number().min(0).max(2).default(0.3),
-    // 模型上下文 1M token,日常压到 ~700k 使用(中文按 1 字≈1 token 保守折算)
-    maxInputChars: Schema.number().min(1000).max(1_000_000).default(700_000),
+    // 单次调用输入闸门默认压到本地模型可参与区间(200k,可再降);上限 256k(<256 KiB)。
+    // 旧 700k 为盲值、远超本地/免费路由窗口 → 大调用撞模型硬限。抽取/L2 分块另有 24k 硬顶，不受此影响。
+    maxInputChars: Schema.number().min(1000).max(256_000).default(200_000),
     timeoutMs: Schema.number().min(1000).max(600_000).default(120_000),
+    // R5 整轮抽取墙钟预算(ms):0=不限(旧行为);>0 超预算把剩余块留 pending 下轮续
+    extractTimeBudgetMs: Schema.number().min(0).max(3_600_000).default(0),
+    // 二线蒸馏模型(大容量兜底):输入 ≥ triggerChars 才启用;provider/model 空=该档不可用
+    secondary: Schema.object({
+      provider: Schema.string().default(''),
+      model: Schema.string().default(''),
+      reasoningEffort: Schema.union([...EFFORT_CHOICES]).default(''),
+      triggerChars: Schema.number().min(1000).max(1_000_000).default(20_000),
+    }).default({ provider: '', model: '', reasoningEffort: '', triggerChars: 20_000 }),
+    // 蒸馏模型真实输入上限(0=未声明,回退旧口径 min(24k, maxInputChars-42k))
+    modelMaxInputChars: Schema.number().min(0).max(1_000_000).default(0),
+    chunkShrinkFactor: Schema.number().min(0.1).max(0.95).default(0.6),
+    chunkShrinkMaxSteps: Schema.number().min(0).max(8).default(4),
+    adaptiveChunk: Schema.object({ enabled: Schema.boolean().default(true) }).default({ enabled: true }),
+    // 灰度默认 false:翻 true 后蒸馏须显式配路由(不蹭宿主默认模型),配 NoDistillRouteError
+    requireExplicitRoute: Schema.boolean().default(false),
   }),
   hall: Schema.object({
     enabled: Schema.array(Schema.string()).default([...WING_DEFAULT_ENABLED]),

@@ -32,3 +32,12 @@ registry-save.json
 
 # 审计 worktree(嵌套 git 仓库,永不入库)
 _wt-audit/
+
+# 发版本地制品（npm pack 产物 / 临时取证目录，绝不入库）
+*.tgz
+_tmp-*/
+
+# 运行期数据（插件在本目录跑出的 SQLite，绝不入库）
+memory.db
+memory.db-shm
+memory.db-wal

@@ -8,7 +8,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { normWingEnabled } from '../config.js';
-import { callLLM, parseJsonLogged, resolveLayerTokens } from '../llm.js';
+import { callLLM, parseJsonLogged, resolveLayerTokens, resolveModelRoute } from '../llm.js';
 import { buildReceipts, newRunId, persistReceiptsSafely } from '../store/receipts.js';
 import { buildConflictPair, conflictRejectId, DEFER_MAX, normalizeClaimKey, normalizeConflictType, occupiesConflictQuota, pendingHardTotal, validateConflictPair, } from '../store/conflicts.js';
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt } from '../prompts/l1-extraction.js';
@@ -23,13 +23,19 @@ import { routeWorkspace } from '../workspace-route.js';
 /**
  * L1 抽取单块字符硬顶(修复 #10 分批过大)
  *
- * `cfg.llm.maxInputChars` 的语义是「单次 LLM 调用输入闸门」(默认 700k),被复用为
+ * `cfg.llm.maxInputChars` 的语义是「单次 LLM 调用输入闸门」(默认 200k),被复用为
  * 分块预算时算出 658k/块——一次输出须在同一 JSON 数组写完全部抽出记忆,块越大字符串越多,
  * 任一处长中文里未转义 ASCII `"` 即整批 parse 失败、该块记忆全丢;慢模型更直接撞 120s 超时。
  * 砍到 24k 后输出 ≈2–4k tokens,仍远低于 LAYER_MAX_TOKENS_EXTRACT(16k),不会引入截断,
  * 单块失败半径从「几百条」缩到「几十条」。代价是多几次小调用,但每次 5–15s 完成。
  */
 const MAX_EXTRACT_CHUNK_CHARS = 24_000;
+/**
+ * L2 场景整合单块字符硬顶（R1）：与抽取同精神——旧版一次把整族 backlog 塞单调用，
+ * 库越大越必撞超时（实测 work-L2 >60s abort）。砍到 24k 后逐块整合，失败半径从
+ * “整族 backlog”缩到“一块”。默认对齐 MAX_EXTRACT_CHUNK_CHARS。
+ */
+export const MAX_SCENE_CHUNK_CHARS = 24_000;
 /**
  * L1 去重单批发起上限(与抽取同精神)
  *
@@ -266,7 +272,9 @@ anchorMap,
  * 另两个 sidecar 里，而 merge 每次新铸 id——不搬就等于每次合并把这条记忆的
  * `used`/人工打分清零，它会被当成“没用过”而沉底。缺省不搬（行为与改动前一致）。
  */
-mergeRekey) {
+mergeRekey, 
+/** R9 路由健康学习（可选）：读已学到的跑通块长收紧 perChunk，成功块回记。未传=不启用。 */
+routeHealth) {
     if (!cfg.extract.enabled)
         return { stored: 0, skipped: true, sceneName: chainHead(states, mode), newRecords: [] };
     // 触发阈值(渐进爬坡 + 按会话切片计数)由 runner 判定(trigger.ts);
@@ -314,12 +322,31 @@ mergeRekey) {
     const backgroundMsgs = background.slice(-cfg.extract.backgroundMessages);
     // 预留:背景消息(≤10 条 ×4000 字)+ prompt 脚手架
     // 硬顶 24k(见 MAX_EXTRACT_CHUNK_CHARS 注释);若配置更小则跟随配置
-    const perChunk = Math.min(MAX_EXTRACT_CHUNK_CHARS, Math.max(20_000, cfg.llm.maxInputChars - 42_000));
+    let perChunk = Math.min(MAX_EXTRACT_CHUNK_CHARS, Math.max(20_000, cfg.llm.maxInputChars - 42_000));
+    // R5: 尊重模型真实输入上限（若声明），避免 700k 盲值撞本地模型硬限
+    if (cfg.llm.modelMaxInputChars && cfg.llm.modelMaxInputChars > 0) {
+        perChunk = Math.min(perChunk, Math.max(20_000, cfg.llm.modelMaxInputChars - 42_000));
+    }
+    // R9: 用该路由已学到的跑通块长再收紧 perChunk（best-effort；路由解析失败则跳过）
+    let rhKey;
+    if (routeHealth) {
+        try {
+            rhKey = await resolveModelRoute(ctx, cfg);
+            const lg = routeHealth.lastGoodChunkChars(rhKey.provider, rhKey.model);
+            if (lg > 0)
+                perChunk = Math.min(perChunk, Math.max(20_000, lg));
+        }
+        catch {
+            rhKey = undefined;
+        }
+    }
     const chunks = chunkByCharBudget(pending, perChunk);
     if (chunks.length > 1) {
         logger.info(`[memory] L1 输入超预算(${pending.length} 条消息),分 ${chunks.length} 块抽取(每块 ≤${perChunk} 字符)`);
     }
     const extracted = [];
+    // R1′ 抽取块级失败的消息(留桶下轮重投，实现部分消费)
+    const failedMessages = [];
     let lastScene = chainState.lastSceneName;
     let sceneCount = 0;
     // 治理归属(ADR-0015 T1.7/T1.9):repoKey=basename(归一 cwd),**进管线时一次算定**
@@ -330,30 +357,52 @@ mergeRekey) {
     const halls = mode === 'auto' && !hallCandidates.includes(WING_FALLBACK)
         ? [...hallCandidates, WING_FALLBACK]
         : hallCandidates;
+    const timeBudgetMs = cfg.llm.extractTimeBudgetMs ?? 0;
+    const extractStart = Date.now();
     for (const chunk of chunks) {
+        // R5 整轮墙钟预算：超预算把本块(及后续块)留 pending 下轮续，防慢模型独占串行泵
+        if (timeBudgetMs > 0 && chunks.length > 1 && Date.now() - extractStart > timeBudgetMs) {
+            failedMessages.push(...chunk);
+            continue;
+        }
         const userPrompt = formatExtractionPrompt({
             newMessages: chunk,
             backgroundMessages: backgroundMsgs,
             previousSceneName: lastScene || '无',
             halls,
         });
-        const raw = await callLLM(ctx, cfg, {
-            system: getExtractMemoriesSystemPrompt(mode, {
-                usageScenario: cfg.usageScenario?.enabled === true,
-                narrative: cfg.narrativeTemplates?.enabled === true,
-                // 名称蒸馏（Phase 3）：示例段只在总开关开着时付（它与 title 是两层成本，
-                // 分开开关才能 A/B）。关着时这份 opts 产出的提示与改动前逐字相同。
-                title: cfg.naming?.enabled === true,
-                fewShot: cfg.naming?.enabled === true && cfg.naming.fewShot === true,
-            }),
-            user: userPrompt,
-            maxTokens: resolveLayerTokens(cfg, 'extract'),
-            layer: 'l1-extract',
-            logger,
-        });
-        const scenes = parseJsonLogged(raw, 'L1 抽取', logger);
-        if (!Array.isArray(scenes))
-            throw new Error('L1 抽取输出不是 JSON 数组');
+        let scenes;
+        try {
+            const raw = await callLLM(ctx, cfg, {
+                system: getExtractMemoriesSystemPrompt(mode, {
+                    usageScenario: cfg.usageScenario?.enabled === true,
+                    narrative: cfg.narrativeTemplates?.enabled === true,
+                    // 名称蒸馏（Phase 3）：示例段只在总开关开着时付（它与 title 是两层成本，
+                    // 分开开关才能 A/B）。关着时这份 opts 产出的提示与改动前逐字相同。
+                    title: cfg.naming?.enabled === true,
+                    fewShot: cfg.naming?.enabled === true && cfg.naming.fewShot === true,
+                }),
+                user: userPrompt,
+                maxTokens: resolveLayerTokens(cfg, 'extract'),
+                layer: 'l1-extract',
+                logger,
+            });
+            const parsed = parseJsonLogged(raw, 'L1 抽取', logger);
+            if (!Array.isArray(parsed))
+                throw new Error('L1 抽取输出不是 JSON 数组');
+            scenes = parsed;
+            // R9: 记录该路由跑通的实际块长（只降不升），供下轮收紧 perChunk
+            if (routeHealth && rhKey) {
+                const chunkChars = chunk.reduce((n, m) => n + m.content.length + 64, 0);
+                routeHealth.recordGood(rhKey.provider, rhKey.model, chunkChars);
+            }
+        }
+        catch (err) {
+            // R1′ 块级容错：单块超时/崩只丢这块、留桶下轮重投，不掀翻整批(旧行为是整抛)
+            failedMessages.push(...chunk);
+            logger.warn(`[memory] L1 抽取块失败(${chunk.length} 条消息留待重投): ${err instanceof Error ? err.message : String(err)}`);
+            continue;
+        }
         for (const scene of scenes) {
             if (!scene || typeof scene.scene_name !== 'string')
                 continue;
@@ -397,10 +446,14 @@ mergeRekey) {
         }
     }
     if (extracted.length === 0) {
+        // 全部块失败：等价旧"整抛"语义——runner catch 会保留整片 + 记退避(不误当零产出成功)
+        if (failedMessages.length > 0) {
+            throw new Error(`L1 抽取全部 ${chunks.length} 块失败(逐块错误见上)`);
+        }
         logger.info(`[memory] L1 抽取完成:无可提取记忆(mode=${mode},${pending.length} 条消息,${sceneCount} 个情境)`);
         // 成功但零产出:同样推进时间戳/场景,与失败(lastExtractAt 保持 0)区分开
         markExtracted(states, mode, lastScene);
-        return { stored: 0, skipped: false, sceneName: lastScene, newRecords: [] };
+        return { stored: 0, skipped: false, sceneName: lastScene, newRecords: [], failedMessages: [] };
     }
     // ── Step 2: 去重(batch 冲突检测;候选只在本族内召回,去重永不跨族) ──
     const matches = await Promise.all(extracted.map(async (m) => ({
@@ -773,7 +826,7 @@ mergeRekey) {
     }
     markExtracted(states, mode, lastScene);
     logger.info(`[memory] L1 抽取完成(mode=${mode}):消息 ${pending.length} 条,抽取 ${extracted.length} 条,去重后新增 ${added.length} 条(取代退场 ${supersededBy.size} 条,chat=${addedByFamily.chat}/work=${addedByFamily.work}),累计 chat=${states.chat.totalExtracted}/work=${states.work.totalExtracted}`);
-    return { stored: added.length, skipped: false, sceneName: lastScene, newRecords: added, runId, byKind };
+    return { stored: added.length, skipped: false, sceneName: lastScene, newRecords: added, runId, byKind, failedMessages };
 }
 /** auto 档取最近活跃的族 checkpoint(情境链/计数锚点)。 */
 function activeState(states) {

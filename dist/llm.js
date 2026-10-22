@@ -46,10 +46,27 @@ export const HIGH_EFFORT_TIERS = ['high', 'xhigh', 'max'];
 export function layerMaxTokens(base, reasoningEffort) {
     return HIGH_EFFORT_TIERS.includes(reasoningEffort) ? base * 4 : base;
 }
+/** 无可用蒸馏路由(显式一线/二线/链皆缺且 requireExplicitRoute=true)：
+ *  runner 据此 skip+顺延、不记退避——区别于"模型慢/超时"(那才退避)。R4。 */
+export class NoDistillRouteError extends Error {
+    constructor(msg = '无可用蒸馏路由:已开启 llm.requireExplicitRoute,但未显式配置一线/二线/回退链') {
+        super(msg);
+        this.name = 'NoDistillRouteError';
+    }
+}
 /** 解析蒸馏用的 provider/model:配置优先,其次当前默认选择。 */
 export async function resolveModelRoute(ctx, cfg) {
     if (cfg.llm.provider && cfg.llm.model) {
         return { provider: cfg.llm.provider, model: cfg.llm.model };
+    }
+    // R4 fail-closed:开了 requireExplicitRoute 且二线/回退链都未配 → 不蹭宿主默认模型,
+    // 抛专用错误(runner 侧 skip+顺延、不记退避——"没配路由"≠"模型慢")。关时逐字走旧路径。
+    if (cfg.llm.requireExplicitRoute === true) {
+        const sec = cfg.llm.secondary;
+        const hasSecondary = !!(sec && sec.provider && sec.model);
+        const hasChain = (cfg.llm.fallbacks?.length ?? 0) > 0;
+        if (!hasSecondary && !hasChain)
+            throw new NoDistillRouteError();
     }
     // agentDefaultModel 是可选服务,缺失时不得抛错。
     const defaults = ctx.get('agentDefaultModel');
@@ -58,6 +75,19 @@ export async function resolveModelRoute(ctx, cfg) {
         return { provider: cfg.llm.provider || sel.provider, model: cfg.llm.model || sel.model };
     }
     throw new Error('无法解析蒸馏模型路由:请在插件 config 中配置 llm.provider / llm.model,或确保存在默认模型选择');
+}
+/**
+ * 二线(大容量兜底)选路(R3)：单次调用输入字符 ≥ triggerChars 且二线已配 → 返回二线路由，
+ * 否则 null（走一线/链）。二线未配（provider/model 任一空）→ 永不命中，不隐式改选任意模型。
+ */
+export function pickSecondary(cfg, inputChars) {
+    const sec = cfg.llm.secondary;
+    if (!sec || !sec.provider || !sec.model)
+        return null;
+    const trigger = sec.triggerChars > 0 ? sec.triggerChars : Number.POSITIVE_INFINITY;
+    if (!(inputChars >= trigger))
+        return null;
+    return { provider: sec.provider, model: sec.model, ...(sec.reasoningEffort ? { reasoningEffort: sec.reasoningEffort } : {}) };
 }
 /**
  * 组装蒸馏路由链(纯决策,决策表缝):主路由在前、回退条目按配置顺序在后。
@@ -370,8 +400,17 @@ export async function callLLM(ctx, cfg, opts) {
     // 宿主路由链:opts.layer 配了层链的层走层链完整替换,其余走全局解析;
     // direct 模式下这一段充当付费/默认模型的兜底安全网。
     const routes = await resolveLayerRoutes(ctx, cfg, opts.layer);
-    for (let i = 0; i < routes.length; i++) {
-        const route = routes[i];
+    // R3 二线(大容量兜底)：输入 ≥ triggerChars 且二线已配 → 前置二线，让肥调用先走大容量档；
+    // 二线未配时 sec=null → 链逐字不变（零漂移）。已在链里的同路由去重。
+    const sec = pickSecondary(cfg, opts.user.length);
+    const chain = sec
+        ? [
+            { provider: sec.provider, model: sec.model, effort: sec.reasoningEffort ?? '' },
+            ...routes.filter((r) => !(r.provider === sec.provider && r.model === sec.model)),
+        ]
+        : routes;
+    for (let i = 0; i < chain.length; i++) {
+        const route = chain[i];
         try {
             return await callRoute(ctx, cfg, opts, route);
         }
@@ -381,7 +420,7 @@ export async function callLLM(ctx, cfg, opts) {
                 throw err;
             lastErr = err;
             warnRouteDeadOnce(route, opts.logger);
-            const next = routes[i + 1];
+            const next = chain[i + 1];
             if (next) {
                 opts.logger?.info(`[memory] 蒸馏路由降级 ${route.provider}/${route.model} → ${next.provider}/${next.model}(${errDetail(err)})`);
             }

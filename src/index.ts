@@ -41,6 +41,7 @@ import { SceneStore } from './store/scenes.js';
 import { SessionModeStore } from './store/session-modes.js';
 import { StateStore } from './store/state.js';
 import { SlotStore } from './store/slots.js';
+import { RouteHealthStore, routeHealthPathFor } from './store/route-health.js';
 import { registerMemoryTools } from './tools/index.js';
 import { registerSlotTools } from './tools/slots.js';
 import { registerSlotRecall } from './hooks/slot-recall.js';
@@ -232,6 +233,7 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
 
   const stores = {
     usage: undefined as RecallUsageStore | undefined, // 装配于下方(依赖 dataDir 就绪)
+    routeHealth: undefined as RouteHealthStore | undefined, // R9 路由健康学习，装配于下方
     // DRSC 客户端(T8.4 读切):蒸馏背景窗 + conversation_search 工具面的历史供给。
     // 硬依赖无本地回退(l0 表退役);trustedHosts 惰性读取(webStartup 可能晚到)。
     drsc: new DrscClient({ trustedHosts: () => readStartupTrustedHosts(ctx) }),
@@ -486,6 +488,10 @@ export async function apply(ctx: Context, config: MemoryConfig): Promise<void> {
   const recallUsage = new RecallUsageStore(dataDir, logger);
   await recallUsage.init();
   stores.usage = recallUsage;
+  // R9 路由健康学习：跨进程留存"退避后跑通的最小块长"，供 runExtraction 收紧 perChunk。
+  const routeHealth = new RouteHealthStore(routeHealthPathFor(dataDir));
+  await routeHealth.load();
+  stores.routeHealth = routeHealth;
   // 召回相关度反馈（人在召回卡上打 -1..5）与「已声明过时」待播报队列。
   // 两个都是低频用户动作 → 立即落盘；sidecar 缺席/损坏只降级为只读，不阻断任何读路径。
   const recallFeedback = new RecallFeedbackStore(dataDir, logger);

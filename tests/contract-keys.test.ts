@@ -241,7 +241,7 @@ describe('memory live settings key registry', () => {
     expect((defaults.embedding as Record<string, unknown>).mirror).toBe('https://hf-mirror.com');
     expect((defaults.llm as Record<string, unknown>).mode).toBe('host');
     expect((defaults.llm as Record<string, unknown>).maxTokens).toBe(65_536);
-    expect((defaults.llm as Record<string, unknown>).maxInputChars).toBe(700_000);
+    expect((defaults.llm as Record<string, unknown>).maxInputChars).toBe(200_000);
     expect((defaults.hall as Record<string, unknown>).enabled).toEqual([
       'work',
       'relationships',

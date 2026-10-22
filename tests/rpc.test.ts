@@ -304,7 +304,7 @@ describe('rpc: settings get/set (incl. reverse-engineered keys)', () => {
     const h = await harness({ live: liveHandle() });
     await expect(h.call('dsh-memory/settings-set', { reasoningEffort: 'ultra' })).rejects.toThrow('非法思考档位');
     await expect(h.call('dsh-memory/settings-set', { distillBudgets: { extract: -1, dedup: 0, l2: 0, l3: 0 } })).rejects.toThrow('0~1000000');
-    await expect(h.call('dsh-memory/settings-set', { distillMaxInputChars: 500 })).rejects.toThrow('1000~1000000');
+    await expect(h.call('dsh-memory/settings-set', { distillMaxInputChars: 500 })).rejects.toThrow('1000~256000');
     const ok = await h.call('dsh-memory/settings-set', { reasoningEffort: 'xhigh', distillMaxInputChars: 1000 }) as Record<string, unknown>;
     expect(ok.ok).toBe(true);
     h.db.close();

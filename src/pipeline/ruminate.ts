@@ -250,6 +250,8 @@ export class RuminateController {
     //   经 runTurn 的 `bucket.push(...messages)` 会重复入桶 → 反刍后待处理计数“还原/变多”。）
     this.runner.enqueue(session.sessionId, [], session.mode, {
       force: true,
+      // R6：反刍与 rebuild 同为用户显式动作 → 越过抽取退避，保证"催一把"能真跑不被跳过
+      bypassBackoff: true,
       onTurnDone: (records) => {
         this.totalL1 += records;
         this.status.recordsBuilt = this.totalL1;

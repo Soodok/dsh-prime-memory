@@ -1344,6 +1344,7 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     toolRoom: true, toolGraph: true, toolRuminate: true, toolConflict: true, toolMutate: true, toolSkills: true,
                     reasoningEffort: '', distillProvider: '', distillModel: '', distillChain: [],
                     distillBudgets: { extract: 0, dedup: 0, l2: 0, l3: 0, graph: 0 }, distillMaxInputChars: 0,
+                    distillTimeoutMs: 0,
                     distillLayerChains: { l1: [], l2: [], l3: [] },
                     distillMode: '', directBaseURL: '', directApiKey: '',
                     embedRemoteBaseURL: '', embedRemoteApiKey: '', embedRemoteModel: '', embedRemoteDimensions: 0,
@@ -1385,6 +1386,12 @@ export async function handleEndpoint(endpoint, payload, deps) {
                     current: s?.distillMaxInputChars ?? 0,
                     fallback: cfg.llm.maxInputChars,
                     effective: s && s.distillMaxInputChars > 0 ? s.distillMaxInputChars : cfg.llm.maxInputChars,
+                },
+                // R10 蒸馏超时(ms)：current 是运行时覆盖(0 = 跟随配置)，fallback 是静态 llm.timeoutMs
+                timeoutBudget: {
+                    current: s?.distillTimeoutMs ?? 0,
+                    fallback: cfg.llm.timeoutMs,
+                    effective: s && s.distillTimeoutMs > 0 ? s.distillTimeoutMs : cfg.llm.timeoutMs,
                 },
             };
             return resp;
@@ -1468,13 +1475,21 @@ export async function handleEndpoint(endpoint, payload, deps) {
                 }
                 clean.distillBudgets = budgets;
             }
-            // 输入预算(字符):0 = 跟随静态配置;正值须落在静态 schema 同款范围(1000~100 万)
+            // 输入预算(字符):0 = 跟随静态配置;正值须落在静态 schema 同款范围(1000~256k)
             if (patch.distillMaxInputChars !== undefined) {
                 const n = Number(patch.distillMaxInputChars);
-                if (!Number.isInteger(n) || n < 0 || n > 1_000_000 || (n > 0 && n < 1000)) {
-                    throw new Error('distillMaxInputChars 须为 0 或 1000~1000000 的整数(0 = 跟随配置)');
+                if (!Number.isInteger(n) || n < 0 || n > 256_000 || (n > 0 && n < 1000)) {
+                    throw new Error('distillMaxInputChars 须为 0 或 1000~256000 的整数(0 = 跟随配置)');
                 }
                 clean.distillMaxInputChars = n;
+            }
+            // R10 蒸馏超时(ms)：0 = 跟随静态配置；正值 1000~600000（与 live schema 同上限）
+            if (patch.distillTimeoutMs !== undefined) {
+                const n = Number(patch.distillTimeoutMs);
+                if (!Number.isInteger(n) || n < 0 || n > 600_000 || (n > 0 && n < 1000)) {
+                    throw new Error('distillTimeoutMs 须为 0 或 1000~600000 的整数(0 = 跟随配置)');
+                }
+                clean.distillTimeoutMs = n;
             }
             // 蒸馏通道运行时覆盖(direct 解耦):mode 白名单;endpoint 可回显;apiKey 属机密——
             // 写入后存 settings,但不回读到 UI、不落本条日志(下方日志先剔除后记录)
