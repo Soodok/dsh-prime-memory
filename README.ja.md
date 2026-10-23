@@ -62,7 +62,7 @@ alt="DeepSeek Harness ヒーロー画像：会話がバックグラウンドで�
 
 > 互換メカニズム：settings 登録は 3 分岐のランタイム判定（`register` → `installSection` ブリッジ → 常時オン縮退）。
 > 詳細は [CHANGELOG.md](./CHANGELOG.md) の 0.11.0 エントリ参照。`dsh.plugin.json` は
-> `engines.dsh` 为逐 rc 精确枚举串（0.1.0-rc.2 → 0.2.1-rc.2，17 rc） を宣言。
+> `engines.dsh` 为逐 rc 精确枚举串（0.1.0-rc.2 → 0.2.1-rc.3，18 rc） を宣言。
 
 ## クイックスタート
 

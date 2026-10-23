@@ -1,7 +1,7 @@
 {
   "id": "dsh-prime-memory",
   "name": "dsh-prime-memory",
-  "version": "0.26.9",
+  "version": "0.26.10",
   "description": {
     "en": "Layered distilled memory plugin (L0 capture → L1 atomic memory → L2 scenes → L3 persona) with automatic recall injection before each model step.",
     "zh": "L0~L3 分层蒸馏记忆插件:自动捕获对话、抽取原子记忆、整合场景块、蒸馏核心画像,并在模型步骤前自动召回注入。"
@@ -13,7 +13,7 @@
   },
   "license": "MIT",
   "engines": {
-    "dsh": "0.1.0-rc.2 || 0.1.0-rc.3 || 0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2 || 0.1.2-rc.1 || 0.1.5-rc.1 || 0.1.5-rc.2 || 0.1.5-rc.3 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2"
+    "dsh": "0.1.0-rc.2 || 0.1.0-rc.3 || 0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2 || 0.1.2-rc.1 || 0.1.5-rc.1 || 0.1.5-rc.2 || 0.1.5-rc.3 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3"
   },
   "components": {
     "host": "dist/index.js",

@@ -1,5 +1,7 @@
 # 更新日志（Changelog）
 
+0.26.10: host enumeration addendum for DSH 0.2.1-rc.3 (declaration-only bump; contract plane zero diff).
+
 ## [0.26.9] — 2026-10-23
 
 > 本版汇总自 0.26.6 起的「蒸馏分块分载与调度健壮性」工作（计划 distill-load-balance，[ADR-0023](./docs/adr/0023-distill-load-balance-and-secondary-route.md)）。0.26.7/0.26.8 仅本地装机、未发布，版本号并入此条。

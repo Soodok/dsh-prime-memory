@@ -62,7 +62,7 @@ alt="DeepSeek Harness 히어로 이미지: 대화가 백그라운드에서 계�
 
 > 호환 메커니즘: settings 등록은 3분기 런타임 분기（`register` → `installSection` 브리지 → 상시 온 강등）.
 > 자세한 내용은 [CHANGELOG.md](./CHANGELOG.md)의 0.11.0 항목 참조. `dsh.plugin.json`은
-> `engines.dsh` 为逐 rc 精确枚举串（0.1.0-rc.2 → 0.2.1-rc.2，17 rc） 선언.
+> `engines.dsh` 为逐 rc 精确枚举串（0.1.0-rc.2 → 0.2.1-rc.3，18 rc） 선언.
 
 ## 빠른 시작
 
