@@ -204,7 +204,7 @@ export interface MemoryConfig {
    */
   workspaceSource: {
     enabled: boolean;
-    /** 路由表：按数组序取首个命中——dsh 侧在前，故双项目并存时归 dsh（用户口径）。 */
+    /** 路由表：按数组序取首个命中；**默认为空**，需按自己的项目自行配置（issue #13）。 */
     routes: WorkspaceRoute[];
     /** 存量 re-link 的单次护栏。 */
     maxRecords: number;
@@ -678,7 +678,19 @@ export const memorySchema: ConfigSchema = Schema.object({
   }),
   /**
    * 内容路由：默认**开**（用户口径：谈到本仓/dsh 生态的记忆要归到本仓 workspace，
-   * 而不是全托底到 `<dataDir>/memories`）。默认路由表就是用户给的两条归类规则（路径可改，不需改码）。
+   * 而不是全托底到 `<dataDir>/memories`）。
+   *
+   * ⚠️ **默认路由表为空**（issue #13）。此前默认值写死了作者本机的 `E:\test\rewrite-agently`
+   * 与 `E:\test\agent-no-dsh`：装好即生效，凡正文含 `dsh`/`cordis`/`prime-memory` 等词的记忆
+   * 都被写上古人的路径。别人的机器没这个盘，于是
+   *  - `targetFor` 的护栏判定目录不存在 → 投射落点静默退回单根（日志一条 warn 而已）；
+   *  - 更严重的是 `scope: workspace` 时这些记录在**真实工作区**里按 workspace 过滤不可见，
+   *    表现为"记忆莫名其妙丢了"，而根源是默认值指向别人的机器。
+   *
+   * 默认值属于**可移植性契约**：不得含任何具体主机的绝对路径。要么由用户显式配置路由、
+   * 要么用 `$workspace` 之类的占位（由调用方在运行期替换为当前会话工作区），
+   * 要么不路由（`routes: []` → 全部落单根，行为与 `enabled:false` 等价但语义更诚实）。
+   * 想恢复旧的按内容归类，请在配置里自行写下自己的两条规则。
    */
   workspaceSource: Schema.object({
     enabled: Schema.boolean().default(true),
@@ -687,31 +699,17 @@ export const memorySchema: ConfigSchema = Schema.object({
        * 归到哪个 workspace（**workspace 根**，绝对路径；写入前过 normalizeWorkspacePath）。
        *
        * 存的不包含 `.agents/memory`：投射落点由 `targetFor` 算，它会在本值后拼上
-       * `WORKSPACE_SUBDIR = ['.agents','memory']`。旧默认值把它写成了
+       * `WORKSPACE_SUBDIR = ['.agents','memory']`。旧默认值曾把它写成
        * `E:\test\rewrite-agently\.agents`，于是落点变成 `.agents\.agents\memory\`——
        * 而 `.agents` 目录确实存在，"目录不存在则退回单根"的护栏救不了这种形状，
-       * 等于在仓里挂一棵没人认领的孤儿树。新增用例钉住这个不变式。
+       * 等于在仓里挂一棵没人认领的孤儿树。有用例钉住这个不变式。
        */
       path: Schema.string().default(''),
       /** 命中任一关键词即归此路（小写子串匹配，已 NFKC 归一）。 */
       anyOf: Schema.array(Schema.string()).default([]),
       /** 出现任一排除词则此路不命中（用于「无 dsh 才算非 dsh 项目」）。 */
       noneOf: Schema.array(Schema.string()).default([]),
-    })).default([
-      {
-        path: 'E:\\test\\rewrite-agently',
-        // 'dsh' 子串已覆盖 mine-dsh-plugins 下所有插件名；把目录名单列出来是因为
-        // 有些记忆只写了"某个插件"而没写 dsh- 前缀，那时这一项才顶用。
-        anyOf: ['dsh', 'mine-dsh-plugins', 'cordis', 'prime-memory', 'brief-sidebar', 'host farm', 'inferglow-dsh'],
-        noneOf: [],
-      },
-      {
-        path: 'E:\\test\\agent-no-dsh',
-        anyOf: ['hanako', 'hanaagent', 'openhanako', 'inferglow', 'pi-agent'],
-        // 同一段内容又谈到 dsh 时属于 dsh 生态（如 Hanako 逆向用于反推 dsh 机制），归 dsh 侧。
-        noneOf: ['dsh'],
-      },
-    ]),
+    })).default([]),
     maxRecords: Schema.number().min(1).max(10_000).default(300),
     timeBudgetMs: Schema.number().min(1000).max(1_800_000).default(120_000),
   }),
