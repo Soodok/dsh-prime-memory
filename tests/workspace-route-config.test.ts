@@ -39,19 +39,24 @@ describe('cfg.workspaceSource', () => {
     }
   });
 
-  it('默认路由表 = 用户给的两条归类规则，且 dsh 侧在前', () => {
+  it('默认路由表必须可移植：不得含任何具体主机的绝对路径（issue #13）', () => {
+    // 曾经的默认值是作者本机的 `E:\test\rewrite-agently` / `E:\test\agent-no-dsh`。
+    // 别人装好插件即刻生效：凡正文含 dsh/cordis/prime-memory 的记忆都被写到别人的路径上，
+    // 别人的机器没这个盘 → 投射静默退回单根；而 `scope: workspace` 时这些记录在真实工作区
+    // 里按 workspace 过滤不可见，表现为"记忆莫名其妙丢了"。默认值属于可移植性契约，
+    // 断言从"默认表等于某两条规则"改成"默认表不许出现宿主私有路径"。
     const routes = sourceOf().routes;
-    expect(routes.length).toBeGreaterThanOrEqual(2);
-    const dshIdx = routes.findIndex((r) => r.path.includes('rewrite-agently'));
-    const noDshIdx = routes.findIndex((r) => r.path.includes('agent-no-dsh'));
-    expect(dshIdx, '缺 .agents 侧路由').toBeGreaterThanOrEqual(0);
-    expect(noDshIdx, '缺 agent-no-dsh 侧路由').toBeGreaterThanOrEqual(0);
-    // 排序即优先级：双项目并存时 dsh 侧必须先被匹配到（用户口径）。
-    expect(dshIdx).toBeLessThan(noDshIdx);
-    expect(routes[dshIdx].anyOf).toContain('dsh');
-    expect(routes[noDshIdx].anyOf.some((w) => w.includes('hanako'))).toBe(true);
-    // 非 dsh 那条必须带 noneOf:['dsh'] 作二次保险——只靠排序太脆。
-    expect(routes[noDshIdx].noneOf).toContain('dsh');
+    for (const r of routes) {
+      expect(r.path, '默认路由不得含他人机器路径').not.toMatch(/[A-Za-z]:[\\/]/);
+      expect(r.path).not.toContain('rewrite-agently');
+      expect(r.path).not.toContain('agent-no-dsh');
+    }
+  });
+
+  it('默认不启用任何具体归属（routes 为空 → 全部落单根，不猜）', () => {
+    // 空表不是"功能坏了"：`routeWorkspace` 全不命中返回 undefined，归属列留空，
+    // 行为与 enabled:false 等价但语义更诚实（"没配"而不是"配了个别人的"）。
+    expect(sourceOf().routes).toEqual([]);
   });
 
   it('re-link 护栏有默认值（漏传不会退化成"无界扫全库"）', () => {
