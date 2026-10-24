@@ -22,7 +22,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { MemoryConfig } from './config.js';
-import { isTag } from './metadata-validators.js';
+import { isRoomSlug } from './metadata-validators.js';
 import { callLLM, parseJsonLogged } from './llm.js';
 import type { MemoryLogger, MemoryRecord } from './types.js';
 
@@ -70,7 +70,7 @@ export interface RoomCandidate {
   rooms: string[];
 }
 
-/** 解析标注器输出的逐条候选(容错:id 配对失败丢弃;isTag 校验;目录内优先,≤3)。 */
+/** 解析标注器输出的逐条候选(容错:id 配对失败丢弃;isRoomSlug 校验(两级制);目录内优先,≤3)。 */
 export function parseRoomCandidateItems(
   parsed: ReadonlyArray<{ id: string; rooms: readonly string[] }>,
   ids: ReadonlyArray<string>,
@@ -84,7 +84,9 @@ export function parseRoomCandidateItems(
     const cleaned: string[] = [];
     for (const r of item.rooms) {
       const slug = typeof r === 'string' ? r.trim().toLowerCase() : '';
-      if (!slug || !isTag(slug)) continue;
+      // 两级制(`major` 或 `major/minor`)：与 rooms-registry 同一判据。用 isTag 会把
+      // `mpu/qos` 这类合法子类静默丢掉——注册表收得下、写回却挂不上(issue #12)。
+      if (!slug || !isRoomSlug(slug)) continue;
       if (!cleaned.includes(slug)) cleaned.push(slug);
     }
     // 目录内优先排前,其余兜底;截断到 3
@@ -397,7 +399,9 @@ export function confirmReview(
   for (const r of rooms) {
     if (typeof r !== 'string') continue;
     const slug = r.trim().toLowerCase();
-    if (!slug || !isTag(slug) || cleaned.includes(slug)) continue;
+    // 同 parseRoomCandidateItems：走两级制判据，否则 `mpu/qos` 会被判非法、
+    // confirm 返回 null 且错误文案误导成"id 不存在"(issue #12)。
+    if (!slug || !isRoomSlug(slug) || cleaned.includes(slug)) continue;
     cleaned.push(slug);
   }
   if (cleaned.length === 0) return null;
