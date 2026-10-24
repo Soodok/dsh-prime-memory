@@ -49,9 +49,9 @@ var __create = Object.create;
 		var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 		var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "access private method"), method);
 		
-		// node_modules/@antv/g6/dist/g6.min.js
+		// node_modules/.pnpm/@antv+g6@5.1.1/node_modules/@antv/g6/dist/g6.min.js
 		var require_g6_min = __commonJS({
-		  "node_modules/@antv/g6/dist/g6.min.js"(exports, module2) {
+		  "node_modules/.pnpm/@antv+g6@5.1.1/node_modules/@antv/g6/dist/g6.min.js"(exports, module2) {
 		    !(function(t, e) {
 		      "object" == typeof exports && "undefined" != typeof module2 ? e(exports) : "function" == typeof define && define.amd ? define(["exports"], e) : e((t = "undefined" != typeof globalThis ? globalThis : t || self).G6 = {});
 		    })(exports, function(t) {
