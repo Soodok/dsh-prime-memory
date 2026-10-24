@@ -108,6 +108,26 @@ describe('parseRoomCandidateItems', () => {
     expect(out).toHaveLength(0);
   });
 
+  it('两级 Room slug（major/minor）不被丢弃（issue #12）', () => {
+    // 回归：候选清洗曾用 isTag()，而 `mpu/qos` 这类两级 slug 含 slash 必被判非法 →
+    // 注册表收得下、候选却静默丢掉，confirm 也挂不上。判据须与 rooms-registry 同为 isRoomSlug。
+    const out = parseRoomCandidateItems(
+      [{ id: 'r1', rooms: ['mpu', 'mpu/qos', 'mpu/board'] }],
+      ids,
+      catalog,
+    );
+    expect(out[0].rooms).toEqual(['mpu', 'mpu/qos', 'mpu/board']);
+  });
+
+  it('两级 slug 仍受形状约束：三段 / 空段 / 尾斜杠都非法', () => {
+    const out = parseRoomCandidateItems(
+      [{ id: 'r1', rooms: ['a/b/c', '/qos', 'mpu/', 'mpu/qos'] }],
+      ids,
+      catalog,
+    );
+    expect(out[0].rooms).toEqual(['mpu/qos']);
+  });
+
   it('系统 prompt 含现有词表与计数', () => {
     const prompt = roomCandidateSystemPrompt(catalog);
     expect(prompt).toContain('git-commits(现有 2 条)');
@@ -195,5 +215,16 @@ describe('nextReview / confirmReview / skipReview', () => {
     seedRecord(db, 'r2');
     expect(skipReview(l1, 'r2')).toBe(true);
     expect(nextReview(l1)).toBeNull(); // r2 无 pending 候选,不进队列
+  });
+
+  it('confirm 接受两级 slug（major/minor）（issue #12）', async () => {
+    // 回归：此路径曾用 isTag()，`mpu/qos` 被判非法 → confirm 返回 null，
+    // 工具层再把它包装成"id 不存在、已被确认过、或 rooms 全部非法"，指向完全错误的方向。
+    const { l1, db } = await mkL1();
+    seedRecord(db, 'r1');
+    const done = confirmReview(l1, 'r1', ['mpu', 'mpu/qos']);
+    expect(done?.tags).toEqual(['mpu', 'mpu/qos']);
+    const after = db.getL1ByIds(['r1'])[0];
+    expect((after.metadata ?? {}).tags).toEqual(['mpu', 'mpu/qos']);
   });
 });
